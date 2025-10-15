@@ -1,0 +1,24 @@
+server:
+  port: 8080
+
+database:
+  host: localhost
+  port: 5432
+  user: root
+  password: root123
+  name: cloud_platform
+
+jwt:
+  secret: "supersecretkey"
+  expire_hours: 24
+
+network:
+  config_dir: "/etc/wg_config"
+  base_subnet: "10.200"
+  base_port: 51820
+  out_interface: "eth0"
+  server_ip: "1.2.3.4"  # 替换为您的服务器公网IP地址
+
+default:
+  username: admin@platform.com
+  password: password

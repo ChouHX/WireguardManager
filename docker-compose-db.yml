@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: cloud_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: root           # 默认 root 用户
+      POSTGRES_PASSWORD: root123    # root 密码
+      POSTGRES_DB: cloud_platform   # 默认数据库
+    ports:
+      - "5432:5432"                 # 宿主机映射端口
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data  # 挂载到当前目录
+
