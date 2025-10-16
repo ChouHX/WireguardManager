@@ -1,0 +1,53 @@
+# Backend Dockerfile for Go application
+FROM golang:1.23-alpine AS builder
+
+# 使用阿里云镜像源加速 Alpine 包下载
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
+
+# Install build dependencies
+RUN apk add --no-cache git
+
+# 配置 Go 模块代理（国内加速）
+ENV GOPROXY=https://goproxy.cn,direct
+ENV GO111MODULE=on
+
+# Set working directory
+WORKDIR /app
+
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the application
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
+
+# Final stage
+FROM alpine:latest
+
+# 使用阿里云镜像源加速 Alpine 包下载
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
+
+# Install ca-certificates for HTTPS and wireguard tools
+RUN apk --no-cache add ca-certificates wireguard-tools iptables
+
+# Create necessary directories
+RUN mkdir -p /etc/wg_config
+
+WORKDIR /root/
+
+# Copy the binary from builder
+COPY --from=builder /app/main .
+
+# Copy config file (will be overridden by volume mount in production)
+COPY config.yaml.example ./config.yaml
+
+# Expose port (though we'll use host network mode)
+EXPOSE 8080
+
+# Run the application
+CMD ["./main"]

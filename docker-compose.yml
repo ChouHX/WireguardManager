@@ -1,0 +1,66 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: cloud-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-root}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-root123}
+      POSTGRES_DB: ${DB_NAME:-cloud_platform}
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-root}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend Service (Go)
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: cloud-backend
+    restart: unless-stopped
+    network_mode: host
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    volumes:
+      - ./config.yaml:/root/config.yaml:ro
+      - ./wg_config:/etc/wg_config
+      - /lib/modules:/lib/modules:ro
+      - /var/run/netns:/var/run/netns:shared
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - TZ=Asia/Shanghai
+
+  # Frontend Service (Next.js only)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.simple
+      args:
+        - API_PROXY_TARGET=http://host.docker.internal:8080
+    container_name: cloud-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - backend
+    environment:
+      - NODE_ENV=production
+      - API_PROXY_TARGET=http://host.docker.internal:8080
+      - TZ=Asia/Shanghai
+
+volumes:
+  postgres_data:
+    driver: local

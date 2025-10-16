@@ -2,6 +2,7 @@ import { Metadata } from "next";
 import Image from "next/image";
 import { LanguageToggle } from "@/components/language-toggle";
 import { ModeToggle } from "@/components/mode-toggle";
+import { GithubLink } from "@/components/github-link";
 import { APP_CONFIG } from "@/config/app";
 
 export const metadata: Metadata = {
@@ -16,9 +17,10 @@ export default function AuthLayout({
 }) {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background">
-      {/* Language and Theme toggles */}
+      {/* Language, GitHub and Theme toggles */}
       <div className="absolute top-4 right-4 flex items-center space-x-2">
         <LanguageToggle />
+        <GithubLink />
         <ModeToggle />
       </div>
       

@@ -1,0 +1,51 @@
+# Frontend Dockerfile - Simplified (Next.js only, no Nginx)
+# Stage 1: Build the Next.js application
+FROM node:20-alpine AS builder
+
+# 使用阿里云镜像源加速 Alpine 包下载
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
+
+# 配置 npm 使用淘宝镜像源
+RUN npm config set registry https://registry.npmmirror.com
+
+WORKDIR /app
+
+# Build argument for API proxy target
+ARG API_PROXY_TARGET=http://host.docker.internal:8080
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy source code
+COPY . .
+
+# Build the Next.js application for production
+# Set output to standalone for optimized Docker images
+ENV API_PROXY_TARGET=${API_PROXY_TARGET}
+RUN npm run build
+
+# Stage 2: Production image with Node.js only
+FROM node:20-alpine
+
+# 使用阿里云镜像源加速 Alpine 包下载
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
+
+WORKDIR /app
+
+# Copy built Next.js app from builder
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
+
+# Set environment variables
+ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
+
+EXPOSE 3000
+
+# Start Next.js server
+CMD ["node", "server.js"]

@@ -35,8 +35,8 @@ export const useAuthStore = create<AuthStore>()(
             // 保存 token 到 cookie
             Cookies.set('auth_token', token, { 
               expires: 1, // 1天过期
-              secure: process.env.NODE_ENV === 'production',
-              sameSite: 'strict'
+              secure: false, // Docker 环境下使用 HTTP，设置为 false
+              sameSite: 'lax' // 使用 lax 模式，兼容性更好
             });
             
             set({

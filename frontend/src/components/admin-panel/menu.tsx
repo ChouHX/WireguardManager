@@ -16,6 +16,7 @@ import {
   TooltipProvider
 } from "@/components/ui/tooltip";
 import { useI18n } from "@/hooks/use-i18n";
+import { useAuthStore } from "@/stores/auth-store";
 
 interface MenuProps {
   isOpen: boolean | undefined;
@@ -25,6 +26,7 @@ export function Menu({ isOpen }: MenuProps) {
   const pathname = usePathname();
   const { t } = useI18n();
   const menuList = getMenuList(pathname, t);
+  const { logout } = useAuthStore();
 
   return (
     <ScrollArea className="[&>div>div[style]]:!block">
@@ -120,7 +122,7 @@ export function Menu({ isOpen }: MenuProps) {
               <Tooltip delayDuration={100}>
                 <TooltipTrigger asChild>
                   <Button
-                    onClick={() => {}}
+                    onClick={() => {logout()}}
                     variant="outline"
                     className="w-full justify-center h-10 mt-5"
                   >

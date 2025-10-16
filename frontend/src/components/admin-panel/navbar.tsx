@@ -1,5 +1,6 @@
 import { ModeToggle } from "@/components/mode-toggle";
 import { LanguageToggle } from "@/components/language-toggle";
+import { GithubLink } from "@/components/github-link";
 import { UserNav } from "@/components/admin-panel/user-nav";
 import { SheetMenu } from "@/components/admin-panel/sheet-menu";
 
@@ -17,6 +18,7 @@ export function Navbar({ title }: NavbarProps) {
         </div>
         <div className="flex flex-1 items-center space-x-2 justify-end">
           <LanguageToggle />
+          <GithubLink />
           <ModeToggle />
           <UserNav />
         </div>
