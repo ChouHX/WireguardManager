@@ -25,8 +25,11 @@ interface MenuProps {
 export function Menu({ isOpen }: MenuProps) {
   const pathname = usePathname();
   const { t } = useI18n();
-  const menuList = getMenuList(pathname, t);
-  const { logout } = useAuthStore();
+  const { user, logout } = useAuthStore((state) => ({
+    user: state.user,
+    logout: state.logout,
+  }));
+  const menuList = getMenuList(pathname, t, user?.role);
 
   return (
     <ScrollArea className="[&>div>div[style]]:!block">

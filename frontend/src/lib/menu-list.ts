@@ -7,6 +7,7 @@ import {
   Activity,
   LucideIcon
 } from "lucide-react";
+import { UserRole } from "@/types/auth";
 
 type Submenu = {
   href: string;
@@ -20,6 +21,7 @@ type Menu = {
   active?: boolean;
   icon: LucideIcon;
   submenus?: Submenu[];
+  roles?: UserRole[];
 };
 
 type Group = {
@@ -27,10 +29,15 @@ type Group = {
   menus: Menu[];
 };
 
-export function getMenuList(pathname: string, t?: (key: string) => string): Group[] {
+export function getMenuList(
+  pathname: string,
+  t?: (key: string) => string,
+  role?: UserRole
+): Group[] {
   const translate = t || ((key: string) => key);
-  
-  return [
+  const currentRole = role ?? UserRole.NORMAL_USER;
+
+  const groups: Group[] = [
     {
       groupLabel: "",
       menus: [
@@ -53,7 +60,8 @@ export function getMenuList(pathname: string, t?: (key: string) => string): Grou
         {
           href: "/admin-wireguard",
           label: translate("nav.adminWireguard"),
-          icon: Shield
+          icon: Shield,
+          roles: [UserRole.ADMIN]
         }
       ]
     },
@@ -63,7 +71,8 @@ export function getMenuList(pathname: string, t?: (key: string) => string): Grou
         {
           href: "/users",
           label: translate("nav.users"),
-          icon: Users
+          icon: Users,
+          roles: [UserRole.ADMIN]
         },
         {
           href: "/account",
@@ -73,4 +82,13 @@ export function getMenuList(pathname: string, t?: (key: string) => string): Grou
       ]
     }
   ];
+
+  return groups
+    .map((group) => ({
+      ...group,
+      menus: group.menus.filter(
+        (menu) => !menu.roles || menu.roles.includes(currentRole)
+      )
+    }))
+    .filter((group) => group.menus.length > 0);
 }
