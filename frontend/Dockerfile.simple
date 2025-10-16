@@ -5,6 +5,9 @@ FROM node:20-alpine AS builder
 # 使用阿里云镜像源加速 Alpine 包下载
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
 
+# 安装 sharp 构建依赖
+RUN apk add --no-cache python3 make g++ vips-dev fftw-dev libc6-compat
+
 # 配置 npm 使用淘宝镜像源
 RUN npm config set registry https://registry.npmmirror.com
 
@@ -32,6 +35,9 @@ FROM node:20-alpine
 
 # 使用阿里云镜像源加速 Alpine 包下载
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
+
+# 安装 sharp 运行依赖
+RUN apk add --no-cache vips libc6-compat
 
 WORKDIR /app
 
