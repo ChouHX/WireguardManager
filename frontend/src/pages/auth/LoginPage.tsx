@@ -1,6 +1,5 @@
 import { useState } from 'react';
-import type { CSSProperties } from 'react';
-import { Anchor, Button, Card, PasswordInput, Stack, Text, TextInput } from '@mantine/core';
+import { Anchor, Button, PasswordInput, Stack, Text, TextInput } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { Link, useNavigate } from 'react-router-dom';
 
@@ -12,7 +11,7 @@ import type { LoginRequest } from '@/types/auth';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/** 演示环境的默认管理员凭证（与后端 seed 数据一致） */
+/** 默认管理员凭证提示（与后端首次启动的 seed 数据一致） */
 const DEFAULT_ACCOUNT = 'admin@platform.com';
 const DEFAULT_PASSWORD = 'password';
 
@@ -44,51 +43,50 @@ export default function LoginPage() {
   });
 
   return (
-    <Stack gap="md">
-      <Card className="wm-rise" style={{ '--wm-delay': '60ms' } as CSSProperties}>
-        <Stack gap={4} mb="lg">
-          <Text fw={650} fz={22} ta="center">
-            {t('auth.loginTitle')}
-          </Text>
-          <Text size="sm" c="dimmed" ta="center">
-            {t('auth.loginDescription')}
-          </Text>
+    <Stack gap="lg">
+      {/* 外层已是卡片，这里只承载标题与表单，避免双层卡片 */}
+      <Stack gap={4}>
+        <Text fw={650} fz={20} lh={1.25}>
+          {t('auth.loginTitle')}
+        </Text>
+        <Text fz={12.5} c="dimmed">
+          {t('auth.loginDescription')}
+        </Text>
+      </Stack>
+
+      <form onSubmit={handleSubmit} noValidate>
+        <Stack gap="md">
+          <TextInput
+            label={t('common.email')}
+            placeholder={t('auth.emailPlaceholder')}
+            type="email"
+            autoComplete="email"
+            {...form.getInputProps('email')}
+          />
+
+          <PasswordInput
+            label={t('common.password')}
+            placeholder={t('auth.passwordPlaceholder')}
+            autoComplete="current-password"
+            {...form.getInputProps('password')}
+          />
+
+          <ErrorAlert message={error} />
+
+          <Button type="submit" color="wg" fullWidth loading={isLoading} disabled={isLoading}>
+            {isLoading ? t('auth.signingIn') : t('auth.signIn')}
+          </Button>
         </Stack>
+      </form>
 
-        <form onSubmit={handleSubmit} noValidate>
-          <Stack gap="md">
-            <TextInput
-              label={t('common.email')}
-              placeholder={t('auth.emailPlaceholder')}
-              type="email"
-              autoComplete="email"
-              {...form.getInputProps('email')}
-            />
-
-            <PasswordInput
-              label={t('common.password')}
-              placeholder={t('auth.passwordPlaceholder')}
-              autoComplete="current-password"
-              {...form.getInputProps('password')}
-            />
-
-            <ErrorAlert message={error} />
-
-            <Button type="submit" color="wg" fullWidth loading={isLoading} disabled={isLoading}>
-              {isLoading ? t('auth.signingIn') : t('auth.signIn')}
-            </Button>
-          </Stack>
-        </form>
-      </Card>
-
-      <Stack gap={6} className="wm-rise" style={{ '--wm-delay': '120ms' } as CSSProperties}>
-        <Text size="sm" c="dimmed" ta="center">
+      <Stack gap={6}>
+        <Text fz={12.5} c="dimmed">
           {t('auth.noAccount')}{' '}
-          <Anchor component={Link} to="/auth/register" fw={600} c="wg.6">
+          <Anchor component={Link} to="/auth/register" fw={600} c="wg.6" fz={12.5}>
             {t('auth.signUp')}
           </Anchor>
         </Text>
-        <Text size="xs" c="dimmed" ta="center">
+        <Text fz={11} c="dimmed">
           {t('common.email')}: <span className="wm-mono">{DEFAULT_ACCOUNT}</span> /{' '}
           <span className="wm-mono">{DEFAULT_PASSWORD}</span>
         </Text>

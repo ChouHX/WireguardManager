@@ -1,6 +1,5 @@
 import { useState } from 'react';
-import type { CSSProperties } from 'react';
-import { Anchor, Button, Card, PasswordInput, Stack, Text, TextInput } from '@mantine/core';
+import { Anchor, Button, PasswordInput, Stack, Text, TextInput } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
 import { Link, useNavigate } from 'react-router-dom';
@@ -61,64 +60,63 @@ export default function RegisterPage() {
   });
 
   return (
-    <Stack gap="md">
-      <Card className="wm-rise" style={{ '--wm-delay': '60ms' } as CSSProperties}>
-        <Stack gap={4} mb="lg">
-          <Text fw={650} fz={22} ta="center">
-            {t('auth.registerTitle')}
-          </Text>
-          <Text size="sm" c="dimmed" ta="center">
-            {t('auth.registerDescription')}
+    <Stack gap="lg">
+      {/* 外层已是卡片，这里只承载标题与表单，避免双层卡片 */}
+      <Stack gap={4}>
+        <Text fw={650} fz={20} lh={1.25}>
+          {t('auth.registerTitle')}
+        </Text>
+        <Text fz={12.5} c="dimmed">
+          {t('auth.registerDescription')}
+        </Text>
+      </Stack>
+
+      <form onSubmit={handleSubmit} noValidate>
+        <Stack gap="md">
+          <TextInput
+            label={t('common.name')}
+            placeholder={t('auth.namePlaceholder')}
+            autoComplete="name"
+            {...form.getInputProps('name')}
+          />
+
+          <TextInput
+            label={t('common.email')}
+            placeholder={t('auth.emailPlaceholder')}
+            type="email"
+            autoComplete="email"
+            {...form.getInputProps('email')}
+          />
+
+          <PasswordInput
+            label={t('common.password')}
+            placeholder={t('auth.passwordPlaceholder')}
+            autoComplete="new-password"
+            {...form.getInputProps('password')}
+          />
+
+          <PasswordInput
+            label={t('auth.confirmPassword')}
+            placeholder={t('auth.confirmPasswordPlaceholder')}
+            autoComplete="new-password"
+            {...form.getInputProps('confirmPassword')}
+          />
+
+          <ErrorAlert message={error} />
+
+          <Button type="submit" color="wg" fullWidth loading={isLoading} disabled={isLoading}>
+            {isLoading ? t('auth.signingUp') : t('auth.signUp')}
+          </Button>
+
+          <Text fz={11} c="dimmed">
+            {isLoading ? t('common.loading') : t('wireguard.autoGenerateNote')}
           </Text>
         </Stack>
+      </form>
 
-        <form onSubmit={handleSubmit} noValidate>
-          <Stack gap="md">
-            <TextInput
-              label={t('common.name')}
-              placeholder={t('auth.namePlaceholder')}
-              autoComplete="name"
-              {...form.getInputProps('name')}
-            />
-
-            <TextInput
-              label={t('common.email')}
-              placeholder={t('auth.emailPlaceholder')}
-              type="email"
-              autoComplete="email"
-              {...form.getInputProps('email')}
-            />
-
-            <PasswordInput
-              label={t('common.password')}
-              placeholder={t('auth.passwordPlaceholder')}
-              autoComplete="new-password"
-              {...form.getInputProps('password')}
-            />
-
-            <PasswordInput
-              label={t('auth.confirmPassword')}
-              placeholder={t('auth.confirmPasswordPlaceholder')}
-              autoComplete="new-password"
-              {...form.getInputProps('confirmPassword')}
-            />
-
-            <ErrorAlert message={error} />
-
-            <Button type="submit" color="wg" fullWidth loading={isLoading} disabled={isLoading}>
-              {isLoading ? t('auth.signingUp') : t('auth.signUp')}
-            </Button>
-
-            <Text size="xs" c="dimmed" ta="center">
-              {isLoading ? t('common.loading') : t('wireguard.autoGenerateNote')}
-            </Text>
-          </Stack>
-        </form>
-      </Card>
-
-      <Text size="sm" c="dimmed" ta="center" className="wm-rise" style={{ '--wm-delay': '120ms' } as CSSProperties}>
+      <Text fz={12.5} c="dimmed">
         {t('auth.haveAccount')}{' '}
-        <Anchor component={Link} to="/auth/login" fw={600} c="wg.6">
+        <Anchor component={Link} to="/auth/login" fw={600} c="wg.6" fz={12.5}>
           {t('auth.signIn')}
         </Anchor>
       </Text>
