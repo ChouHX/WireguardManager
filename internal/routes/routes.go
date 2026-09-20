@@ -37,6 +37,9 @@ func SetupRoutes(r *gin.Engine) {
 
 		// 可用网络接口（用于转发出口选择，默认值为探测到的出口接口）
 		wg.GET("/interfaces", handlers.GetNetworkInterfaces)
+
+		// 设备实时在线状态（服务端 TCP 探测，客户端无需 Agent）
+		wg.GET("/liveness", handlers.GetLiveness)
 	}
 
 	// Admin routes
@@ -50,6 +53,7 @@ func SetupRoutes(r *gin.Engine) {
 		// 管理员查看所有用户流量
 		admin.GET("/wireguard/traffic", handlers.GetAdminTrafficStats)              // 管理员流量统计（精简版）
 		admin.GET("/wireguard/traffic/:id", handlers.GetUserTrafficStats)          // 查看单个用户详情
+		admin.GET("/wireguard/liveness", handlers.GetAdminLiveness)                // 管理端：各服务器在线设备统计
 		
 		// 管理员管理 WireGuard 服务器
 		admin.DELETE("/wireguard/servers/:id", handlers.AdminDeleteWireguardServer) // 删除服务器

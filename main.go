@@ -3,6 +3,7 @@ package main
 import (
 	"cloud-platform/internal/config"
 	"cloud-platform/internal/database"
+	"cloud-platform/internal/handlers"
 	"cloud-platform/internal/response"
 	"cloud-platform/internal/routes"
 	"cloud-platform/internal/services"
@@ -52,6 +53,16 @@ func main() {
 	monitoringService := services.NewMonitoringService(database.DB, monitoringCfg.Interval())
 	go monitoringService.Start(ctx)
 	go monitoringService.RunCleanupLoop(ctx, monitoringCfg.CleanupInterval(), monitoringCfg.Retention())
+
+	// 设备实时存活探测（TCP SYN/RST，秒级感知；客户端无需 Agent）
+	var livenessMonitor *services.LivenessMonitor
+	if config.AppConfig.Liveness.Enabled {
+		livenessMonitor = services.NewLivenessMonitor(database.DB, config.AppConfig.Liveness)
+		livenessMonitor.Start(ctx)
+		handlers.SetLivenessMonitor(livenessMonitor)
+	} else {
+		log.Println("Liveness probing is disabled by configuration")
+	}
 
 	// Setup Gin
 	r := gin.New()
@@ -131,6 +142,9 @@ func main() {
 	}
 
 	// 先停后台任务，再停 HTTP 服务
+	if livenessMonitor != nil {
+		livenessMonitor.Stop()
+	}
 	monitoringService.Stop()
 	collector.Stop()
 

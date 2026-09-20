@@ -40,6 +40,15 @@ monitoring:
   retention_hours: 168        # 监控记录保留时长（7 天）
   cleanup_interval_hours: 24  # 过期记录清理周期
 
+# 客户端在线探测（TCP SYN/RST，客户端无需安装任何 Agent）
+liveness:
+  enabled: true
+  interval_seconds: 1         # 每秒探测一次，实现秒级感知
+  timeout_ms: 800             # 单次探测超时
+  offline_threshold: 2        # 连续失败多少次判定离线（规避单次丢包误报）
+  probe_port: 49151           # 探测端口，避开 22/80/443 等常用端口
+  max_concurrency: 32         # 并发探测上限
+
 default:
   admin_email: "admin@platform.com"
   admin_password: "password"

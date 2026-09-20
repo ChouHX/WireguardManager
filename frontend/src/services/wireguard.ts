@@ -2,7 +2,9 @@ import api from './api';
 import type { ApiResponse } from '@/types/auth';
 import type {
   AddPeerRequest,
+  AdminLivenessResponse,
   AdminUserTraffic,
+  LivenessResponse,
   NetworkInterfacesResponse,
   UpdatePeerRequest,
   UserTrafficStats,
@@ -27,6 +29,12 @@ export const wireguardService = {
   /** 可作为转发出口的网络接口列表（含探测到的默认出口） */
   async getInterfaces(): Promise<ApiResponse<NetworkInterfacesResponse>> {
     const res = await api.get<ApiResponse<NetworkInterfacesResponse>>('/api/wireguard/interfaces');
+    return res.data;
+  },
+
+  /** 当前用户设备的实时在线状态（服务端探测结果快照） */
+  async getLiveness(): Promise<ApiResponse<LivenessResponse>> {
+    const res = await api.get<ApiResponse<LivenessResponse>>('/api/wireguard/liveness');
     return res.data;
   },
 
@@ -80,6 +88,12 @@ export const wireguardService = {
     const res = await api.get<ApiResponse<UserTrafficStats>>(
       `/api/admin/wireguard/traffic/${userId}`,
     );
+    return res.data;
+  },
+
+  /** 管理端：各服务器在线设备统计 */
+  async getAdminLiveness(): Promise<ApiResponse<AdminLivenessResponse>> {
+    const res = await api.get<ApiResponse<AdminLivenessResponse>>('/api/admin/wireguard/liveness');
     return res.data;
   },
 

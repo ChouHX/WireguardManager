@@ -69,7 +69,9 @@
     "passwordRequired": "密码不能为空",
     "nameRequired": "姓名不能为空",
     "passwordMinLength": "密码至少需要6个字符",
-    "nameMinLength": "姓名至少需要2个字符"
+    "nameMinLength": "姓名至少需要2个字符",
+    "heroTitle": "开箱即用的 WireGuard 控制台",
+    "heroDescription": "按账号隔离网络命名空间，自动编排接口、路由与转发规则；设备配置下发与实时流量一屏掌握。"
   },
   "user": {
     "profile": "个人资料",
@@ -259,7 +261,19 @@
     "ifaceVirtual": "虚拟接口",
     "ifaceCustom": "自定义",
     "ifaceAutoDetected": "已自动探测到出口接口：{name}",
-    "ifaceDetectFailed": "未能探测到默认出口，请从列表中选择或手动填写。"
+    "ifaceDetectFailed": "未能探测到默认出口，请从列表中选择或手动填写。",
+    "online": "在线",
+    "offline": "离线",
+    "detecting": "检测中",
+    "onlineDevices": "在线设备",
+    "onlineHint": "{online} / {total} 台在线",
+    "latency": "延迟",
+    "livenessHint": "服务端每秒探测一次，离线需连续两次超时才会判定。",
+    "livenessDetail": "在线判定：{reason}",
+    "reasonRefused": "已收到对端内核响应",
+    "reasonHandshake": "TCP 握手成功",
+    "reasonTimeout": "探测超时",
+    "reasonUnreachable": "主机不可达"
   },
   "monitoring": {
     "title": "系统监控",

@@ -38,6 +38,7 @@ import {
   IconPlus,
   IconQrcode,
   IconTrash,
+  IconWifi,
 } from '@tabler/icons-react';
 import { QRCodeSVG } from 'qrcode.react';
 
@@ -52,6 +53,8 @@ import { isValidIPOrCIDR, normalizeIPToCIDR } from '@/lib/ip-validator';
 import { wireguardService } from '@/services';
 import type {
   AddPeerRequest,
+  LivenessResponse,
+  LivenessResult,
   NetworkInterfaceInfo,
   NetworkInterfacesResponse,
   UpdatePeerRequest,
@@ -60,6 +63,8 @@ import type {
 } from '@/types/wireguard';
 
 const POLL_INTERVAL_MS = 3000;
+/** 在线状态刷新间隔：服务端每秒探测，前端 2 秒取一次结论 */
+const LIVENESS_INTERVAL_MS = 2000;
 
 interface PeerFormValues {
   allowed_ips: string[];
@@ -109,6 +114,43 @@ function withCurrentInterface(
   return [{ value: trimmed, label: `${trimmed} (${customLabel})` }, ...options];
 }
 
+/** 设备在线状态指示灯 */
+function LivenessIndicator({
+  result,
+  t,
+}: {
+  result?: LivenessResult;
+  t: (key: string) => string;
+}) {
+  const state = result?.state ?? 'unknown';
+  const color = state === 'online' ? 'teal' : state === 'offline' ? 'red' : 'gray';
+  const label =
+    state === 'online'
+      ? t('wireguard.online')
+      : state === 'offline'
+        ? t('wireguard.offline')
+        : t('wireguard.detecting');
+
+  return (
+    <Group gap={5} wrap="nowrap">
+      <Box
+        w={7}
+        h={7}
+        style={{ borderRadius: '50%', background: `var(--mantine-color-${color}-6)`, flex: '0 0 auto' }}
+      />
+      <Text fz={11} c={`${color}.6`} fw={550}>
+        {label}
+      </Text>
+      {state === 'online' && result ? (
+        <Text fz={11} c="dimmed" className="wm-mono">
+          {/* 亚毫秒级往返（本机/同机房）显示成 <1ms，避免被 0 吞掉 */}
+          {result.latency_ms > 0 ? `${result.latency_ms}ms` : '<1ms'}
+        </Text>
+      ) : null}
+    </Group>
+  );
+}
+
 export default function WireguardPage() {
   const { t, locale } = useTranslation();
 
@@ -116,6 +158,8 @@ export default function WireguardPage() {
   const [traffic, setTraffic] = useState<UserTrafficSummary | null>(null);
   /** 可作为转发出口的网络接口（含探测到的默认出口） */
   const [interfaces, setInterfaces] = useState<NetworkInterfacesResponse | null>(null);
+  /** 设备实时在线状态（服务端探测结论） */
+  const [liveness, setLiveness] = useState<LivenessResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   /** 后端返回"该用户没有 WireGuard server"时的友好降级状态 */
@@ -175,6 +219,18 @@ export default function WireguardPage() {
     [interfaces, t],
   );
 
+  // 在线状态：只读取服务端探测结论，请求本身不产生探测开销
+  const loadLiveness = useCallback(async () => {
+    try {
+      const response = await wireguardService.getLiveness();
+      if (response.success && response.data) {
+        setLiveness(response.data);
+      }
+    } catch {
+      // 探测未启用或用户未分配网络时静默降级
+    }
+  }, []);
+
   const bootstrap = useCallback(async () => {
     try {
       setError(null);
@@ -196,6 +252,7 @@ export default function WireguardPage() {
   useEffect(() => {
     void bootstrap();
     void loadInterfaces();
+    void loadLiveness();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -210,6 +267,15 @@ export default function WireguardPage() {
       });
     },
     noServer ? null : POLL_INTERVAL_MS,
+  );
+
+  // 在线状态用更快节奏刷新，保证"秒级"感知
+  useInterval(
+    () => {
+      if (noServer) return;
+      void loadLiveness();
+    },
+    noServer ? null : LIVENESS_INTERVAL_MS,
   );
 
   const statsOf = useCallback(
@@ -530,15 +596,31 @@ export default function WireguardPage() {
 
       <ErrorAlert message={error} onClose={() => setError(null)} />
 
-      {/* 流量概览 */}
-      <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="sm">
+      {/* 流量与在线概览 */}
+      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
+        <MetricCard
+          label={t('wireguard.onlineDevices')}
+          value={liveness ? liveness.online : '-'}
+          hint={t('wireguard.onlineHint', {
+            online: liveness?.online ?? 0,
+            total: liveness?.total ?? traffic?.peer_count ?? 0,
+          })}
+          icon={IconWifi}
+          accent="green"
+          progress={
+            liveness && liveness.total > 0
+              ? { value: (liveness.online / liveness.total) * 100, level: 'ok' }
+              : undefined
+          }
+          delay={40}
+        />
         <MetricCard
           label={t('wireguard.totalPeers')}
           value={traffic?.peer_count ?? 0}
           hint={t('wireguard.connectedDevices')}
           icon={IconDeviceLaptop}
           accent="wg"
-          delay={60}
+          delay={80}
         />
         <MetricCard
           label={t('wireguard.totalDownload')}
@@ -554,7 +636,7 @@ export default function WireguardPage() {
           hint={t('wireguard.transmitted')}
           icon={IconArrowUp}
           accent="blue"
-          delay={180}
+          delay={160}
         />
       </SimpleGrid>
 
@@ -564,7 +646,7 @@ export default function WireguardPage() {
           <Box>
             <Text fw={650}>{t('wireguard.myPeers')}</Text>
             <Text size="xs" c="dimmed" mt={3}>
-              {t('wireguard.managePeers')}
+              {t('wireguard.livenessHint')}
             </Text>
           </Box>
           <Badge variant="light" color="gray" size="sm">
@@ -629,6 +711,7 @@ export default function WireguardPage() {
                           <Text size="xs" c="dimmed" className="wm-mono">
                             {shortKey(peer.public_key, 22)}
                           </Text>
+                          <LivenessIndicator result={liveness?.peers?.[peer.public_key]} t={t} />
                         </Stack>
                       </Table.Td>
                       <Table.Td>

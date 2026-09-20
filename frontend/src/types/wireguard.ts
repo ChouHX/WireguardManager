@@ -114,6 +114,46 @@ export interface NetworkInterfacesResponse {
   interfaces: NetworkInterfaceInfo[];
 }
 
+// 设备实时在线状态（服务端 TCP 探测）
+export type LivenessState = 'unknown' | 'online' | 'offline';
+
+export interface LivenessResult {
+  /** 实际探测的地址 */
+  target: string;
+  state: LivenessState;
+  /** 最近一次成功探测的往返耗时 */
+  latency_ms: number;
+  /** 判定依据：refused / handshake / timeout / unreachable / error */
+  reason?: string;
+  last_probe_at: string;
+  last_online_at?: string;
+  /** 当前连续失败次数 */
+  failures: number;
+  probes: number;
+}
+
+export interface LivenessResponse {
+  enabled: boolean;
+  online: number;
+  total: number;
+  /** key 为 peer 公钥 */
+  peers: Record<string, LivenessResult>;
+}
+
+export interface ServerLivenessAggregate {
+  online: number;
+  offline: number;
+  unknown: number;
+  total: number;
+}
+
+export interface AdminLivenessResponse {
+  enabled: boolean;
+  summary: { online: number; offline: number; unknown: number };
+  /** key 为 server_id 的字符串形式 */
+  servers: Record<string, ServerLivenessAggregate>;
+}
+
 export interface AddPeerRequest {  allowed_ips?: string;
   persistent_keepalive?: number;
   comment?: string;

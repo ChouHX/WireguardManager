@@ -769,6 +769,144 @@ func restorePeerRoutes(netnsService *services.NetnsService, namespace, wgInterfa
 	}
 }
 
+// livenessMonitor 由 main 注入；为 nil 表示未启用存活探测。
+var livenessMonitor *services.LivenessMonitor
+
+// SetLivenessMonitor 注入存活探测监控器。
+func SetLivenessMonitor(monitor *services.LivenessMonitor) {
+	livenessMonitor = monitor
+}
+
+// GetLiveness 返回当前用户设备的实时在线状态。
+//
+// 探测在服务端后台进行（TCP SYN/RST），客户端无需安装任何 Agent；
+// 这里只读取内存中的结论快照，因此响应是零网络开销的。
+func GetLiveness(c *gin.Context) {
+	u, ok := currentUser(c)
+	if !ok {
+		response.Unauthorized(c, "User not found in context")
+		return
+	}
+
+	if !livenessEnabled() {
+		response.Success(c, "Liveness probing is disabled", gin.H{
+			"enabled": false,
+			"online":  0,
+			"total":   0,
+			"peers":   gin.H{},
+		})
+		return
+	}
+
+	var wgServer models.WireguardServer
+	if err := database.DB.Where("user_id = ?", u.ID).First(&wgServer).Error; err != nil {
+		response.BadRequest(c, "User has no WireGuard server configured", nil)
+		return
+	}
+
+	var peers []models.WireguardPeer
+	if err := database.DB.Select("public_key").
+		Where("server_id = ?", wgServer.ID).Find(&peers).Error; err != nil {
+		response.InternalError(c, "Failed to fetch peers")
+		return
+	}
+
+	snapshot := livenessMonitor.Snapshot()
+	peerResults := make(map[string]services.LivenessResult, len(peers))
+	online := 0
+
+	for _, peer := range peers {
+		if result, found := snapshot[peer.PublicKey]; found {
+			peerResults[peer.PublicKey] = result
+			if result.State == services.LivenessOnline {
+				online++
+			}
+			continue
+		}
+		// 尚未产生探测结论（刚创建或探测刚启动）
+		peerResults[peer.PublicKey] = services.LivenessResult{State: services.LivenessUnknown}
+	}
+
+	response.Success(c, "Liveness retrieved successfully", gin.H{
+		"enabled": true,
+		"online":  online,
+		"total":   len(peers),
+		"peers":   peerResults,
+	})
+}
+
+// GetAdminLiveness 返回全部设备的在线状态，并按服务器聚合，供管理端列表使用。
+func GetAdminLiveness(c *gin.Context) {
+	if !livenessEnabled() {
+		response.Success(c, "Liveness probing is disabled", gin.H{
+			"enabled": false,
+			"summary": gin.H{"online": 0, "offline": 0, "unknown": 0},
+			"servers": gin.H{},
+		})
+		return
+	}
+
+	type peerRow struct {
+		ServerID  uint
+		PublicKey string
+	}
+
+	var peers []peerRow
+	if err := database.DB.Model(&models.WireguardPeer{}).
+		Select("server_id", "public_key").Find(&peers).Error; err != nil {
+		response.InternalError(c, "Failed to fetch peers")
+		return
+	}
+
+	type serverAggregate struct {
+		Online  int `json:"online"`
+		Offline int `json:"offline"`
+		Unknown int `json:"unknown"`
+		Total   int `json:"total"`
+	}
+
+	snapshot := livenessMonitor.Snapshot()
+	aggregates := make(map[uint]*serverAggregate)
+
+	for _, peer := range peers {
+		aggregate, found := aggregates[peer.ServerID]
+		if !found {
+			aggregate = &serverAggregate{}
+			aggregates[peer.ServerID] = aggregate
+		}
+		aggregate.Total++
+
+		switch result, ok := snapshot[peer.PublicKey]; {
+		case !ok:
+			aggregate.Unknown++
+		case result.State == services.LivenessOnline:
+			aggregate.Online++
+		case result.State == services.LivenessOffline:
+			aggregate.Offline++
+		default:
+			aggregate.Unknown++
+		}
+	}
+
+	// 以字符串为键，避免 JSON 序列化 map[uint] 的限制
+	servers := make(map[string]serverAggregate, len(aggregates))
+	for id, aggregate := range aggregates {
+		servers[strconv.FormatUint(uint64(id), 10)] = *aggregate
+	}
+
+	online, offline, unknown := livenessMonitor.Counts()
+
+	response.Success(c, "Admin liveness retrieved successfully", gin.H{
+		"enabled": true,
+		"summary": gin.H{"online": online, "offline": offline, "unknown": unknown},
+		"servers": servers,
+	})
+}
+
+func livenessEnabled() bool {
+	return livenessMonitor != nil && livenessMonitor.ProbeEnabled()
+}
+
 // GetNetworkInterfaces 返回可作为转发出口的网络接口列表。
 // 默认值优先取系统默认路由的出口接口，探测不到时回退到配置的 network.out_interface。
 func GetNetworkInterfaces(c *gin.Context) {

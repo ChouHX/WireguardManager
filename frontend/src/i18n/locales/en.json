@@ -69,7 +69,9 @@
     "passwordRequired": "Password is required",
     "nameRequired": "Name is required",
     "passwordMinLength": "Password must be at least 6 characters",
-    "nameMinLength": "Name must be at least 2 characters"
+    "nameMinLength": "Name must be at least 2 characters",
+    "heroTitle": "A ready-to-use WireGuard console",
+    "heroDescription": "Namespace isolation per account with automatic interface, routing and forwarding setup; device configs and live traffic on a single screen."
   },
   "user": {
     "profile": "Profile",
@@ -259,7 +261,19 @@
     "ifaceVirtual": "virtual",
     "ifaceCustom": "custom",
     "ifaceAutoDetected": "Detected default route interface: {name}",
-    "ifaceDetectFailed": "No default route interface detected; pick one from the list or type it manually."
+    "ifaceDetectFailed": "No default route interface detected; pick one from the list or type it manually.",
+    "online": "Online",
+    "offline": "Offline",
+    "detecting": "Detecting",
+    "onlineDevices": "Online devices",
+    "onlineHint": "{online} / {total} online",
+    "latency": "Latency",
+    "livenessHint": "Probed once per second; two consecutive timeouts are required to mark offline.",
+    "livenessDetail": "Liveness signal: {reason}",
+    "reasonRefused": "peer kernel responded",
+    "reasonHandshake": "TCP handshake completed",
+    "reasonTimeout": "probe timed out",
+    "reasonUnreachable": "host unreachable"
   },
   "monitoring": {
     "title": "System Monitoring",

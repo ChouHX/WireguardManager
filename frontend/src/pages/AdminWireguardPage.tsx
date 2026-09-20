@@ -44,7 +44,11 @@ import { useInterval } from '@/hooks/use-interval';
 import { useTranslation } from '@/i18n';
 import { formatBytes, formatRelativeTime, formatTime, messageOf, shortKey } from '@/lib/format';
 import { wireguardService } from '@/services';
-import type { AdminUserTraffic, UserTrafficStats } from '@/types/wireguard';
+import type {
+  AdminLivenessResponse,
+  AdminUserTraffic,
+  UserTrafficStats,
+} from '@/types/wireguard';
 
 /** 管理员页数据量大，5 秒轮询一次 */
 const POLL_INTERVAL_MS = 5000;
@@ -55,6 +59,8 @@ export default function AdminWireguardPage() {
   const { t, locale } = useTranslation();
 
   const [rows, setRows] = useState<AdminUserTraffic[]>([]);
+  /** 各服务器在线设备统计（服务端 TCP 探测结论） */
+  const [liveness, setLiveness] = useState<AdminLivenessResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -84,16 +90,27 @@ export default function AdminWireguardPage() {
     }
   }, []);
 
+  const loadLiveness = useCallback(async () => {
+    try {
+      const response = await wireguardService.getAdminLiveness();
+      if (response.success && response.data) {
+        setLiveness(response.data);
+      }
+    } catch {
+      // 探测功能关闭时静默降级
+    }
+  }, []);
+
   const bootstrap = useCallback(async () => {
     try {
       setError(null);
-      await loadTraffic();
+      await Promise.all([loadTraffic(), loadLiveness()]);
     } catch (err) {
       setError(messageOf(err, t('errors.somethingWrong')));
     } finally {
       setLoading(false);
     }
-  }, [loadTraffic, t]);
+  }, [loadTraffic, loadLiveness, t]);
 
   useEffect(() => {
     void bootstrap();
@@ -104,6 +121,7 @@ export default function AdminWireguardPage() {
   useInterval(
     () => {
       void loadTraffic().catch((err) => setError(messageOf(err, t('errors.networkError'))));
+      void loadLiveness();
     },
     autoRefresh ? POLL_INTERVAL_MS : null,
   );
@@ -375,6 +393,7 @@ export default function AdminWireguardPage() {
                   <Table.Th>{t('wireguard.address')}</Table.Th>
                   <Table.Th>{t('wireguard.namespace')}</Table.Th>
                   <Table.Th>{t('wireguard.peers')}</Table.Th>
+                  <Table.Th>{t('wireguard.onlineDevices')}</Table.Th>
                   <Table.Th>{t('wireguard.transfer')}</Table.Th>
                   <Table.Th>{t('wireguard.rateLimit')}</Table.Th>
                   <Table.Th>{t('wireguard.status')}</Table.Th>
@@ -418,6 +437,37 @@ export default function AdminWireguardPage() {
                       <Badge variant="light" color="gray" className="wm-mono">
                         {row.peer_count}
                       </Badge>
+                    </Table.Td>
+                    <Table.Td>
+                      {(() => {
+                        const aggregate = liveness?.servers?.[String(row.server_id)];
+                        if (!aggregate || aggregate.total === 0) {
+                          return (
+                            <Text size="xs" c="dimmed">
+                              -
+                            </Text>
+                          );
+                        }
+                        const anyOnline = aggregate.online > 0;
+                        return (
+                          <Group gap={5} wrap="nowrap">
+                            <Box
+                              w={7}
+                              h={7}
+                              style={{
+                                borderRadius: '50%',
+                                flex: '0 0 auto',
+                                background: anyOnline
+                                  ? 'var(--mantine-color-teal-6)'
+                                  : 'var(--mantine-color-gray-5)',
+                              }}
+                            />
+                            <Text size="xs" className="wm-mono" c={anyOnline ? 'teal.6' : 'dimmed'}>
+                              {aggregate.online}/{aggregate.total}
+                            </Text>
+                          </Group>
+                        );
+                      })()}
                     </Table.Td>
                     <Table.Td>
                       <Stack gap={2}>
