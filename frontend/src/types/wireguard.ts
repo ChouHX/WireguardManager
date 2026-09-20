@@ -118,24 +118,24 @@ export interface NetworkInterfacesResponse {
 export type LivenessState = 'unknown' | 'online' | 'offline';
 
 export interface LivenessResult {
-  /** 实际探测的地址 */
-  target: string;
   state: LivenessState;
-  /** 最近一次成功探测的往返耗时 */
-  latency_ms: number;
-  /** 判定依据：refused / handshake / timeout / unreachable / error */
-  reason?: string;
-  last_probe_at: string;
+  /** 最近一次 WireGuard 握手时间 */
+  last_handshake_at?: string;
+  /** 距最近一次握手的秒数；从未握手为 -1 */
+  handshake_age_seconds: number;
   last_online_at?: string;
-  /** 当前连续失败次数 */
+  checked_at: string;
+  /** 当前连续判定为握手过期的次数 */
   failures: number;
-  probes: number;
+  checks: number;
 }
 
 export interface LivenessResponse {
   enabled: boolean;
   online: number;
   total: number;
+  /** 判定在线所用的握手时效阈值（秒） */
+  handshake_timeout_seconds: number;
   /** key 为 peer 公钥 */
   peers: Record<string, LivenessResult>;
 }

@@ -79,19 +79,22 @@ type MonitoringConfig struct {
 	CleanupIntervalHours int `yaml:"cleanup_interval_hours"` // 清理任务执行周期
 }
 
-// LivenessConfig 客户端在线探测（TCP SYN/RST 探测）。
+// LivenessConfig 客户端在线判定。
 //
-// 探测原理：向 peer 的隧道地址上一个高位空闲端口发起 TCP 连接请求。
-// 对端内核存活时会立刻回 RST（错误呈现为 connection refused），
-// 或恰好有服务监听则完成握手——两者都说明对端存活；
-// 只有超时/无路由才计为一次失败。
+// 判据来自 WireGuard 自身的握手状态：peer 的 last handshake 在阈值时间内
+// 持续更新，即说明隧道处于活跃状态。
+//
+// 早期版本曾用「向 peer 隧道地址发 TCP SYN」的方式探测，但后端进程运行在
+// 宿主机命名空间，而隧道网段只在各账号的 netns 内可达，探测包根本到不了
+// 对端，导致设备明明在线却被判离线。
 type LivenessConfig struct {
-	Enabled          bool `yaml:"enabled"`           // 是否启用探测
-	IntervalSeconds  int  `yaml:"interval_seconds"`  // 探测间隔
-	TimeoutMS        int  `yaml:"timeout_ms"`        // 单次探测超时
-	OfflineThreshold int  `yaml:"offline_threshold"` // 连续失败多少次判定离线
-	ProbePort        int  `yaml:"probe_port"`        // 探测端口，避开 22/80/443 等常用端口
-	MaxConcurrency   int  `yaml:"max_concurrency"`   // 并发探测上限
+	Enabled bool `yaml:"enabled"` // 是否启用在线判定
+	// IntervalSeconds 刷新间隔：读取各账号的 wg 统计并重新计算状态
+	IntervalSeconds int `yaml:"interval_seconds"`
+	// HandshakeTimeoutSeconds 握手多久未更新即视为离线
+	HandshakeTimeoutSeconds int `yaml:"handshake_timeout_seconds"`
+	// OfflineThreshold 连续多少次判定为超时后才置为离线（防止边界抖动）
+	OfflineThreshold int `yaml:"offline_threshold"`
 }
 
 // DefaultConfig 平台默认管理员账号
@@ -139,12 +142,10 @@ func defaultConfig() *Config {
 			CleanupIntervalHours: 24,
 		},
 		Liveness: LivenessConfig{
-			Enabled:          true,
-			IntervalSeconds:  1,     // 每秒一次，保证秒级感知
-			TimeoutMS:        800,   // 单次超时，留出握手余量
-			OfflineThreshold: 2,     // 连续两次超时才判离线，规避单次丢包
-			ProbePort:        49151, // 高位动态端口，避开 22/80/443 等常用端口
-			MaxConcurrency:   32,
+			Enabled:                 true,
+			IntervalSeconds:         3,   // 每 3 秒复核一次握手状态
+			HandshakeTimeoutSeconds: 180, // WireGuard 默认 120s 重协商，留出余量
+			OfflineThreshold:        2,   // 连续两次超时才判离线，规避边界抖动
 		},
 		// Default 段留空，由 normalize 依次完成 legacy 字段兼容与内置默认值填充
 		Default: DefaultConfig{},
@@ -236,19 +237,13 @@ func (c *Config) normalize() {
 	// 探测参数兜底。Enabled 不在此处兜底：默认值已在 defaultConfig 注入，
 	// 强制置 true 会覆盖用户在配置中显式关闭探测的意图。
 	if c.Liveness.IntervalSeconds <= 0 {
-		c.Liveness.IntervalSeconds = 1
+		c.Liveness.IntervalSeconds = 3
 	}
-	if c.Liveness.TimeoutMS <= 0 {
-		c.Liveness.TimeoutMS = 800
+	if c.Liveness.HandshakeTimeoutSeconds <= 0 {
+		c.Liveness.HandshakeTimeoutSeconds = 180
 	}
 	if c.Liveness.OfflineThreshold <= 0 {
 		c.Liveness.OfflineThreshold = 2
-	}
-	if c.Liveness.ProbePort <= 0 || c.Liveness.ProbePort > 65535 {
-		c.Liveness.ProbePort = 49151
-	}
-	if c.Liveness.MaxConcurrency <= 0 {
-		c.Liveness.MaxConcurrency = 32
 	}
 
 	if c.JWT.ExpireHours <= 0 {
@@ -294,10 +289,8 @@ func applyEnvOverrides(c *Config) {
 
 	setBool(&c.Liveness.Enabled, "WM_LIVENESS_ENABLED")
 	setInt(&c.Liveness.IntervalSeconds, "WM_LIVENESS_INTERVAL_SECONDS")
-	setInt(&c.Liveness.TimeoutMS, "WM_LIVENESS_TIMEOUT_MS")
+	setInt(&c.Liveness.HandshakeTimeoutSeconds, "WM_LIVENESS_HANDSHAKE_TIMEOUT_SECONDS")
 	setInt(&c.Liveness.OfflineThreshold, "WM_LIVENESS_OFFLINE_THRESHOLD")
-	setInt(&c.Liveness.ProbePort, "WM_LIVENESS_PROBE_PORT")
-	setInt(&c.Liveness.MaxConcurrency, "WM_LIVENESS_MAX_CONCURRENCY")
 
 	setString(&c.Default.AdminEmail, "WM_DEFAULT_ADMIN_EMAIL")
 	setString(&c.Default.AdminPassword, "WM_DEFAULT_ADMIN_PASSWORD")
@@ -404,11 +397,8 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.Default.AdminPassword) == "" {
 		problems = append(problems, "default.admin_password must not be empty")
 	}
-	if c.Liveness.ProbePort < 1 || c.Liveness.ProbePort > 65535 {
-		problems = append(problems, fmt.Sprintf("liveness.probe_port must be within 1..65535, got %d", c.Liveness.ProbePort))
-	}
-	if c.Liveness.MaxConcurrency < 1 {
-		problems = append(problems, fmt.Sprintf("liveness.max_concurrency must be >= 1, got %d", c.Liveness.MaxConcurrency))
+	if c.Liveness.HandshakeTimeoutSeconds < 1 {
+		problems = append(problems, fmt.Sprintf("liveness.handshake_timeout_seconds must be >= 1, got %d", c.Liveness.HandshakeTimeoutSeconds))
 	}
 
 	if len(problems) > 0 {
@@ -455,8 +445,9 @@ func (l LivenessConfig) Interval() time.Duration {
 	return time.Duration(l.IntervalSeconds) * time.Second
 }
 
-func (l LivenessConfig) Timeout() time.Duration {
-	return time.Duration(l.TimeoutMS) * time.Millisecond
+// HandshakeTimeout 握手超过该时长未更新即判定离线
+func (l LivenessConfig) HandshakeTimeout() time.Duration {
+	return time.Duration(l.HandshakeTimeoutSeconds) * time.Second
 }
 
 // GetDSN 返回 SQLite 连接串（glebarez/sqlite 支持 _pragma= 形式的内联参数）。

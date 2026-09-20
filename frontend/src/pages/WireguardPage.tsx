@@ -48,7 +48,14 @@ import { MetricCard } from '@/components/common/MetricCard';
 import { PageHeader } from '@/components/common/PageHeader';
 import { useInterval } from '@/hooks/use-interval';
 import { useTranslation } from '@/i18n';
-import { formatBytes, formatRelativeTime, formatTime, shortKey, messageOf } from '@/lib/format';
+import {
+  formatAgeSeconds,
+  formatBytes,
+  formatRelativeTime,
+  formatTime,
+  shortKey,
+  messageOf,
+} from '@/lib/format';
 import { isValidIPOrCIDR, normalizeIPToCIDR } from '@/lib/ip-validator';
 import { wireguardService } from '@/services';
 import type {
@@ -143,8 +150,8 @@ function LivenessIndicator({
       </Text>
       {state === 'online' && result ? (
         <Text fz={11} c="dimmed" className="wm-mono">
-          {/* 亚毫秒级往返（本机/同机房）显示成 <1ms，避免被 0 吞掉 */}
-          {result.latency_ms > 0 ? `${result.latency_ms}ms` : '<1ms'}
+          {/* 展示距最近一次握手的时长，直接反映隧道活跃程度 */}
+          {formatAgeSeconds(result.handshake_age_seconds)}
         </Text>
       ) : null}
     </Group>
@@ -646,7 +653,7 @@ export default function WireguardPage() {
           <Box>
             <Text fw={650}>{t('wireguard.myPeers')}</Text>
             <Text size="xs" c="dimmed" mt={3}>
-              {t('wireguard.livenessHint')}
+              {t('wireguard.livenessHint', { seconds: liveness?.handshake_timeout_seconds ?? 180 })}
             </Text>
           </Box>
           <Badge variant="light" color="gray" size="sm">

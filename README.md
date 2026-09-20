@@ -32,7 +32,7 @@
 - **账号级隔离** —— 每个账号独享一个 network namespace、独立的 WireGuard 接口与监听端口，互不可见、互不干扰。
 - **自动化编排** —— 注册即自动创建命名空间、veth 对、wg 接口、路由与 iptables 规则；任一步失败自动回滚，不留半成品。
 - **设备即开即用** —— 一键生成客户端配置，支持 `.conf` 下载与二维码扫码导入，转发出口自动探测。
-- **秒级在线感知** —— 服务端对设备做 TCP 探测，客户端零 Agent：收到对端内核响应即刻上线（毫秒级），连续超时才判离线，规避单次丢包误报。
+- **秒级在线感知** —— 依据 WireGuard 自身的握手状态判定，客户端零 Agent：握手新鲜即刻在线，握手过期需连续确认才判离线，不受客户端防火墙与路由差异影响。
 - **流量与资源监控** —— 设备握手状态、收发流量、系统 CPU / 内存 / 磁盘 / 网络趋势一屏掌握。
 - **精细管控** —— 设备粒度限速、启用禁用、网关转发模式、AllowedIPs 网段自定义。
 - **现代控制台** —— React 19 + Mantine，紧凑式布局、明暗主题、中英文双语、移动端自适应。
@@ -150,12 +150,10 @@ WM_IMAGE_TAG=sha-2df1b06 docker compose up -d
 | `monitoring` | `interval_seconds` | `10` | 系统指标采样间隔 |
 | | `retention_hours` | `168` | 监控记录保留时长（7 天） |
 | | `cleanup_interval_hours` | `24` | 过期记录清理周期 |
-| `liveness` | `enabled` | `true` | 是否启用设备在线探测 |
-| | `interval_seconds` | `1` | 探测间隔 |
-| | `timeout_ms` | `800` | 单次探测超时 |
-| | `offline_threshold` | `2` | 连续失败多少次判离线 |
-| | `probe_port` | `49151` | 探测端口，避开 22/80/443 等常用端口 |
-| | `max_concurrency` | `32` | 并发探测上限 |
+| `liveness` | `enabled` | `true` | 是否启用在线判定 |
+| | `interval_seconds` | `3` | 复核间隔 |
+| | `handshake_timeout_seconds` | `180` | 握手超过该时长未更新即判定离线 |
+| | `offline_threshold` | `2` | 连续多少次超时才置为离线（防抖动） |
 | `default` | `admin_email` | `admin@platform.com` | 首次启动创建的管理员邮箱 |
 | | `admin_password` | `password` | 初始密码 |
 
@@ -169,7 +167,7 @@ WM_SERVER_PORT=8080                  # 监听端口
 WM_NETWORK_SERVER_IP=1.2.3.4         # 公网 IP
 WM_NETWORK_OUT_INTERFACE=eth0        # 出口网卡
 WM_DB_PATH=/root/data/cloud_platform.db
-WM_LIVENESS_ENABLED=false            # 关闭在线探测
+WM_LIVENESS_ENABLED=false            # 关闭在线判定
 ```
 
 完整清单见 [`.env.example`](.env.example)。
@@ -273,11 +271,11 @@ docker compose down                           # 停止服务
 **注册 / 首次启动比较慢？**
 注册需要创建命名空间、veth 对、wg 接口并拉起路由与 NAT 规则，通常需要数秒；任一步失败会整体回滚，不会留下残留资源。
 
-**设备实际在线，面板却显示离线？**
-在线判定依赖对端回包。若客户端在隧道内对探测端口做了 `DROP`（而不是默认的 `REJECT`/RST），探测会一直超时。放行隧道内到 `liveness.probe_port` 的流量即可，或把探测端口改成一个已放行的端口。
+**在线状态是怎么判定的？**
+读取 WireGuard 自身的 `last handshake`：距最近一次握手在 `liveness.handshake_timeout_seconds`（默认 180 秒）内即为在线，超过则连续确认 `offline_threshold` 次后转为离线。整个过程不向客户端发送任何探测包，客户端也无需安装 Agent。
 
-**为什么探测端口用 49151 这类高位端口？**
-避免与 22/80/443 等常用端口冲突，也避免对端未来启动真实服务时产生误判。高位端口绝大多数时间处于关闭状态，内核稳定返回 RST。
+**设备明明连着，为什么显示离线？**
+先看设备列表里的「最后握手」时间：若它也在持续更新，说明隧道正常，此时在线状态会在下一次复核（默认 3 秒）内转为在线；若握手时间停滞，则是隧道本身已中断。需要更宽松的判定时，把 `handshake_timeout_seconds` 调大即可。
 
 **忘记管理员密码？**
 停掉服务，删除 `data/cloud_platform.db` 后重启，会重新创建默认管理员（同时也会清空所有数据）；或在数据库中直接更新 `password_hash`。

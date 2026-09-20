@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -186,15 +187,71 @@ func (s *WireguardService) GetConfigPath(username, interfaceName string) string 
 	return filepath.Join(s.configDir, username, fmt.Sprintf("%s.conf", interfaceName))
 }
 
-// GetDetailedStats 获取详细的WireGuard统计信息
+// 统计数据缓存：一次 wg show 同时服务于流量接口与在线判定，
+// 避免同一时间窗内为同一个接口重复 spawn 进程。
+const statsCacheTTL = time.Second
+
+type statsCacheEntry struct {
+	stats *models.WireguardServerStats
+	at    time.Time
+}
+
+var (
+	statsCacheMu sync.Mutex
+	statsCache   = map[string]statsCacheEntry{}
+)
+
+// GetDetailedStats 获取详细的WireGuard统计信息（带 1 秒缓存）。
+// 注意：返回的是副本，调用方可以安全地改写字段（例如补充设备备注）。
 func (s *WireguardService) GetDetailedStats(nsName, interfaceName string) (*models.WireguardServerStats, error) {
+	key := nsName + "/" + interfaceName
+
+	statsCacheMu.Lock()
+	if entry, ok := statsCache[key]; ok && time.Since(entry.at) < statsCacheTTL {
+		statsCacheMu.Unlock()
+		return cloneStats(entry.stats), nil
+	}
+	statsCacheMu.Unlock()
+
 	cmd := exec.Command("ip", "netns", "exec", nsName, "wg", "show", interfaceName, "dump")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get wireguard stats: %v, output: %s", err, string(output))
 	}
 
-	return s.parseWireguardDump(string(output), interfaceName)
+	stats, err := s.parseWireguardDump(string(output), interfaceName)
+	if err != nil {
+		return nil, err
+	}
+
+	statsCacheMu.Lock()
+	// 顺手清理长期未访问的条目，避免接口删除后缓存残留
+	for cacheKey, entry := range statsCache {
+		if time.Since(entry.at) > 8*statsCacheTTL {
+			delete(statsCache, cacheKey)
+		}
+	}
+	statsCache[key] = statsCacheEntry{stats: stats, at: time.Now()}
+	statsCacheMu.Unlock()
+
+	return cloneStats(stats), nil
+}
+
+// InvalidateStatsCache 让指定接口的缓存立即失效（设备增删后调用）。
+func InvalidateStatsCache(nsName, interfaceName string) {
+	statsCacheMu.Lock()
+	delete(statsCache, nsName+"/"+interfaceName)
+	statsCacheMu.Unlock()
+}
+
+func cloneStats(stats *models.WireguardServerStats) *models.WireguardServerStats {
+	if stats == nil {
+		return nil
+	}
+	out := *stats
+	out.Peers = make([]models.WireguardPeerStats, len(stats.Peers))
+	copy(out.Peers, stats.Peers)
+	return &out
 }
 
 // parseWireguardDump 解析 wg show dump 输出

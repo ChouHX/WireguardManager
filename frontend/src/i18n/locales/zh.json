@@ -267,13 +267,7 @@
     "detecting": "检测中",
     "onlineDevices": "在线设备",
     "onlineHint": "{online} / {total} 台在线",
-    "latency": "延迟",
-    "livenessHint": "服务端每秒探测一次，离线需连续两次超时才会判定。",
-    "livenessDetail": "在线判定：{reason}",
-    "reasonRefused": "已收到对端内核响应",
-    "reasonHandshake": "TCP 握手成功",
-    "reasonTimeout": "探测超时",
-    "reasonUnreachable": "主机不可达"
+    "livenessHint": "依据 WireGuard 握手状态判定：握手时间在 {seconds} 秒内视为在线。"
   },
   "monitoring": {
     "title": "系统监控",

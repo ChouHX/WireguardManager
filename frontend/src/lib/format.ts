@@ -98,3 +98,11 @@ export function messageOf(error: unknown, fallback: string): string {
   }
   return fallback;
 }
+
+/** 时长（秒）的紧凑展示：45s / 3m / 2h */
+export function formatAgeSeconds(seconds: number): string {
+  if (seconds < 0) return '-';
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  return `${Math.floor(seconds / 3600)}h`;
+}

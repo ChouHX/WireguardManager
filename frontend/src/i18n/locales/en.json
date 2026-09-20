@@ -267,13 +267,7 @@
     "detecting": "Detecting",
     "onlineDevices": "Online devices",
     "onlineHint": "{online} / {total} online",
-    "latency": "Latency",
-    "livenessHint": "Probed once per second; two consecutive timeouts are required to mark offline.",
-    "livenessDetail": "Liveness signal: {reason}",
-    "reasonRefused": "peer kernel responded",
-    "reasonHandshake": "TCP handshake completed",
-    "reasonTimeout": "probe timed out",
-    "reasonUnreachable": "host unreachable"
+    "livenessHint": "Liveness is derived from WireGuard handshakes: a handshake within {seconds}s counts as online."
   },
   "monitoring": {
     "title": "System Monitoring",

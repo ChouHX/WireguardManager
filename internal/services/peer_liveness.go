@@ -2,14 +2,8 @@ package services
 
 import (
 	"context"
-	"errors"
 	"log"
-	"net"
-	"os"
-	"strconv"
-	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"cloud-platform/internal/config"
@@ -22,263 +16,192 @@ import (
 type LivenessState string
 
 const (
-	// LivenessUnknown 尚无结论（首次探测未达阈值，或探测功能刚启动）
+	// LivenessUnknown 尚无结论（刚启动，或判定次数未达阈值）
 	LivenessUnknown LivenessState = "unknown"
 	LivenessOnline  LivenessState = "online"
 	LivenessOffline LivenessState = "offline"
 )
 
-// LivenessResult 单个设备的探测结论快照
+// LivenessResult 单个设备的在线判定结论
 type LivenessResult struct {
-	// Target 实际探测的地址（peer 隧道地址:端口）
-	Target string        `json:"target"`
-	State  LivenessState `json:"state"`
-	// LatencyMS 最近一次成功探测的往返耗时
-	LatencyMS int64 `json:"latency_ms"`
-	// Reason 最近一次探测的判定依据：refused / handshake / timeout / unreachable / error
-	Reason       string     `json:"reason,omitempty"`
-	LastProbeAt  time.Time  `json:"last_probe_at"`
-	LastOnlineAt *time.Time `json:"last_online_at,omitempty"`
-	// Failures 当前连续失败次数
-	Failures int `json:"failures"`
-	// Probes 累计探测次数
-	Probes int64 `json:"probes"`
+	State LivenessState `json:"state"`
+	// LastHandshakeAt 最近一次握手时间，直接取自 WireGuard 自身状态
+	LastHandshakeAt *time.Time `json:"last_handshake_at,omitempty"`
+	// HandshakeAgeSeconds 距最近一次握手的秒数；从未握手为 -1
+	HandshakeAgeSeconds int64      `json:"handshake_age_seconds"`
+	LastOnlineAt        *time.Time `json:"last_online_at,omitempty"`
+	CheckedAt           time.Time  `json:"checked_at"`
+	// Failures 当前连续判定为「握手过期」的次数
+	Failures int   `json:"failures"`
+	Checks   int64 `json:"checks"`
 }
 
-// ProbeOutcome 单次 TCP 探测的结论
-type ProbeOutcome struct {
-	Alive   bool
-	Latency time.Duration
-	Reason  string
-}
-
-// ProbeTCP 向 target 发起一次 TCP 连接探测。
+// LivenessMonitor 周期性读取各账号的 WireGuard 握手状态，判定设备是否在线。
 //
-// 判定依据（与内核协议栈行为一致，无需对端安装任何 Agent）：
-//   - 握手成功             → 对端存活；
-//   - connection refused   → 对端内核回送 RST，同样证明对端存活；
-//   - 超时 / 主机不可达     → 本次判为未响应。
-func ProbeTCP(ctx context.Context, target string, timeout time.Duration) ProbeOutcome {
-	start := time.Now()
-
-	dialer := net.Dialer{Timeout: timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", target)
-	latency := time.Since(start)
-
-	if err == nil {
-		_ = conn.Close()
-		return ProbeOutcome{Alive: true, Latency: latency, Reason: "handshake"}
-	}
-
-	// 连接被拒绝：数据已到达对端内核且内核正常回包
-	if errors.Is(err, syscall.ECONNREFUSED) {
-		return ProbeOutcome{Alive: true, Latency: latency, Reason: "refused"}
-	}
-
-	if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
-		return ProbeOutcome{Alive: false, Latency: latency, Reason: "timeout"}
-	}
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		return ProbeOutcome{Alive: false, Latency: latency, Reason: "timeout"}
-	}
-
-	if errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH) {
-		return ProbeOutcome{Alive: false, Latency: latency, Reason: "unreachable"}
-	}
-
-	return ProbeOutcome{Alive: false, Latency: latency, Reason: "error"}
-}
-
-// LivenessMonitor 周期性地对所有 peer 的隧道地址做存活探测。
+// 判据说明：peer 的 last handshake 由 WireGuard 自身维护，只要隧道活跃就会
+// 持续更新（默认约 120 秒重协商，配合 keepalive 更频繁）。相比主动发包探测，
+// 它不受客户端防火墙影响，也不依赖后端进程能路由到隧道网段。
 type LivenessMonitor struct {
 	db *gorm.DB
+	wg *WireguardService
 
-	interval       time.Duration
-	timeout        time.Duration
-	offlineAfter   int
-	probePort      int
-	maxConcurrency int
-
-	// refreshInterval 刷新 peer 列表的周期，远低于探测频率，避免频繁查库
-	refreshInterval time.Duration
+	interval         time.Duration
+	handshakeTimeout time.Duration
+	offlineAfter     int
 
 	mu      sync.RWMutex
-	targets map[string]string // peer 公钥 -> "隧道地址:探测端口"
 	results map[string]*LivenessResult
 
 	ctx    context.Context
 	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	done   sync.WaitGroup
 }
 
-// NewLivenessMonitor 创建探测监控器。
+// NewLivenessMonitor 创建在线判定监控器。
 func NewLivenessMonitor(db *gorm.DB, cfg config.LivenessConfig) *LivenessMonitor {
-	refresh := 5 * time.Second
-	if cfg.Interval()*5 > refresh {
-		refresh = cfg.Interval() * 5
-	}
-
 	return &LivenessMonitor{
-		db:              db,
-		interval:        cfg.Interval(),
-		timeout:         cfg.Timeout(),
-		offlineAfter:    cfg.OfflineThreshold,
-		probePort:       cfg.ProbePort,
-		maxConcurrency:  cfg.MaxConcurrency,
-		refreshInterval: refresh,
-		targets:         make(map[string]string),
-		results:         make(map[string]*LivenessResult),
+		db:               db,
+		wg:               NewWireguardService(config.AppConfig.Network.ConfigDir),
+		interval:         cfg.Interval(),
+		handshakeTimeout: cfg.HandshakeTimeout(),
+		offlineAfter:     cfg.OfflineThreshold,
+		results:          make(map[string]*LivenessResult),
 	}
 }
 
-// Start 启动探测循环（每秒探测、每 refreshInterval 刷新一次设备列表）。
+// Start 启动判定循环。
 func (m *LivenessMonitor) Start(parent context.Context) {
 	m.ctx, m.cancel = context.WithCancel(parent)
 
-	m.refreshTargets()
-
-	m.wg.Add(1)
+	m.done.Add(1)
 	go func() {
-		defer m.wg.Done()
+		defer m.done.Done()
 
-		probeTicker := time.NewTicker(m.interval)
-		refreshTicker := time.NewTicker(m.refreshInterval)
-		defer probeTicker.Stop()
-		defer refreshTicker.Stop()
+		ticker := time.NewTicker(m.interval)
+		defer ticker.Stop()
 
-		m.probeAll()
+		m.checkAll()
 
 		for {
 			select {
-			case <-probeTicker.C:
-				m.probeAll()
-			case <-refreshTicker.C:
-				m.refreshTargets()
+			case <-ticker.C:
+				m.checkAll()
 			case <-m.ctx.Done():
 				return
 			}
 		}
 	}()
 
-	log.Printf("Liveness monitor started: interval=%v timeout=%v offline_after=%d port=%d",
-		m.interval, m.timeout, m.offlineAfter, m.probePort)
+	log.Printf("Liveness monitor started: interval=%v handshake_timeout=%v offline_after=%d",
+		m.interval, m.handshakeTimeout, m.offlineAfter)
 }
 
-// Stop 停止探测循环。
+// Stop 停止判定循环。
 func (m *LivenessMonitor) Stop() {
 	if m.cancel != nil {
 		m.cancel()
 	}
-	m.wg.Wait()
+	m.done.Wait()
 }
 
-// ProbeEnabled 探测是否处于运行状态。
+// ProbeEnabled 判定功能是否处于运行状态。
 func (m *LivenessMonitor) ProbeEnabled() bool {
 	return m.ctx != nil
 }
 
-// refreshTargets 从数据库刷新待探测的设备列表（key 为 peer 公钥）。
-func (m *LivenessMonitor) refreshTargets() {
-	var peers []models.WireguardPeer
-	if err := m.db.Select("public_key", "peer_address").Find(&peers).Error; err != nil {
-		log.Printf("liveness: failed to refresh peer list: %v", err)
+// checkAll 遍历所有账号，读取握手状态并更新判定结果。
+func (m *LivenessMonitor) checkAll() {
+	var servers []models.WireguardServer
+	if err := m.db.Find(&servers).Error; err != nil {
+		log.Printf("liveness: failed to list wireguard servers: %v", err)
 		return
 	}
 
-	targets := make(map[string]string, len(peers))
-	for _, peer := range peers {
-		address := strings.TrimSpace(peer.PeerAddress)
-		if address == "" {
+	now := time.Now()
+
+	for _, server := range servers {
+		var peers []models.WireguardPeer
+		if err := m.db.Select("public_key").
+			Where("server_id = ?", server.ID).Find(&peers).Error; err != nil {
+			log.Printf("liveness: failed to list peers of server %d: %v", server.ID, err)
 			continue
 		}
-		targets[peer.PublicKey] = net.JoinHostPort(address, strconv.Itoa(m.probePort))
-	}
+		if len(peers) == 0 {
+			continue
+		}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+		handshakes := make(map[string]time.Time, len(peers))
+		statsOK := false
 
-	m.targets = targets
-	// 清理已删除设备的残留结果
-	for key := range m.results {
-		if _, ok := targets[key]; !ok {
-			delete(m.results, key)
+		stats, err := m.wg.GetDetailedStats(server.Namespace, server.WgInterface)
+		if err != nil {
+			// 接口不可用（账号被禁用、网络未就绪）：本轮不出结论，保留上一状态
+			log.Printf("liveness: stats unavailable for %s/%s: %v", server.Namespace, server.WgInterface, err)
+		} else {
+			statsOK = true
+			for _, peerStats := range stats.Peers {
+				handshakes[peerStats.PublicKey] = peerStats.LatestHandshake
+			}
+		}
+
+		for _, peer := range peers {
+			m.evaluate(peer.PublicKey, handshakes[peer.PublicKey], statsOK, now)
 		}
 	}
 }
 
-// probeAll 对当前目标集合发起一轮并发探测。
-func (m *LivenessMonitor) probeAll() {
-	m.mu.RLock()
-	targets := make(map[string]string, len(m.targets))
-	for key, target := range m.targets {
-		targets[key] = target
-	}
-	m.mu.RUnlock()
-
-	if len(targets) == 0 {
-		return
-	}
-
-	sem := make(chan struct{}, m.maxConcurrency)
-	var wg sync.WaitGroup
-
-	for key, target := range targets {
-		wg.Add(1)
-		go func(key, target string) {
-			defer wg.Done()
-
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			ctx := m.ctx
-			if ctx == nil {
-				ctx = context.Background()
-			}
-			m.apply(key, target, ProbeTCP(ctx, target, m.timeout))
-		}(key, target)
-	}
-
-	wg.Wait()
-}
-
-// apply 将单次探测结果并入状态机。
+// evaluate 依据握手时间更新单个设备的状态。
 //
-// 防抖规则：
-//   - 上线：任意一次成功（RST 或握手）立即置为在线，毫秒级响应；
-//   - 离线：必须连续失败达到阈值才置为离线，规避公网单次丢包造成的误报。
-func (m *LivenessMonitor) apply(key, target string, outcome ProbeOutcome) {
+// 上线：握手时间在阈值内，立即置为在线（秒级）。
+// 离线：从未握手直接判离线；握手过期则需连续多次确认，规避临界抖动。
+func (m *LivenessMonitor) evaluate(key string, handshake time.Time, statsOK bool, now time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	result, ok := m.results[key]
 	if !ok {
-		result = &LivenessResult{Target: target, State: LivenessUnknown}
+		result = &LivenessResult{State: LivenessUnknown}
 		m.results[key] = result
 	}
 
-	now := time.Now()
-	result.Target = target
-	result.LastProbeAt = now
-	result.Probes++
-	result.Reason = outcome.Reason
+	result.CheckedAt = now
+	result.Checks++
 
-	if outcome.Alive {
+	if handshake.IsZero() {
+		result.LastHandshakeAt = nil
+		result.HandshakeAgeSeconds = -1
+	} else {
+		handshakeTime := handshake
+		result.LastHandshakeAt = &handshakeTime
+		result.HandshakeAgeSeconds = int64(now.Sub(handshake).Seconds())
+	}
+
+	// 接口读取失败时不改变既有结论，避免账号禁用期间状态跳变
+	if !statsOK {
+		return
+	}
+
+	if !handshake.IsZero() && now.Sub(handshake) <= m.handshakeTimeout {
 		result.State = LivenessOnline
-		result.LatencyMS = outcome.Latency.Milliseconds()
 		result.Failures = 0
 		result.LastOnlineAt = &now
 		return
 	}
 
+	// 从未握手：设备从未接入，直接判离线
+	if handshake.IsZero() {
+		result.State = LivenessOffline
+		result.Failures++
+		return
+	}
+
 	result.Failures++
-	// 未达阈值时保持既有状态（unknown 或 online），避免抖动
 	if result.Failures >= m.offlineAfter {
 		result.State = LivenessOffline
 	}
 }
 
-// Snapshot 返回全部设备的探测结果副本。
+// Snapshot 返回全部设备的判定结果副本。
 func (m *LivenessMonitor) Snapshot() map[string]LivenessResult {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -290,7 +213,7 @@ func (m *LivenessMonitor) Snapshot() map[string]LivenessResult {
 	return out
 }
 
-// Result 返回指定设备的探测结果。
+// Result 返回指定设备的判定结果。
 func (m *LivenessMonitor) Result(key string) (LivenessResult, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
