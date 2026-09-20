@@ -36,7 +36,7 @@
 - **流量与资源监控** —— 设备握手状态、收发流量、系统 CPU / 内存 / 磁盘 / 网络趋势一屏掌握。
 - **精细管控** —— 设备粒度限速、启用禁用、网关转发模式、AllowedIPs 网段自定义。
 - **现代控制台** —— React 19 + Mantine，紧凑式布局、明暗主题、中英文双语、移动端自适应。
-- **轻量部署** —— 嵌入式 SQLite（纯 Go 驱动，无需 CGO、无需独立数据库服务），镜像由 CI 构建并推送 GHCR。
+- **轻量部署** —— 嵌入式 SQLite（纯 Go 驱动，无需 CGO、无需独立数据库服务）；支持单容器部署，一个进程同时提供控制台与 API。镜像由 CI 构建并推送 GHCR。
 
 ## 架构
 
@@ -102,19 +102,26 @@ cp config.yaml.example config.yaml
 #   jwt.secret        换成随机长字符串
 #   network.server_ip 服务器公网 IP
 #   network.out_interface 网卡名（可用 ip route show default 查看）
-
-./deploy.sh          # 拉取 GHCR 预构建镜像并启动（默认）
 ```
 
-需要在本机从源码构建（改过代码，或访问不了 GHCR）：
+部署方式二选一：
+
+**单容器（推荐）** —— 后端直接托管前端产物，只有一个进程、一个端口，没有 Nginx 反代、没有跨容器网络：
 
 ```bash
-./deploy.sh --build
-# 等价于
-docker compose -f docker-compose.build.yml up -d --build
+docker compose -f docker-compose.allinone.yml up -d
+# 本地源码构建加 --build；使用 ./deploy.sh 则走双容器方案
 ```
 
-访问 `http://<SERVER_IP>:3000`，默认账号 `admin@platform.com` / `password`（**首次登录后请立即修改**）。
+**双容器** —— 前端由独立 Nginx 容器托管，可以单独更新前端而不动后端：
+
+```bash
+docker compose up -d
+# 或使用带环境检查与部署自检的脚本
+./deploy.sh
+```
+
+两种方式访问地址一致：`http://<SERVER_IP>:3000`，默认账号 `admin@platform.com` / `password`（**首次登录后请立即修改**）。
 
 镜像标签可用 `WM_IMAGE_TAG` 指定，默认 `latest`，也可用 `sha-<短哈希>` 回滚到某次构建：
 
@@ -225,8 +232,11 @@ network:
 │   ├── routes/                 # 路由注册
 │   └── services/               # netns / WireGuard / 监控采样 / 存活探测
 ├── frontend/                   # React + Vite + MantineUI 源码
-├── docker-compose.yml          # 默认：使用 GHCR 预构建镜像
-├── docker-compose.build.yml    # 本地构建编排
+├── internal/routes/frontend.go # 单容器模式下由后端托管前端产物
+├── docker-compose.allinone.yml # 单容器（后端同时提供控制台与 API）
+├── docker-compose.yml          # 双容器：使用 GHCR 预构建镜像
+├── docker-compose.build.yml    # 双容器：本地构建编排
+├── Dockerfile.allinone         # 单容器镜像定义
 ├── wg_config/                  # 挂载至 /etc/wg_config
 └── data/                       # SQLite 数据目录（容器内 /root/data）
 ```
