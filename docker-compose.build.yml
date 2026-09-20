@@ -1,16 +1,17 @@
-# 默认编排：直接使用 GitHub Actions 构建并推送到 GHCR 的镜像，无需本地编译。
+# 本地构建编排：在服务器/开发机上从源码编译前后端镜像，不依赖 GHCR。
 #
-#   docker compose pull && docker compose up -d
-#
-# 镜像标签可用 WM_IMAGE_TAG 覆盖（默认 latest，也可指定 sha-<短哈希> 回滚到某次构建）：
-#   WM_IMAGE_TAG=sha-897b014 docker compose up -d
-#
-# 需要本地从源码构建时，改用 docker-compose.build.yml：
 #   docker compose -f docker-compose.build.yml up -d --build
+#
+# 需要发布到自己的 registry 时，把下面的 image 改成目标地址再 --push。
+# 使用预构建镜像请回到默认文件：docker compose up -d
 services:
   # Backend Service (Go + embedded SQLite)
   backend:
-    image: ghcr.io/chouhx/wireguardmanager-backend:${WM_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    # 本地构建产物打独立标签，避免与 GHCR 镜像混淆
+    image: wireguardmanager-backend:local
     container_name: cloud-backend
     restart: unless-stopped
     # 需要管理 netns / iptables，必须使用宿主网络与特权
@@ -31,7 +32,13 @@ services:
 
   # Frontend Service (React 19 + Vite + MantineUI, served by Nginx)
   frontend:
-    image: ghcr.io/chouhx/wireguardmanager-frontend:${WM_IMAGE_TAG:-latest}
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # 国内构建走镜像源；海外环境改为 https://registry.npmjs.org
+        - NPM_REGISTRY=${NPM_REGISTRY:-https://registry.npmmirror.com}
+    image: wireguardmanager-frontend:local
     container_name: cloud-frontend
     restart: unless-stopped
     ports:

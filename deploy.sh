@@ -1,10 +1,33 @@
 #!/bin/bash
 
+# WireGuard Manager 部署脚本
+#
+#   ./deploy.sh           从 GHCR 拉取预构建镜像并启动（默认，无需本地编译）
+#   ./deploy.sh --build   使用 docker-compose.build.yml 从源码构建后启动
+#
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
+
+# 解析部署模式
+BUILD_LOCAL=false
+for arg in "$@"; do
+    case "$arg" in
+        --build|-b) BUILD_LOCAL=true ;;
+        --help|-h)
+            echo "用法: ./deploy.sh [--build]"
+            echo "  默认     从 GHCR 拉取预构建镜像并启动"
+            echo "  --build  本地从源码构建镜像后启动"
+            exit 0
+            ;;
+        *)
+            echo "未知参数: $arg（可用: --build）"
+            exit 1
+            ;;
+    esac
+done
 
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}  WireGuard Manager Docker 部署脚本${NC}"
@@ -116,36 +139,53 @@ echo -e "${GREEN}✓ 已创建 /var/run/netns 目录${NC}"
 mkdir -p data
 echo -e "${GREEN}✓ 已创建 data 目录（存放 SQLite 数据库文件）${NC}"
 
-# 构建并启动服务
-echo -e "${YELLOW}[7/7] 构建并启动服务...${NC}"
-echo "这可能需要几分钟时间，请耐心等待..."
-echo ""
-
-if docker compose build; then
-    echo -e "${GREEN}✓ 镜像构建成功${NC}"
+# 获取并启动服务
+if [ "$BUILD_LOCAL" = true ]; then
+    echo -e "${YELLOW}[7/7] 本地构建镜像并启动服务...${NC}"
+    echo "使用 docker-compose.build.yml，源码编译可能需要几分钟..."
     echo ""
-    
-    if docker compose up -d; then
-        echo -e "${GREEN}✓ 服务启动成功${NC}"
-        echo ""
-        echo -e "${GREEN}========================================${NC}"
-        echo -e "${GREEN}  部署完成！${NC}"
-        echo -e "${GREEN}========================================${NC}"
-        echo ""
-        echo "访问地址: http://$(hostname -I | awk '{print $1}'):3000/"
-        echo "默认账号: admin@platform.com"
-        echo "默认密码: password"
-        echo ""
-        echo "查看日志: docker compose logs -f"
-        echo "停止服务: docker compose down"
-        echo ""
-    else
-        echo -e "${RED}错误: 服务启动失败${NC}"
-        echo "查看日志: docker compose logs"
+
+    if ! docker compose -f docker-compose.build.yml build; then
+        echo -e "${RED}错误: 镜像构建失败${NC}"
+        echo "请检查网络连接和 Docker 配置"
         exit 1
     fi
+    echo -e "${GREEN}✓ 镜像构建成功${NC}"
+    echo ""
+
+    UP_CMD="docker compose -f docker-compose.build.yml up -d"
 else
-    echo -e "${RED}错误: 镜像构建失败${NC}"
-    echo "请检查网络连接和 Docker 配置"
+    echo -e "${YELLOW}[7/7] 拉取 GHCR 镜像并启动服务...${NC}"
+    echo "使用默认 docker-compose.yml（预构建镜像）..."
+    echo ""
+
+    if ! docker compose pull; then
+        echo -e "${RED}错误: 镜像拉取失败${NC}"
+        echo "请检查网络连接；如需本地编译请执行: ./deploy.sh --build"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ 镜像拉取完成${NC}"
+    echo ""
+
+    UP_CMD="docker compose up -d"
+fi
+
+if $UP_CMD; then
+    echo -e "${GREEN}✓ 服务启动成功${NC}"
+    echo ""
+    echo -e "${GREEN}========================================${NC}"
+    echo -e "${GREEN}  部署完成！${NC}"
+    echo -e "${GREEN}========================================${NC}"
+    echo ""
+    echo "访问地址: http://$(hostname -I | awk '{print $1}'):3000/"
+    echo "默认账号: admin@platform.com"
+    echo "默认密码: password"
+    echo ""
+    echo "查看日志: docker compose logs -f"
+    echo "停止服务: docker compose down"
+    echo ""
+else
+    echo -e "${RED}错误: 服务启动失败${NC}"
+    echo "查看日志: docker compose logs"
     exit 1
 fi

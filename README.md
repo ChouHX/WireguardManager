@@ -25,6 +25,8 @@
 
 ## 快速部署
 
+镜像由 GitHub Actions 构建并推送到 GHCR，默认无需在服务器上编译：
+
 ```bash
 git clone https://github.com/ChouHX/WireguardManager.git
 cd WireguardManager
@@ -33,13 +35,38 @@ cp .env.example .env
 cp config.yaml.example config.yaml
 # 修改 config.yaml，填写 server_ip、out_interface 等
 
-./deploy.sh     # 推荐
+./deploy.sh          # 拉取 GHCR 预构建镜像并启动（默认）
 # 或手动执行:
-docker compose build
+docker compose pull
 docker compose up -d
 ```
 
+需要在本机从源码构建（改过代码、或网络访问不了 GHCR）：
+
+```bash
+./deploy.sh --build
+# 或手动执行:
+docker compose -f docker-compose.build.yml up -d --build
+```
+
+镜像标签可用 `WM_IMAGE_TAG` 指定（默认 `latest`，也可用 `sha-<短哈希>` 回滚到某次构建）：
+
+```bash
+WM_IMAGE_TAG=sha-897b014 docker compose up -d
+```
+
 访问 `http://<SERVER_IP>:3000`，默认账号 `admin@platform.com` / `password`。
+
+## 客户端配置
+
+下载的 WireGuard 配置里，`AllowedIPs` 默认按 peer 所在网段下发，只把 VPN 网段流量送进隧道：服务端接口为 `10.100.0.1/24`、分配给某设备的地址是 `10.100.0.2` 时，下发 `10.100.0.0/24`。需要全局代理（所有流量走 VPN）时，在 `config.yaml` 中显式配置：
+
+```yaml
+network:
+  client_allowed_ips: "0.0.0.0/0, ::/0"
+```
+
+该值支持逗号分隔的多个网段，启动时会校验格式，非法 CIDR 会直接拒绝启动。
 
 ## 本地开发
 
@@ -60,6 +87,8 @@ sudo ./scripts/cleanup_all.sh
 ## 目录说明
 
 - `config.yaml`：后端配置（数据库、JWT、网络、监控、默认管理员）。
+- `docker-compose.yml`：默认编排，使用 GHCR 上的预构建镜像。
+- `docker-compose.build.yml`：本地构建编排，从源码编译前后端镜像。
 - `frontend/`：React + Vite + MantineUI 前端源码。
 - `internal/`：Go 后端（config / database / handlers / middleware / models / routes / services）。
 - `wg_config/`：挂载至 `/etc/wg_config`，存放各用户的 WireGuard 配置。
