@@ -1,20 +1,22 @@
 import { createTheme, rem, type MantineColorsTuple } from '@mantine/core';
 
 /**
- * 品牌色：WireGuard 标识的氧化红，用于主操作与强调。
- * 10 阶色板（Mantine 约定 light 模式取 6，dark 模式取 8）。
+ * 品牌色：以 WireGuard 标识的红色为基调，向"中国红"靠拢——
+ * 提高饱和度、收敛橙色成分，主色（shade 6）为 #dc2318（朱红/正红），
+ * 与官方 logo 的 #88171a 同色系但更鲜明。
+ * 10 阶色板（Mantine 约定 light 取 6、dark 取 6：两者都保证白字对比度 ≥4.5:1）。
  */
 const wgRed: MantineColorsTuple = [
-  '#fff5f4',
-  '#ffe6e3',
-  '#fcc9c4',
-  '#f5a79f',
-  '#ee887e',
-  '#e97065',
-  '#e45f52',
-  '#c94b3f',
-  '#b44035',
-  '#9a3529',
+  '#fff1f0',
+  '#ffe0dd',
+  '#ffc7c2',
+  '#ff9d95',
+  '#fa6c61',
+  '#ef4536',
+  '#dc2318', // 主色：中国红
+  '#c01d13',
+  '#a31910',
+  '#84140c',
 ];
 
 /** 辅助色：控制台里的数据高亮用青绿，和品牌红形成冷暧对比 */
@@ -33,7 +35,8 @@ const wgTeal: MantineColorsTuple = [
 
 export const theme = createTheme({
   primaryColor: 'wg',
-  primaryShade: { light: 6, dark: 8 },
+  // 深色模式同样取 6：shade 5 的白字对比度会掉到 4.0 以下
+  primaryShade: { light: 6, dark: 6 },
   colors: { wg: wgRed, teal: wgTeal },
 
   fontFamily:
@@ -84,7 +87,7 @@ export const theme = createTheme({
     navBorder: '#262b34',
     navText: '#a9b1bd',
     navTextActive: '#ffffff',
-    navActiveBg: 'rgba(228, 95, 82, 0.16)',
+    navActiveBg: 'rgba(220, 35, 24, 0.18)',
   },
 
   components: {

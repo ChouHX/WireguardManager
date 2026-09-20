@@ -7,15 +7,15 @@
   --wm-header-height: 52px;
   --wm-nav-width: 226px;
   --wm-nav-width-collapsed: 64px;
-  /* WireGuard 官方 logo 主色（浅色主题用官方红） */
+  /* WireGuard 官方 logo 主色（浅色主题用官方红，与主题的中国红同色系） */
   --wm-logo-color: #88171a;
 }
 
 [data-mantine-color-scheme='dark'] {
   --wm-grid-line: rgba(255, 255, 255, 0.04);
   --wm-surface-raised: rgba(28, 31, 38, 0.78);
-  /* 深色背景下换用亮度更高的品牌红，保证 logo 可辨识 */
-  --wm-logo-color: #f08a80;
+  /* 深色背景下换用色板 shade 4，保证 logo 可辨识 */
+  --wm-logo-color: #fa6c61;
 }
 
 html,
@@ -31,7 +31,7 @@ body {
   background-image:
     linear-gradient(var(--wm-grid-line) 1px, transparent 1px),
     linear-gradient(90deg, var(--wm-grid-line) 1px, transparent 1px),
-    radial-gradient(1200px 420px at 82% -8%, rgba(228, 95, 82, 0.09), transparent 62%);
+    radial-gradient(1200px 420px at 82% -8%, rgba(220, 35, 24, 0.09), transparent 62%);
   background-size:
     var(--wm-grid-size) var(--wm-grid-size),
     var(--wm-grid-size) var(--wm-grid-size),
@@ -129,7 +129,7 @@ body {
 }
 
 .wm-nav-link[data-active='true'] {
-  background-color: rgba(228, 95, 82, 0.16);
+  background-color: rgba(220, 35, 24, 0.18);
   color: #ffffff;
   box-shadow: inset 2px 0 0 var(--mantine-color-wg-6);
 }
@@ -189,7 +189,7 @@ body {
   position: relative;
   overflow: hidden;
   background:
-    radial-gradient(900px 520px at 12% 8%, rgba(228, 95, 82, 0.34), transparent 60%),
+    radial-gradient(900px 520px at 12% 8%, rgba(220, 35, 24, 0.36), transparent 60%),
     linear-gradient(155deg, #1b1d23 0%, #101216 60%, #0c0d10 100%);
 }
 
