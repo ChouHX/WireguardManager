@@ -3,6 +3,7 @@ import type { ApiResponse } from '@/types/auth';
 import type {
   AddPeerRequest,
   AdminUserTraffic,
+  NetworkInterfacesResponse,
   UpdatePeerRequest,
   UserTrafficStats,
   UserTrafficSummary,
@@ -20,6 +21,12 @@ export const wireguardService = {
 
   async getMyPeers(): Promise<ApiResponse<WireguardPeer[]>> {
     const res = await api.get<ApiResponse<WireguardPeer[]>>('/api/wireguard/peers');
+    return res.data;
+  },
+
+  /** 可作为转发出口的网络接口列表（含探测到的默认出口） */
+  async getInterfaces(): Promise<ApiResponse<NetworkInterfacesResponse>> {
+    const res = await api.get<ApiResponse<NetworkInterfacesResponse>>('/api/wireguard/interfaces');
     return res.data;
   },
 

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -768,6 +769,79 @@ func restorePeerRoutes(netnsService *services.NetnsService, namespace, wgInterfa
 	}
 }
 
+// GetNetworkInterfaces 返回可作为转发出口的网络接口列表。
+// 默认值优先取系统默认路由的出口接口，探测不到时回退到配置的 network.out_interface。
+func GetNetworkInterfaces(c *gin.Context) {
+	if _, ok := currentUser(c); !ok {
+		response.Unauthorized(c, "User not found in context")
+		return
+	}
+
+	interfaces, detected := services.DetectNetworkInterfaces()
+
+	defaultIface := detected
+	if defaultIface == "" {
+		defaultIface = strings.TrimSpace(config.AppConfig.Network.OutInterface)
+	}
+
+	response.Success(c, "Network interfaces retrieved successfully", gin.H{
+		"default":    defaultIface,
+		"detected":   detected != "",
+		"interfaces": interfaces,
+	})
+}
+
+// clientAllowedIPs 计算下发给客户端的 AllowedIPs（客户端把哪些流量送进隧道）。
+//
+// 取值优先级：
+//  1. network.client_allowed_ips 显式配置（需要全局代理时写 "0.0.0.0/0, ::/0"）；
+//  2. 按 peer 所在网段推导：以 peer 地址配合服务端接口掩码求网络地址，
+//     例如服务端 10.100.0.1/24、该 peer 分配到 10.100.0.2 → 10.100.0.0/24；
+//  3. 推导失败时回退为 peer 自身地址（/32 或 /128），始终避免下发全流量。
+func clientAllowedIPs(serverAddress, peerAddress string) string {
+	if configured := strings.TrimSpace(config.AppConfig.Network.ClientAllowedIPs); configured != "" {
+		return configured
+	}
+
+	if derived, ok := deriveNetworkCIDR(serverAddress, peerAddress); ok {
+		return derived
+	}
+
+	if peer, err := netip.ParseAddr(strings.TrimSpace(peerAddress)); err == nil {
+		peer = peer.Unmap()
+		if peer.Is4() {
+			return netip.PrefixFrom(peer, 32).String()
+		}
+		return netip.PrefixFrom(peer, 128).String()
+	}
+
+	return ""
+}
+
+// deriveNetworkCIDR 推导 peer 所属网段的 CIDR。
+// 掩码优先取服务端接口地址（如 10.100.0.1/24 → 24），仅在地址族一致时使用，
+// 否则按主机位长处理，保证 IPv6 peer 不会被套上 IPv4 掩码。
+func deriveNetworkCIDR(serverAddress, peerAddress string) (string, bool) {
+	peer, err := netip.ParseAddr(strings.TrimSpace(peerAddress))
+	if err != nil {
+		return "", false
+	}
+	peer = peer.Unmap()
+
+	bits := 32
+	if peer.Is6() {
+		bits = 128
+	}
+
+	if prefix, err := netip.ParsePrefix(strings.TrimSpace(serverAddress)); err == nil {
+		if serverIP := prefix.Addr().Unmap(); serverIP.Is4() == peer.Is4() {
+			bits = prefix.Bits()
+		}
+	}
+
+	return netip.PrefixFrom(peer, bits).Masked().String(), true
+}
+
 // GetPeerConfig 获取peer的WireGuard配置（统一接口，返回JSON格式）
 func GetPeerConfig(c *gin.Context) {
 	u, ok := currentUser(c)
@@ -815,8 +889,9 @@ func GetPeerConfig(c *gin.Context) {
 		serverEndpoint = fmt.Sprintf("%s:%d", config.AppConfig.Network.ServerIP, wgServer.WgPort)
 	}
 
-	// 默认 AllowedIPs 为所有流量（全局代理）
-	allowedIPs := "0.0.0.0/0, ::/0"
+	// 客户端 AllowedIPs：优先取 network.client_allowed_ips 配置，
+	// 未配置时按 peer 所在网段推导（不再默认放行全部流量）
+	allowedIPs := clientAllowedIPs(wgServer.WgAddress, peer.PeerAddress)
 
 	// 基础配置内容
 	configContent := fmt.Sprintf(`[Interface]

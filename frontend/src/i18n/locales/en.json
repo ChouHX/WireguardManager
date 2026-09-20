@@ -254,7 +254,12 @@
     "generateQrFailed": "Failed to generate QR code",
     "noServer": "No WireGuard network assigned to this account",
     "noServerHint": "Ask an administrator to provision the network namespace and WireGuard interface; devices and traffic will appear here afterwards.",
-    "partialData": "Some data is temporarily unavailable (no network assigned or collection failed); related sections were omitted."
+    "partialData": "Some data is temporarily unavailable (no network assigned or collection failed); related sections were omitted.",
+    "ifaceDefault": "default route",
+    "ifaceVirtual": "virtual",
+    "ifaceCustom": "custom",
+    "ifaceAutoDetected": "Detected default route interface: {name}",
+    "ifaceDetectFailed": "No default route interface detected; pick one from the list or type it manually."
   },
   "monitoring": {
     "title": "System Monitoring",

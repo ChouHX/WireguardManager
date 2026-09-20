@@ -12,6 +12,7 @@ import {
   Menu,
   Modal,
   NumberInput,
+  Select,
   SimpleGrid,
   Stack,
   Switch,
@@ -51,6 +52,8 @@ import { isValidIPOrCIDR, normalizeIPToCIDR } from '@/lib/ip-validator';
 import { wireguardService } from '@/services';
 import type {
   AddPeerRequest,
+  NetworkInterfaceInfo,
+  NetworkInterfacesResponse,
   UpdatePeerRequest,
   UserTrafficSummary,
   WireguardPeer,
@@ -84,11 +87,35 @@ function isNoServerError(err: unknown): boolean {
   return code === 'INVALID_REQUEST' && typeof message === 'string' && /wireguard server/i.test(message);
 }
 
+/** 接口下拉项的展示文案：名称 · 首个可用地址 [标记] */
+function interfaceLabel(item: NetworkInterfaceInfo, t: (key: string) => string): string {
+  const address = item.addresses.find((addr) => !addr.startsWith('fe80')) ?? item.addresses[0];
+  const tags: string[] = [];
+  if (item.is_default) tags.push(t('wireguard.ifaceDefault'));
+  if (item.is_virtual) tags.push(t('wireguard.ifaceVirtual'));
+
+  const head = address ? `${item.name} · ${address}` : item.name;
+  return tags.length > 0 ? `${head} [${tags.join(' / ')}]` : head;
+}
+
+/** 当前值不在探测结果里时补一个选项，避免下拉显示空白 */
+function withCurrentInterface(
+  options: { value: string; label: string }[],
+  current: string,
+  customLabel: string,
+): { value: string; label: string }[] {
+  const trimmed = current.trim();
+  if (!trimmed || options.some((option) => option.value === trimmed)) return options;
+  return [{ value: trimmed, label: `${trimmed} (${customLabel})` }, ...options];
+}
+
 export default function WireguardPage() {
   const { t, locale } = useTranslation();
 
   const [peers, setPeers] = useState<WireguardPeer[]>([]);
   const [traffic, setTraffic] = useState<UserTrafficSummary | null>(null);
+  /** 可作为转发出口的网络接口（含探测到的默认出口） */
+  const [interfaces, setInterfaces] = useState<NetworkInterfacesResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   /** 后端返回"该用户没有 WireGuard server"时的友好降级状态 */
@@ -127,6 +154,27 @@ export default function WireguardPage() {
     }
   }, []);
 
+  // 接口列表仅用于表单下拉，失败时静默降级为手动输入，不打断主流程
+  const loadInterfaces = useCallback(async () => {
+    try {
+      const response = await wireguardService.getInterfaces();
+      if (response.success && response.data) {
+        setInterfaces(response.data);
+      }
+    } catch {
+      setInterfaces(null);
+    }
+  }, []);
+
+  const interfaceOptions = useCallback(
+    (current: string) => {
+      const list = (interfaces?.interfaces ?? []).filter((item) => !item.is_loopback);
+      const options = list.map((item) => ({ value: item.name, label: interfaceLabel(item, t) }));
+      return withCurrentInterface(options, current, t('wireguard.ifaceCustom'));
+    },
+    [interfaces, t],
+  );
+
   const bootstrap = useCallback(async () => {
     try {
       setError(null);
@@ -147,6 +195,7 @@ export default function WireguardPage() {
 
   useEffect(() => {
     void bootstrap();
+    void loadInterfaces();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -378,22 +427,40 @@ export default function WireguardPage() {
           </Box>
           <Switch
             checked={values.enable_forwarding}
-            onChange={(event) =>
-              setValues({ ...values, enable_forwarding: event.currentTarget.checked })
-            }
+            onChange={(event) => {
+              const enabled = event.currentTarget.checked;
+              setValues({
+                ...values,
+                enable_forwarding: enabled,
+                // 首次开启且尚未填写时，用探测到的出口接口作为默认值
+                forward_interface:
+                  enabled && !values.forward_interface
+                    ? (interfaces?.default ?? values.forward_interface)
+                    : values.forward_interface,
+              });
+            }}
             color="wg"
             disabled={disabled}
           />
         </Group>
 
         {values.enable_forwarding ? (
-          <TextInput
+          <Select
             mt="md"
             label={t('wireguard.forwardInterface')}
             placeholder={t('wireguard.forwardInterfacePlaceholder')}
-            value={values.forward_interface}
-            onChange={(event) => setValues({ ...values, forward_interface: event.currentTarget.value })}
+            description={
+              interfaces?.detected
+                ? t('wireguard.ifaceAutoDetected', { name: interfaces.default })
+                : t('wireguard.ifaceDetectFailed')
+            }
+            data={interfaceOptions(values.forward_interface)}
+            value={values.forward_interface || null}
+            onChange={(value) => setValues({ ...values, forward_interface: value ?? '' })}
+            searchable
+            clearable
             disabled={disabled}
+            nothingFoundMessage={t('common.noData')}
           />
         ) : null}
       </Card>

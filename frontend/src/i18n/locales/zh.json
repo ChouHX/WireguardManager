@@ -254,7 +254,12 @@
     "generateQrFailed": "生成二维码失败",
     "noServer": "该账号尚未分配 WireGuard 网络",
     "noServerHint": "请联系管理员为账号完成网络命名空间与 WireGuard 接口配置，配置完成后本页会自动显示设备与流量。",
-    "partialData": "部分数据暂时不可用（未分配网络或采集失败），已为你省略相关内容。"
+    "partialData": "部分数据暂时不可用（未分配网络或采集失败），已为你省略相关内容。",
+    "ifaceDefault": "默认出口",
+    "ifaceVirtual": "虚拟接口",
+    "ifaceCustom": "自定义",
+    "ifaceAutoDetected": "已自动探测到出口接口：{name}",
+    "ifaceDetectFailed": "未能探测到默认出口，请从列表中选择或手动填写。"
   },
   "monitoring": {
     "title": "系统监控",

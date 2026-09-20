@@ -181,27 +181,6 @@ func (s *WireguardService) RemovePeer(nsName, interfaceName, peerPublicKey strin
 	return nil
 }
 
-// GenerateClientConfig 生成客户端配置
-func (s *WireguardService) GenerateClientConfig(serverPublicKey, serverEndpoint, clientPrivateKey, clientAddress, allowedIPs string) string {
-	return fmt.Sprintf(`[Interface]
-PrivateKey = %s
-Address = %s
-DNS = 8.8.8.8
-
-[Peer]
-PublicKey = %s
-Endpoint = %s
-AllowedIPs = %s
-PersistentKeepalive = 25
-`,
-		clientPrivateKey,
-		clientAddress,
-		serverPublicKey,
-		serverEndpoint,
-		allowedIPs,
-	)
-}
-
 // GetConfigPath 获取配置文件路径
 func (s *WireguardService) GetConfigPath(username, interfaceName string) string {
 	return filepath.Join(s.configDir, username, fmt.Sprintf("%s.conf", interfaceName))

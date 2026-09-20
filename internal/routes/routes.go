@@ -34,6 +34,9 @@ func SetupRoutes(r *gin.Engine) {
 		wg.PATCH("/peers/:id", handlers.UpdatePeer)
 		wg.DELETE("/peers/:id", handlers.DeletePeer)
 		wg.GET("/peers/:id/config", handlers.GetPeerConfig)
+
+		// 可用网络接口（用于转发出口选择，默认值为探测到的出口接口）
+		wg.GET("/interfaces", handlers.GetNetworkInterfaces)
 	}
 
 	// Admin routes

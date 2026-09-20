@@ -94,8 +94,27 @@ export interface AdminUserTraffic {
   upload_rate: number;
 }
 
-export interface AddPeerRequest {
-  allowed_ips?: string;
+// 可用网络接口（用于转发出口选择）
+export interface NetworkInterfaceInfo {
+  name: string;
+  addresses: string[];
+  is_up: boolean;
+  is_loopback: boolean;
+  /** 是否系统默认路由的出口接口 */
+  is_default: boolean;
+  /** 隧道/容器/网桥等虚拟接口，一般不建议作为转发出口 */
+  is_virtual: boolean;
+}
+
+export interface NetworkInterfacesResponse {
+  /** 探测到的默认出口接口；探测失败时回退为配置的 out_interface */
+  default: string;
+  /** 是否来自系统默认路由探测 */
+  detected: boolean;
+  interfaces: NetworkInterfaceInfo[];
+}
+
+export interface AddPeerRequest {  allowed_ips?: string;
   persistent_keepalive?: number;
   comment?: string;
   enable_forwarding?: boolean;

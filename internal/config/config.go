@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -64,6 +65,11 @@ type NetworkConfig struct {
 	OutInterface string `yaml:"out_interface"` // 外网接口名称
 	ServerIP     string `yaml:"server_ip"`     // 服务器公网IP地址
 	DNS          string `yaml:"dns"`           // 客户端配置下发的 DNS，如 "1.1.1.1, 8.8.8.8"
+
+	// ClientAllowedIPs 下发给客户端配置的 AllowedIPs，即客户端把哪些流量送进隧道。
+	// 留空表示按 peer 所在网段自动推导：例如服务端接口 10.100.0.1/24、分配到该 peer 的
+	// 地址为 10.100.0.2，则下发 10.100.0.0/24。需要全局代理时显式写 "0.0.0.0/0, ::/0"。
+	ClientAllowedIPs string `yaml:"client_allowed_ips"`
 }
 
 type MonitoringConfig struct {
@@ -238,6 +244,7 @@ func applyEnvOverrides(c *Config) {
 	setString(&c.Network.OutInterface, "WM_NETWORK_OUT_INTERFACE")
 	setString(&c.Network.ServerIP, "WM_NETWORK_SERVER_IP")
 	setString(&c.Network.DNS, "WM_NETWORK_DNS")
+	setString(&c.Network.ClientAllowedIPs, "WM_NETWORK_CLIENT_ALLOWED_IPS")
 
 	setInt(&c.Monitoring.IntervalSeconds, "WM_MONITORING_INTERVAL_SECONDS")
 	setInt(&c.Monitoring.RetentionHours, "WM_MONITORING_RETENTION_HOURS")
@@ -329,6 +336,18 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(c.Network.DNS) == "" {
 		problems = append(problems, "network.dns must not be empty")
+	}
+	if v := strings.TrimSpace(c.Network.ClientAllowedIPs); v != "" {
+		for _, item := range strings.Split(v, ",") {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			if _, err := netip.ParsePrefix(item); err != nil {
+				problems = append(problems,
+					fmt.Sprintf("network.client_allowed_ips contains invalid CIDR %q: %v", item, err))
+			}
+		}
 	}
 	if strings.TrimSpace(c.Default.AdminEmail) == "" {
 		problems = append(problems, "default.admin_email must not be empty")
