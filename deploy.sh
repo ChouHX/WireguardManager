@@ -40,7 +40,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # 检查 Docker 是否安装
-echo -e "${YELLOW}[1/7] 检查 Docker...${NC}"
+echo -e "${YELLOW}[1/8] 检查 Docker...${NC}"
 if ! command -v docker &> /dev/null; then
     echo -e "${RED}错误: Docker 未安装${NC}"
     echo "请先安装 Docker: https://docs.docker.com/get-docker/"
@@ -49,7 +49,7 @@ fi
 echo -e "${GREEN}✓ Docker 已安装${NC}"
 
 # 检查 Docker Compose 是否安装
-echo -e "${YELLOW}[2/7] 检查 Docker Compose...${NC}"
+echo -e "${YELLOW}[2/8] 检查 Docker Compose...${NC}"
 if ! docker compose version &> /dev/null; then
     echo -e "${RED}错误: Docker Compose 未安装${NC}"
     echo "请先安装 Docker Compose"
@@ -58,7 +58,7 @@ fi
 echo -e "${GREEN}✓ Docker Compose 已安装${NC}"
 
 # 配置 Docker 镜像加速器（国内用户）
-echo -e "${YELLOW}[3/7] 配置 Docker 镜像加速器...${NC}"
+echo -e "${YELLOW}[3/8] 配置 Docker 镜像加速器...${NC}"
 if [ -f "daemon.json" ]; then
     read -p "是否配置 Docker 镜像加速器（国内推荐）? [Y/n] " -n 1 -r
     echo
@@ -75,7 +75,7 @@ else
 fi
 
 # 检查 WireGuard 内核模块
-echo -e "${YELLOW}[4/7] 检查 WireGuard 内核模块...${NC}"
+echo -e "${YELLOW}[4/8] 检查 WireGuard 内核模块...${NC}"
 if ! lsmod | grep -q wireguard; then
     echo -e "${YELLOW}WireGuard 模块未加载，尝试加载...${NC}"
     if sudo modprobe wireguard 2>/dev/null; then
@@ -87,9 +87,12 @@ if ! lsmod | grep -q wireguard; then
 else
     echo -e "${GREEN}✓ WireGuard 模块已加载${NC}"
 fi
+# 说明：宿主无需安装 wireguard-tools，wg / ip / iptables 都在后端容器内，
+# 容器以特权 + host 网络运行并共享 /var/run/netns，因此能直接管理宿主的网络环境。
+echo -e "  ${GREEN}提示:${NC} 宿主机无需安装 wg 命令，工具链由后端容器提供（第 8 步会自检）"
 
 # 准备配置文件
-echo -e "${YELLOW}[5/7] 准备配置文件...${NC}"
+echo -e "${YELLOW}[5/8] 准备配置文件...${NC}"
 
 if [ ! -f ".env" ]; then
     if [ -f ".env.example" ]; then
@@ -125,7 +128,7 @@ else
 fi
 
 # 创建必要的目录
-echo -e "${YELLOW}[6/7] 创建必要的目录...${NC}"
+echo -e "${YELLOW}[6/8] 创建必要的目录...${NC}"
 sudo mkdir -p /etc/wg_config
 sudo chmod 755 /etc/wg_config
 echo -e "${GREEN}✓ 已创建 /etc/wg_config 目录${NC}"
@@ -141,7 +144,7 @@ echo -e "${GREEN}✓ 已创建 data 目录（存放 SQLite 数据库文件）${N
 
 # 获取并启动服务
 if [ "$BUILD_LOCAL" = true ]; then
-    echo -e "${YELLOW}[7/7] 本地构建镜像并启动服务...${NC}"
+    echo -e "${YELLOW}[7/8] 本地构建镜像并启动服务...${NC}"
     echo "使用 docker-compose.build.yml，源码编译可能需要几分钟..."
     echo ""
 
@@ -155,7 +158,7 @@ if [ "$BUILD_LOCAL" = true ]; then
 
     UP_CMD="docker compose -f docker-compose.build.yml up -d"
 else
-    echo -e "${YELLOW}[7/7] 拉取 GHCR 镜像并启动服务...${NC}"
+    echo -e "${YELLOW}[7/8] 拉取 GHCR 镜像并启动服务...${NC}"
     echo "使用默认 docker-compose.yml（预构建镜像）..."
     echo ""
 
@@ -189,3 +192,81 @@ else
     echo "查看日志: docker compose logs"
     exit 1
 fi
+
+# ---------- 部署自检 ----------
+echo -e "${YELLOW}[8/8] 运行部署自检...${NC}"
+
+SELF_CHECK_FAILED=0
+if [ "$BUILD_LOCAL" = true ]; then
+    COMPOSE_ARGS="-f docker-compose.build.yml"
+else
+    COMPOSE_ARGS=""
+fi
+
+# 优先 curl，其次 wget；返回 2 表示宿主机两者都没有
+http_ok() {
+    local url="$1"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsS --max-time 5 "$url" >/dev/null 2>&1
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -T 5 -O /dev/null "$url" >/dev/null 2>&1
+    else
+        return 2
+    fi
+}
+
+# 1) 容器内工具链：宿主无需安装 wireguard-tools
+if docker compose $COMPOSE_ARGS exec -T backend sh -c \
+    'command -v wg >/dev/null 2>&1 && command -v ip >/dev/null 2>&1 && command -v iptables >/dev/null 2>&1' 2>/dev/null; then
+    echo -e "  ${GREEN}✓${NC} 后端容器内 wg / ip / iptables 可用（宿主无需安装）"
+else
+    echo -e "  ${RED}✗${NC} 后端容器内缺少 WireGuard 工具链，创建网络与设备会失败"
+    SELF_CHECK_FAILED=1
+fi
+
+# 2) 命名空间共享：容器里应能直接列出宿主的 netns
+if docker compose $COMPOSE_ARGS exec -T backend ip netns list >/dev/null 2>&1; then
+    echo -e "  ${GREEN}✓${NC} 容器可访问宿主网络命名空间（/var/run/netns 已共享）"
+else
+    echo -e "  ${RED}✗${NC} 容器无法访问 /var/run/netns，请确认该挂载为 shared"
+    SELF_CHECK_FAILED=1
+fi
+
+# 3) 后端健康：端口取自 config.yaml（与容器内监听端口同源）
+API_PORT=$(awk '/^server:/{f=1} f && /^[[:space:]]+port:/{gsub(/[^0-9]/,"",$2); print $2; exit}' config.yaml 2>/dev/null)
+API_PORT=${API_PORT:-8080}
+
+http_ok "http://127.0.0.1:${API_PORT}/health"
+health_status=$?
+case $health_status in
+    0) echo -e "  ${GREEN}✓${NC} 后端健康检查通过（127.0.0.1:${API_PORT}/health）" ;;
+    2) echo -e "  ${YELLOW}!${NC} 宿主机缺少 curl/wget，跳过 HTTP 检查" ;;
+    *)
+        echo -e "  ${RED}✗${NC} 后端健康检查失败（127.0.0.1:${API_PORT}）"
+        echo "     请确认 config.yaml 的 server.port 与实际监听端口一致"
+        echo "     查看日志: docker compose logs --tail=50 backend"
+        SELF_CHECK_FAILED=1
+        ;;
+esac
+
+# 4) 控制台反代链路：前端 Nginx 能否把请求转到后端
+http_ok "http://127.0.0.1:3000/health"
+proxy_status=$?
+case $proxy_status in
+    0) echo -e "  ${GREEN}✓${NC} 控制台反代链路正常（:3000 → 后端 /health）" ;;
+    2) echo -e "  ${YELLOW}!${NC} 宿主机缺少 curl/wget，跳过反代检查" ;;
+    *)
+        echo -e "  ${RED}✗${NC} 控制台反代异常，Nginx 无法连接后端"
+        echo "     若改过 BACKEND_UPSTREAM，其端口必须与后端实际监听端口一致"
+        echo "     查看日志: docker compose logs --tail=50 frontend"
+        SELF_CHECK_FAILED=1
+        ;;
+esac
+
+echo ""
+if [ "$SELF_CHECK_FAILED" -eq 0 ]; then
+    echo -e "${GREEN}✓ 自检通过，服务已就绪。${NC}"
+else
+    echo -e "${RED}✗ 自检发现问题，请按上述提示排查。${NC}"
+fi
+echo ""

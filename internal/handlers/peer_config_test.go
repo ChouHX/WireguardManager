@@ -19,11 +19,11 @@ import (
 
 // peerConfigFixture 构造一套最小的用户/服务器/peer 数据，用于验证客户端配置生成。
 type peerConfigFixture struct {
-	user         models.User
-	server       models.WireguardServer
-	peer         models.WireguardPeer
-	context      *gin.Context
-	recorder     *httptest.ResponseRecorder
+	user     models.User
+	server   models.WireguardServer
+	peer     models.WireguardPeer
+	context  *gin.Context
+	recorder *httptest.ResponseRecorder
 }
 
 func setupPeerConfigFixture(t *testing.T, clientAllowedIPs, serverAddress, peerAddress string) peerConfigFixture {

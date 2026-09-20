@@ -31,7 +31,7 @@ const (
 // LivenessResult 单个设备的探测结论快照
 type LivenessResult struct {
 	// Target 实际探测的地址（peer 隧道地址:端口）
-	Target string `json:"target"`
+	Target string        `json:"target"`
 	State  LivenessState `json:"state"`
 	// LatencyMS 最近一次成功探测的往返耗时
 	LatencyMS int64 `json:"latency_ms"`
