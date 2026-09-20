@@ -1,33 +1,31 @@
-// WireGuard Server Info
+// WireGuard 相关类型定义（与后端 models 保持一致）
+
 export interface WireguardServerInfo {
   id: number;
+  user_id: number;
   namespace: string;
   wg_interface: string;
   wg_port: number;
   wg_public_key: string;
   wg_address: string;
-  server_endpoint: string;
+  server_endpoint?: string;
   created_at: string;
 }
 
-// WireGuard Peer
 export interface WireguardPeer {
   id: number;
-  server_id: number;
   public_key: string;
   private_key: string;
-  peer_address: string; // peer在WireGuard网段中的IP地址
-  allowed_ips: string; // peer可以访问的IP地址或网段
+  peer_address: string;
+  allowed_ips: string;
   endpoint?: string;
   persistent_keepalive: number;
   comment?: string;
   enable_forwarding: boolean;
   forward_interface?: string;
   created_at: string;
-  updated_at: string;
 }
 
-// WireGuard Peer Stats (from server stats)
 export interface WireguardPeerStats {
   public_key: string;
   endpoint?: string;
@@ -39,7 +37,6 @@ export interface WireguardPeerStats {
   comment?: string;
 }
 
-// WireGuard Server Stats
 export interface WireguardServerStats {
   interface: string;
   public_key: string;
@@ -47,24 +44,21 @@ export interface WireguardServerStats {
   peer_count: number;
   total_rx: number;
   total_tx: number;
-  peers: WireguardPeerStats[];
+  /**
+   * peer 列表。后端正常情况下返回数组（空列表为 []），
+   * 但在解析异常等边界情况下可能为 null，消费方需按空列表处理。
+   */
+  peers: WireguardPeerStats[] | null;
 }
 
-// User Traffic Stats
 export interface UserTrafficStats {
   user_id: number;
   user_uid: string;
   email: string;
-  server_info: WireguardServerInfo;
-  server_stats: WireguardServerStats;
-}
-
-// User Traffic Summary (for polling)
-export interface UserTrafficSummary {
-  peer_count: number;
-  total_rx: number;
-  total_tx: number;
-  peers: PeerTrafficSummary[];
+  /** 用户尚未分配 WireGuard server 时后端可能返回 null */
+  server_info: WireguardServerInfo | null;
+  /** 采集失败或未分配网络时后端可能返回 null */
+  server_stats: WireguardServerStats | null;
 }
 
 export interface PeerTrafficSummary {
@@ -75,7 +69,13 @@ export interface PeerTrafficSummary {
   comment?: string;
 }
 
-// Admin User Traffic (simplified for admin view)
+export interface UserTrafficSummary {
+  peer_count: number;
+  total_rx: number;
+  total_tx: number;
+  peers: PeerTrafficSummary[];
+}
+
 export interface AdminUserTraffic {
   server_id: number;
   user_id: number;
@@ -88,20 +88,20 @@ export interface AdminUserTraffic {
   wg_address: string;
   namespace: string;
   enabled: boolean;
-  download_rate: number; // Mbps
-  upload_rate: number;   // Mbps
+  /** Mbps，0 表示不限速 */
+  download_rate: number;
+  /** Mbps，0 表示不限速 */
+  upload_rate: number;
 }
 
-// Add Peer Request
 export interface AddPeerRequest {
-  allowed_ips?: string; // peer可以访问的IP地址或网段，留空则默认为peer自己的IP
+  allowed_ips?: string;
   persistent_keepalive?: number;
   comment?: string;
   enable_forwarding?: boolean;
   forward_interface?: string;
 }
 
-// Update Peer Request
 export interface UpdatePeerRequest {
   allowed_ips?: string;
   persistent_keepalive?: number;

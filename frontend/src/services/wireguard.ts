@@ -1,107 +1,103 @@
-import api from '@/lib/api';
-import { ApiResponse } from '@/types/auth';
-import {
+import api from './api';
+import type { ApiResponse } from '@/types/auth';
+import type {
+  AddPeerRequest,
+  AdminUserTraffic,
+  UpdatePeerRequest,
   UserTrafficStats,
   UserTrafficSummary,
-  AdminUserTraffic,
   WireguardPeer,
-  AddPeerRequest,
-  UpdatePeerRequest
 } from '@/types/wireguard';
 
-export class WireguardService {
-  // User endpoints
-  
-  // Get my traffic summary (for polling)
-  static async getMyTraffic(): Promise<ApiResponse<UserTrafficSummary>> {
-    const response = await api.get('/api/wireguard/traffic');
-    return response.data;
-  }
+export const wireguardService = {
+  // -------- 普通用户 --------
 
-  // Get my peers
-  static async getMyPeers(): Promise<ApiResponse<WireguardPeer[]>> {
-    const response = await api.get('/api/wireguard/peers');
-    return response.data;
-  }
+  /** 当前用户流量摘要（轮询接口，后端已做短路缓存） */
+  async getMyTraffic(): Promise<ApiResponse<UserTrafficSummary>> {
+    const res = await api.get<ApiResponse<UserTrafficSummary>>('/api/wireguard/traffic');
+    return res.data;
+  },
 
-  // Add a peer
-  static async addPeer(data: AddPeerRequest): Promise<ApiResponse<WireguardPeer>> {
-    const response = await api.post('/api/wireguard/peers', data);
-    return response.data;
-  }
+  async getMyPeers(): Promise<ApiResponse<WireguardPeer[]>> {
+    const res = await api.get<ApiResponse<WireguardPeer[]>>('/api/wireguard/peers');
+    return res.data;
+  },
 
-  // Update a peer
-  static async updatePeer(peerId: number, data: UpdatePeerRequest): Promise<ApiResponse<WireguardPeer>> {
-    const response = await api.patch(`/api/wireguard/peers/${peerId}`, data);
-    return response.data;
-  }
+  async addPeer(data: AddPeerRequest): Promise<ApiResponse<WireguardPeer>> {
+    const res = await api.post<ApiResponse<WireguardPeer>>('/api/wireguard/peers', data);
+    return res.data;
+  },
 
-  // Delete a peer
-  static async deletePeer(peerId: number): Promise<ApiResponse<null>> {
-    const response = await api.delete(`/api/wireguard/peers/${peerId}`);
-    return response.data;
-  }
+  async updatePeer(peerId: number, data: UpdatePeerRequest): Promise<ApiResponse<WireguardPeer>> {
+    const res = await api.patch<ApiResponse<WireguardPeer>>(`/api/wireguard/peers/${peerId}`, data);
+    return res.data;
+  },
 
-  // Get peer config (unified API for both download and QR code)
-  static async getPeerConfig(peerId: number): Promise<ApiResponse<{ config: string }>> {
-    const response = await api.get(`/api/wireguard/peers/${peerId}/config`);
-    return response.data;
-  }
+  async deletePeer(peerId: number): Promise<ApiResponse<null>> {
+    const res = await api.delete<ApiResponse<null>>(`/api/wireguard/peers/${peerId}`);
+    return res.data;
+  },
 
-  // Download peer config (uses getPeerConfig and triggers download)
-  static async downloadPeerConfig(peerId: number, peerName?: string): Promise<void> {
+  /** 获取 peer 的客户端配置文本（下载与二维码共用） */
+  async getPeerConfig(peerId: number): Promise<ApiResponse<{ config: string }>> {
+    const res = await api.get<ApiResponse<{ config: string }>>(
+      `/api/wireguard/peers/${peerId}/config`,
+    );
+    return res.data;
+  },
+
+  /** 触发浏览器下载 .conf 文件 */
+  async downloadPeerConfig(peerId: number, peerName?: string): Promise<void> {
     const response = await this.getPeerConfig(peerId);
-    
-    if (response.success && response.data) {
-      // Create a blob from the config text
-      const blob = new Blob([response.data.config], { type: 'text/plain' });
-      const url = window.URL.createObjectURL(blob);
-      
-      // Create a temporary link and trigger download
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = peerName ? `wg-${peerName}.conf` : `wg-peer-${peerId}.conf`;
-      document.body.appendChild(link);
-      link.click();
-      
-      // Cleanup
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-    }
-  }
+    if (!response.success || !response.data) return;
 
-  // Admin endpoints
-  
-  // Get all users traffic statistics (admin, simplified)
-  static async getAdminTraffic(): Promise<ApiResponse<AdminUserTraffic[]>> {
-    const response = await api.get('/api/admin/wireguard/traffic');
-    return response.data;
-  }
+    const blob = new Blob([response.data.config], { type: 'text/plain;charset=utf-8' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = peerName ? `wg-${peerName}.conf` : `wg-peer-${peerId}.conf`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+  },
 
-  // Get specific user traffic statistics (admin, detailed)
-  static async getUserTraffic(userId: number): Promise<ApiResponse<UserTrafficStats>> {
-    const response = await api.get(`/api/admin/wireguard/traffic/${userId}`);
-    return response.data;
-  }
+  // -------- 管理员 --------
 
-  // Delete user's WireGuard server (admin)
-  static async deleteServer(serverId: number): Promise<ApiResponse<null>> {
-    const response = await api.delete(`/api/admin/wireguard/servers/${serverId}`);
-    return response.data;
-  }
+  async getAdminTraffic(): Promise<ApiResponse<AdminUserTraffic[]>> {
+    const res = await api.get<ApiResponse<AdminUserTraffic[]>>('/api/admin/wireguard/traffic');
+    return res.data;
+  },
 
-  // Toggle server enabled status (admin)
-  static async toggleServer(serverId: number, enabled: boolean): Promise<ApiResponse<null>> {
-    const response = await api.patch(`/api/admin/wireguard/servers/${serverId}/toggle`, { enabled });
-    return response.data;
-  }
+  async getUserTraffic(userId: number): Promise<ApiResponse<UserTrafficStats>> {
+    const res = await api.get<ApiResponse<UserTrafficStats>>(
+      `/api/admin/wireguard/traffic/${userId}`,
+    );
+    return res.data;
+  },
 
-  // Set rate limit (admin)
-  static async setRateLimit(serverId: number, downloadRate: number, uploadRate: number): Promise<ApiResponse<null>> {
-    const response = await api.patch(`/api/admin/wireguard/servers/${serverId}/ratelimit`, {
-      download_rate: downloadRate,
-      upload_rate: uploadRate
-    });
-    return response.data;
-  }
-}
+  async deleteServer(serverId: number): Promise<ApiResponse<null>> {
+    const res = await api.delete<ApiResponse<null>>(`/api/admin/wireguard/servers/${serverId}`);
+    return res.data;
+  },
+
+  async toggleServer(serverId: number, enabled: boolean): Promise<ApiResponse<null>> {
+    const res = await api.patch<ApiResponse<null>>(
+      `/api/admin/wireguard/servers/${serverId}/toggle`,
+      { enabled },
+    );
+    return res.data;
+  },
+
+  async setRateLimit(
+    serverId: number,
+    downloadRate: number,
+    uploadRate: number,
+  ): Promise<ApiResponse<null>> {
+    const res = await api.patch<ApiResponse<null>>(
+      `/api/admin/wireguard/servers/${serverId}/ratelimit`,
+      { download_rate: downloadRate, upload_rate: uploadRate },
+    );
+    return res.data;
+  },
+};

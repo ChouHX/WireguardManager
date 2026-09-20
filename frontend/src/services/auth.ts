@@ -1,42 +1,36 @@
-import api from '@/lib/api';
-import { 
-  ApiResponse, 
-  LoginRequest, 
-  LoginResponse, 
-  RegisterRequest, 
+import api from './api';
+import type {
+  ApiResponse,
+  LoginRequest,
+  LoginResponse,
+  RegisterRequest,
   UpdateProfileRequest,
-  User 
+  User,
 } from '@/types/auth';
 
-export class AuthService {
-  // 用户登录
-  static async login(data: LoginRequest): Promise<ApiResponse<LoginResponse>> {
-    const response = await api.post('/api/login', data);
-    return response.data;
-  }
+export const authService = {
+  async login(data: LoginRequest): Promise<ApiResponse<LoginResponse>> {
+    const res = await api.post<ApiResponse<LoginResponse>>('/api/login', data);
+    return res.data;
+  },
 
-  // 用户注册
-  static async register(data: RegisterRequest): Promise<ApiResponse<User>> {
-    const response = await api.post('/api/register', data);
-    return response.data;
-  }
+  async register(data: RegisterRequest): Promise<ApiResponse<User>> {
+    const res = await api.post<ApiResponse<User>>('/api/register', data);
+    return res.data;
+  },
 
-  // 获取当前用户信息
-  static async getMe(): Promise<ApiResponse<User>> {
-    const response = await api.get('/api/me');
-    return response.data;
-  }
+  async getMe(): Promise<ApiResponse<User>> {
+    const res = await api.get<ApiResponse<User>>('/api/me');
+    return res.data;
+  },
 
-  // 更新个人资料
-  static async updateProfile(data: UpdateProfileRequest): Promise<ApiResponse<User>> {
-    const response = await api.patch('/api/me', data);
-    return response.data;
-  }
+  async updateProfile(data: UpdateProfileRequest): Promise<ApiResponse<User>> {
+    const res = await api.patch<ApiResponse<User>>('/api/me', data);
+    return res.data;
+  },
 
-  // 健康检查
-  static async healthCheck(): Promise<any> {
-    const response = await api.get('/health');
-    return response.data;
-  }
-}
-
+  async healthCheck(): Promise<ApiResponse<unknown>> {
+    const res = await api.get<ApiResponse<unknown>>('/health');
+    return res.data;
+  },
+};

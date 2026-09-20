@@ -1,5 +1,5 @@
-// 统一导出所有服务
-export { AdminService } from './admin';
-export { MonitoringService } from './monitoring';
-export * from './auth';
-export * from './wireguard';
+export { default as api, tokenStorage, setUnauthorizedHandler } from './api';
+export { authService } from './auth';
+export { adminService } from './admin';
+export { wireguardService } from './wireguard';
+export { monitoringService } from './monitoring';

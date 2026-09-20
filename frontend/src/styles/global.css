@@ -1,0 +1,215 @@
+/* 全局基座样式：纹理、滚动条、动画、控制台质感 */
+
+:root {
+  --wm-grid-line: rgba(18, 20, 24, 0.045);
+  --wm-grid-size: 24px;
+  --wm-surface-raised: rgba(255, 255, 255, 0.78);
+  --wm-header-height: 52px;
+  --wm-nav-width: 226px;
+  --wm-nav-width-collapsed: 64px;
+  /* WireGuard 官方 logo 主色（浅色主题用官方红） */
+  --wm-logo-color: #88171a;
+}
+
+[data-mantine-color-scheme='dark'] {
+  --wm-grid-line: rgba(255, 255, 255, 0.04);
+  --wm-surface-raised: rgba(28, 31, 38, 0.78);
+  /* 深色背景下换用亮度更高的品牌红，保证 logo 可辨识 */
+  --wm-logo-color: #f08a80;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--mantine-color-body);
+  /* 双层网格 + 顶部渐晕，避免大面积纯色 */
+  background-image:
+    linear-gradient(var(--wm-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--wm-grid-line) 1px, transparent 1px),
+    radial-gradient(1200px 420px at 82% -8%, rgba(228, 95, 82, 0.09), transparent 62%);
+  background-size:
+    var(--wm-grid-size) var(--wm-grid-size),
+    var(--wm-grid-size) var(--wm-grid-size),
+    100% 100%;
+  background-attachment: fixed;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--mantine-color-gray-4) transparent;
+}
+
+[data-mantine-color-scheme='dark'] * {
+  scrollbar-color: var(--mantine-color-dark-4) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--mantine-color-gray-3);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--mantine-color-gray-5);
+}
+
+[data-mantine-color-scheme='dark'] ::-webkit-scrollbar-thumb {
+  background-color: var(--mantine-color-dark-4);
+}
+
+/* 数字与密钥统一等宽，避免刷新时抖动 */
+.wm-mono {
+  font-family: var(--mantine-font-family-monospace);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.wm-code-block {
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* 页面载入：一次性错峰浮现，而不是零散微动效 */
+@keyframes wm-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.wm-rise {
+  animation: wm-rise 420ms cubic-bezier(0.22, 0.75, 0.3, 1) both;
+  animation-delay: var(--wm-delay, 0ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wm-rise {
+    animation: none;
+  }
+}
+
+/* 侧边栏：深色控制台面板 */
+.wm-nav {
+  background: #16181d;
+  border-right: 1px solid #262b34;
+}
+
+.wm-nav-link {
+  color: #a9b1bd;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
+}
+
+.wm-nav-link:hover {
+  background-color: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+}
+
+.wm-nav-link[data-active='true'] {
+  background-color: rgba(228, 95, 82, 0.16);
+  color: #ffffff;
+  box-shadow: inset 2px 0 0 var(--mantine-color-wg-6);
+}
+
+.wm-nav-section {
+  color: #6b7381;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-size: 9.5px;
+  font-weight: 700;
+}
+
+/* 顶栏：与 logo 同一行，尺寸紧凑 */
+.wm-header {
+  background: var(--wm-surface-raised);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--mantine-color-default-border);
+}
+
+.wm-header-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--mantine-color-default-border);
+  margin: 0 2px;
+}
+
+/* logo 与品牌名作为一个整体的可点击标识 */
+.wm-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 8px 4px 4px;
+  border-radius: 3px;
+  transition: background-color 150ms ease;
+  text-decoration: none;
+  color: inherit;
+}
+
+.wm-brand:hover {
+  background-color: light-dark(rgba(0, 0, 0, 0.05), rgba(255, 255, 255, 0.07));
+}
+
+/* 用户区触发元素：无边框无底色，仅保留悬停反馈 */
+.wm-user-trigger {
+  padding: 3px 5px;
+  border-radius: 3px;
+  transition: background-color 150ms ease;
+  color: inherit;
+}
+
+.wm-user-trigger:hover {
+  background-color: light-dark(rgba(0, 0, 0, 0.05), rgba(255, 255, 255, 0.07));
+}
+
+/* 认证页左栏的品牌面板 */
+.wm-auth-hero {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(900px 520px at 12% 8%, rgba(228, 95, 82, 0.34), transparent 60%),
+    linear-gradient(155deg, #1b1d23 0%, #101216 60%, #0c0d10 100%);
+}
+
+.wm-auth-hero::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: 34px 34px;
+  mask-image: radial-gradient(600px 400px at 30% 20%, #000 20%, transparent 78%);
+  pointer-events: none;
+}
+
+/* 数据表在窄屏下横向滚动而不是挤压 */
+.wm-table-scroll {
+  overflow-x: auto;
+}
+
+.wm-table-scroll table {
+  min-width: 720px;
+}

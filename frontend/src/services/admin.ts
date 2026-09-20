@@ -1,27 +1,19 @@
-import api from '@/lib/api';
-import { 
-  ApiResponse,
-  User,
-  UpdateUserRequest
-} from '@/types/auth';
+import api from './api';
+import type { ApiResponse, UpdateUserRequest, User } from '@/types/auth';
 
-export class AdminService {
-  // 获取所有用户
-  static async getUsers(): Promise<ApiResponse<User[]>> {
-    const response = await api.get('/api/admin/users');
-    return response.data;
-  }
+export const adminService = {
+  async getUsers(): Promise<ApiResponse<User[]>> {
+    const res = await api.get<ApiResponse<User[]>>('/api/admin/users');
+    return res.data;
+  },
 
-  // 删除用户
-  static async deleteUser(userId: number): Promise<ApiResponse<null>> {
-    const response = await api.delete(`/api/admin/users/${userId}`);
-    return response.data;
-  }
+  async deleteUser(userId: number): Promise<ApiResponse<null>> {
+    const res = await api.delete<ApiResponse<null>>(`/api/admin/users/${userId}`);
+    return res.data;
+  },
 
-  // 更新用户信息
-  static async updateUser(userId: number, data: UpdateUserRequest): Promise<ApiResponse<User>> {
-    const response = await api.patch(`/api/admin/users/${userId}`, data);
-    return response.data;
-  }
-}
-
+  async updateUser(userId: number, data: UpdateUserRequest): Promise<ApiResponse<User>> {
+    const res = await api.patch<ApiResponse<User>>(`/api/admin/users/${userId}`, data);
+    return res.data;
+  },
+};
