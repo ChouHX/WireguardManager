@@ -23,6 +23,9 @@ docker-compose*.yml
 # Config
 config.yaml
 
+# SQLite 数据目录（含数据库文件，不应进入构建上下文）
+data/
+
 # Build artifacts
 *.exe
 *.dll

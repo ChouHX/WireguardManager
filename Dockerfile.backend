@@ -35,8 +35,8 @@ RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
 # Install ca-certificates for HTTPS and wireguard tools
 RUN apk --no-cache add ca-certificates wireguard-tools iptables
 
-# Create necessary directories
-RUN mkdir -p /etc/wg_config
+# Create necessary directories (wg config + SQLite data dir)
+RUN mkdir -p /etc/wg_config /root/data
 
 WORKDIR /root/
 

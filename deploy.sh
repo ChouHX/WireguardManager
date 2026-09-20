@@ -112,6 +112,10 @@ sudo mkdir -p /var/run/netns
 sudo chmod 755 /var/run/netns
 echo -e "${GREEN}✓ 已创建 /var/run/netns 目录${NC}"
 
+# 创建 SQLite 数据目录（数据库为嵌入式 SQLite，无需独立数据库容器）
+mkdir -p data
+echo -e "${GREEN}✓ 已创建 data 目录（存放 SQLite 数据库文件）${NC}"
+
 # 构建并启动服务
 echo -e "${YELLOW}[7/7] 构建并启动服务...${NC}"
 echo "这可能需要几分钟时间，请耐心等待..."

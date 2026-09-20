@@ -1,24 +1,5 @@
 services:
-  # PostgreSQL Database
-  postgres:
-    image: postgres:16-alpine
-    container_name: cloud-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${DB_USER:-root}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-root123}
-      POSTGRES_DB: ${DB_NAME:-cloud_platform}
-    volumes:
-      - ./postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-root}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Backend Service (Go)
+  # Backend Service (Go + embedded SQLite)
   backend:
     build:
       context: .
@@ -33,34 +14,30 @@ services:
     volumes:
       - ./config.yaml:/root/config.yaml:ro
       - ./wg_config:/etc/wg_config
+      # SQLite 数据目录（数据库文件由后端自动创建）
+      - ${DATA_DIR:-./data}:/root/data
       - /lib/modules:/lib/modules:ro
       - /var/run/netns:/var/run/netns:shared
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
       - TZ=Asia/Shanghai
 
-  # Frontend Service (Next.js only)
+  # Frontend Service (React 19 + Vite + MantineUI, served by Nginx)
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile.simple
+      dockerfile: Dockerfile
       args:
-        - API_PROXY_TARGET=http://host.docker.internal:8080
+        # 国内构建默认走镜像源；海外环境改为 https://registry.npmjs.org
+        - NPM_REGISTRY=https://registry.npmmirror.com
     container_name: cloud-frontend
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3000:80"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       - backend
     environment:
-      - NODE_ENV=production
-      - API_PROXY_TARGET=http://host.docker.internal:8080
+      # Nginx 反代的上游后端地址（backend 使用 host 网络）
+      - BACKEND_UPSTREAM=http://host.docker.internal:8080
       - TZ=Asia/Shanghai
-
-volumes:
-  postgres_data:
-    driver: local

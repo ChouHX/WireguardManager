@@ -68,13 +68,15 @@ else
     echo "  - 配置目录不存在"
 fi
 
-# 5. 清空数据库表
-echo "[5/5] 清空数据库..."
-echo "  - 删除所有数据..."
-docker compose -f docker-compose-db.yml down
-rm -rf ./postgres_data
-echo " - 删除完毕，重启数据库..."
-docker compose -f docker-compose-db.yml up -d
+# 5. 重置数据库（嵌入式 SQLite，直接删除数据库文件即可）
+echo "[5/5] 重置 SQLite 数据库..."
+DB_FILE="./data/cloud_platform.db"
+if [ -f "${DB_FILE}" ]; then
+    echo "  - 删除: ${DB_FILE}"
+    rm -f "${DB_FILE}" "${DB_FILE}-wal" "${DB_FILE}-shm"
+else
+    echo "  - 数据库文件不存在（首次启动会自动创建）"
+fi
 
 echo ""
 echo "===== 清理完成 ====="

@@ -54,6 +54,12 @@ temp/
 # database files
 postgres_data
 
+# SQLite database files
+/data/
+*.db
+*.db-wal
+*.db-shm
+
 # windsurf files
 .windsurf
 
