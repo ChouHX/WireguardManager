@@ -6,39 +6,36 @@ import (
 	"log"
 	"time"
 
-	"github.com/shirou/gopsutil/v3/cpu"
-	"github.com/shirou/gopsutil/v3/disk"
-	"github.com/shirou/gopsutil/v3/host"
-	"github.com/shirou/gopsutil/v3/mem"
-	"github.com/shirou/gopsutil/v3/net"
 	"gorm.io/gorm"
 )
 
 // MonitoringService handles background monitoring data collection
 type MonitoringService struct {
-	db            *gorm.DB
-	interval      time.Duration
-	ctx           context.Context
-	cancel        context.CancelFunc
-	prevNetStats  *net.IOCountersStat
-	prevStatsTime time.Time
+	db       *gorm.DB
+	interval time.Duration
+	cancel   context.CancelFunc
 }
 
 // NewMonitoringService creates a new monitoring service
 func NewMonitoringService(db *gorm.DB, interval time.Duration) *MonitoringService {
-	ctx, cancel := context.WithCancel(context.Background())
+	if interval <= 0 {
+		interval = 10 * time.Second
+	}
 	return &MonitoringService{
 		db:       db,
 		interval: interval,
-		ctx:      ctx,
-		cancel:   cancel,
 	}
 }
 
-// Start begins the monitoring data collection loop
-func (s *MonitoringService) Start() {
+// Start 启动周期性落库循环，ctx 取消后退出。
+func (s *MonitoringService) Start(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+
+	s.cancel = cancel
+	defer cancel()
+
 	log.Printf("Starting monitoring service with interval: %v", s.interval)
-	
+
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
 
@@ -49,7 +46,7 @@ func (s *MonitoringService) Start() {
 		select {
 		case <-ticker.C:
 			s.collectAndSave()
-		case <-s.ctx.Done():
+		case <-ctx.Done():
 			log.Println("Monitoring service stopped")
 			return
 		}
@@ -59,76 +56,69 @@ func (s *MonitoringService) Start() {
 // Stop stops the monitoring service
 func (s *MonitoringService) Stop() {
 	log.Println("Stopping monitoring service...")
-	s.cancel()
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
 
-// collectAndSave collects system metrics and saves them to database
-func (s *MonitoringService) collectAndSave() {
-	record := &models.MonitoringRecord{
-		CreatedAt: time.Now(),
+// RunCleanupLoop 周期清理过期监控记录，直到 ctx 取消。
+func (s *MonitoringService) RunCleanupLoop(ctx context.Context, interval, retention time.Duration) {
+	if interval <= 0 {
+		interval = 24 * time.Hour
+	}
+	if retention <= 0 {
+		retention = 168 * time.Hour
 	}
 
-	// Collect CPU stats
-	cpuPercent, err := cpu.Percent(time.Second, false)
-	if err == nil && len(cpuPercent) > 0 {
-		record.CPUUsagePercent = cpuPercent[0]
-	}
+	log.Printf("Monitoring cleanup loop started (every %v, retaining %v)", interval, retention)
 
-	cpuCounts, err := cpu.Counts(true)
-	if err == nil {
-		record.CPUCores = cpuCounts
-	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 
-	// Collect memory stats
-	memInfo, err := mem.VirtualMemory()
-	if err == nil {
-		record.MemoryTotal = memInfo.Total
-		record.MemoryUsed = memInfo.Used
-		record.MemoryAvailable = memInfo.Available
-		record.MemoryUsedPercent = memInfo.UsedPercent
-	}
-
-	// Collect disk stats
-	diskInfo, err := disk.Usage("/")
-	if err == nil {
-		record.DiskTotal = diskInfo.Total
-		record.DiskUsed = diskInfo.Used
-		record.DiskFree = diskInfo.Free
-		record.DiskUsedPercent = diskInfo.UsedPercent
-	}
-
-	// Collect network stats
-	netInfo, err := net.IOCounters(false)
-	if err == nil && len(netInfo) > 0 {
-		currentStats := &netInfo[0]
-		record.NetworkBytesSent = currentStats.BytesSent
-		record.NetworkBytesRecv = currentStats.BytesRecv
-		record.NetworkPacketsSent = currentStats.PacketsSent
-		record.NetworkPacketsRecv = currentStats.PacketsRecv
-
-		// Calculate network speed
-		now := time.Now()
-		if s.prevNetStats != nil && !s.prevStatsTime.IsZero() {
-			timeDiff := now.Sub(s.prevStatsTime).Seconds()
-			if timeDiff > 0 {
-				record.NetworkSpeedSent = float64(currentStats.BytesSent-s.prevNetStats.BytesSent) / timeDiff
-				record.NetworkSpeedRecv = float64(currentStats.BytesRecv-s.prevNetStats.BytesRecv) / timeDiff
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("Monitoring cleanup loop stopped")
+			return
+		case <-ticker.C:
+			if err := s.CleanupOldRecords(retention); err != nil {
+				log.Printf("Failed to clean up old monitoring records: %v", err)
 			}
 		}
+	}
+}
 
-		// Update previous stats
-		s.prevNetStats = currentStats
-		s.prevStatsTime = now
+// collectAndSave 复用采集器快照落库，不再重复调用整套 gopsutil（避免阻塞与重复开销）。
+func (s *MonitoringService) collectAndSave() {
+	snapshot := GetMetricsCollector().Snapshot()
+
+	record := &models.MonitoringRecord{
+		CreatedAt: time.Now(),
+
+		CPUUsagePercent: snapshot.CPU.UsagePercent,
+		CPUCores:        snapshot.CPU.Cores,
+
+		MemoryTotal:       snapshot.Memory.Total,
+		MemoryUsed:        snapshot.Memory.Used,
+		MemoryAvailable:   snapshot.Memory.Available,
+		MemoryUsedPercent: snapshot.Memory.UsedPercent,
+
+		DiskTotal:       snapshot.Disk.Total,
+		DiskUsed:        snapshot.Disk.Used,
+		DiskFree:        snapshot.Disk.Free,
+		DiskUsedPercent: snapshot.Disk.UsedPercent,
+
+		NetworkBytesSent:   snapshot.Network.BytesSent,
+		NetworkBytesRecv:   snapshot.Network.BytesRecv,
+		NetworkPacketsSent: snapshot.Network.PacketsSent,
+		NetworkPacketsRecv: snapshot.Network.PacketsRecv,
+		NetworkSpeedSent:   snapshot.Network.SpeedSent,
+		NetworkSpeedRecv:   snapshot.Network.SpeedRecv,
+
+		Hostname: snapshot.Host.Hostname,
+		Uptime:   snapshot.Host.Uptime,
 	}
 
-	// Collect host info
-	hostInfo, err := host.Info()
-	if err == nil {
-		record.Hostname = hostInfo.Hostname
-		record.Uptime = hostInfo.Uptime
-	}
-
-	// Save to database
 	if err := s.db.Create(record).Error; err != nil {
 		log.Printf("Failed to save monitoring record: %v", err)
 		return
@@ -142,15 +132,15 @@ func (s *MonitoringService) collectAndSave() {
 func (s *MonitoringService) GetRecentRecords(limit int, since time.Time) ([]models.MonitoringRecord, error) {
 	var records []models.MonitoringRecord
 	query := s.db.Order("created_at DESC")
-	
+
 	if !since.IsZero() {
 		query = query.Where("created_at >= ?", since)
 	}
-	
+
 	if limit > 0 {
 		query = query.Limit(limit)
 	}
-	
+
 	err := query.Find(&records).Error
 	return records, err
 }
@@ -159,11 +149,11 @@ func (s *MonitoringService) GetRecentRecords(limit int, since time.Time) ([]mode
 func (s *MonitoringService) CleanupOldRecords(olderThan time.Duration) error {
 	cutoffTime := time.Now().Add(-olderThan)
 	result := s.db.Where("created_at < ?", cutoffTime).Delete(&models.MonitoringRecord{})
-	
+
 	if result.Error != nil {
 		return result.Error
 	}
-	
+
 	log.Printf("Cleaned up %d old monitoring records (older than %v)", result.RowsAffected, olderThan)
 	return nil
 }

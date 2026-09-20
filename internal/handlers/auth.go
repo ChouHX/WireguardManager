@@ -4,6 +4,7 @@ import (
 	"cloud-platform/internal/auth"
 	"cloud-platform/internal/config"
 	"cloud-platform/internal/database"
+	"cloud-platform/internal/middleware"
 	"cloud-platform/internal/models"
 	"cloud-platform/internal/response"
 	"cloud-platform/internal/services"
@@ -123,8 +124,11 @@ func Login(c *gin.Context) {
 }
 
 func GetMe(c *gin.Context) {
-	user, _ := c.Get("user")
-	u := user.(*models.User)
+	u, ok := currentUser(c)
+	if !ok {
+		response.Unauthorized(c, "User not found in context")
+		return
+	}
 
 	response.Success(c, "User information retrieved successfully", u.ToResponse())
 }
@@ -141,8 +145,11 @@ func UpdateProfile(c *gin.Context) {
 		return
 	}
 
-	user, _ := c.Get("user")
-	u := user.(*models.User)
+	u, ok := currentUser(c)
+	if !ok {
+		response.Unauthorized(c, "User not found in context")
+		return
+	}
 
 	updates := make(map[string]interface{})
 
@@ -172,6 +179,9 @@ func UpdateProfile(c *gin.Context) {
 		response.InternalError(c, "Failed to update profile")
 		return
 	}
+
+	// 资料/密码变更后立即失效用户缓存，避免 TTL 窗口内读到旧快照
+	middleware.InvalidateUserCache(u.ID)
 
 	// Reload user
 	database.DB.First(u, u.ID)

@@ -43,12 +43,14 @@ type PaginationInfo struct {
 // 错误代码常量
 const (
 	// 通用错误
-	ErrInvalidRequest   = "INVALID_REQUEST"
-	ErrUnauthorized     = "UNAUTHORIZED"
-	ErrForbidden        = "FORBIDDEN"
-	ErrNotFound         = "NOT_FOUND"
-	ErrInternalError    = "INTERNAL_ERROR"
-	ErrValidationFailed = "VALIDATION_FAILED"
+	ErrInvalidRequest     = "INVALID_REQUEST"
+	ErrUnauthorized       = "UNAUTHORIZED"
+	ErrForbidden          = "FORBIDDEN"
+	ErrNotFound           = "NOT_FOUND"
+	ErrInternalError      = "INTERNAL_ERROR"
+	ErrValidationFailed   = "VALIDATION_FAILED"
+	ErrTooManyRequests    = "TOO_MANY_REQUESTS"
+	ErrServiceUnavailable = "SERVICE_UNAVAILABLE"
 
 	// 认证相关错误
 	ErrInvalidCredentials = "INVALID_CREDENTIALS"
@@ -59,13 +61,6 @@ const (
 	ErrUserExists      = "USER_EXISTS"
 	ErrUserNotFound    = "USER_NOT_FOUND"
 	ErrInvalidPassword = "INVALID_PASSWORD"
-
-	// 企业相关错误
-	ErrCompanyNotFound = "COMPANY_NOT_FOUND"
-	ErrCompanyDisabled = "COMPANY_DISABLED"
-	ErrInvalidCode     = "INVALID_CODE"
-	ErrCodeExpired     = "CODE_EXPIRED"
-	ErrCodeExhausted   = "CODE_EXHAUSTED"
 
 	// 权限相关错误
 	ErrInsufficientPermission = "INSUFFICIENT_PERMISSION"
@@ -149,6 +144,14 @@ func InternalError(c *gin.Context, message string) {
 	Error(c, http.StatusInternalServerError, ErrInternalError, message, nil)
 }
 
+func TooManyRequests(c *gin.Context, message string) {
+	Error(c, http.StatusTooManyRequests, ErrTooManyRequests, message, nil)
+}
+
+func ServiceUnavailable(c *gin.Context, message string) {
+	Error(c, http.StatusServiceUnavailable, ErrServiceUnavailable, message, nil)
+}
+
 func ValidationError(c *gin.Context, details interface{}) {
 	Error(c, http.StatusBadRequest, ErrValidationFailed, "Validation failed", details)
 }
@@ -162,28 +165,45 @@ func UserExists(c *gin.Context) {
 	Error(c, http.StatusBadRequest, ErrUserExists, "User with this email already exists", nil)
 }
 
-func CompanyDisabled(c *gin.Context) {
-	Error(c, http.StatusForbidden, ErrCompanyDisabled, "Your company has been disabled", nil)
-}
-
-func InvalidCode(c *gin.Context, codeType string) {
-	Error(c, http.StatusBadRequest, ErrInvalidCode, "Invalid "+codeType+" code", nil)
-}
-
-func CodeExpired(c *gin.Context) {
-	Error(c, http.StatusBadRequest, ErrCodeExpired, "Code has expired", nil)
-}
-
-func CodeExhausted(c *gin.Context) {
-	Error(c, http.StatusBadRequest, ErrCodeExhausted, "Code has reached maximum usage limit", nil)
-}
-
 func InsufficientPermission(c *gin.Context, required string) {
 	Error(c, http.StatusForbidden, ErrInsufficientPermission, required+" permission required", nil)
 }
 
 func APIAccessDenied(c *gin.Context) {
 	Error(c, http.StatusForbidden, ErrAPIAccessDenied, "Access to this API is disabled for your account", nil)
+}
+
+// 分页参数边界
+const (
+	// MinPerPage 每页最少返回条数
+	MinPerPage = 1
+	// MaxPerPage 每页最多返回条数，防止单次查询打爆内存
+	MaxPerPage = 200
+)
+
+// NewPagination 构造分页信息，自动纠正非法入参：
+// page < 1 归一为 1；perPage 收敛到 [MinPerPage, MaxPerPage]。
+func NewPagination(page, perPage int, total int64) *PaginationInfo {
+	if page < 1 {
+		page = 1
+	}
+	if perPage < MinPerPage {
+		perPage = MinPerPage
+	}
+	if perPage > MaxPerPage {
+		perPage = MaxPerPage
+	}
+
+	totalPages := int((total + int64(perPage) - 1) / int64(perPage))
+
+	return &PaginationInfo{
+		CurrentPage: page,
+		PerPage:     perPage,
+		TotalPages:  totalPages,
+		TotalItems:  total,
+		HasNext:     page < totalPages,
+		HasPrev:     page > 1,
+	}
 }
 
 // 获取请求ID（如果有的话）

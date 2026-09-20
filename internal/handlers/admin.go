@@ -3,6 +3,7 @@ package handlers
 import (
 	"cloud-platform/internal/config"
 	"cloud-platform/internal/database"
+	"cloud-platform/internal/middleware"
 	"cloud-platform/internal/models"
 	"cloud-platform/internal/response"
 	"cloud-platform/internal/services"
@@ -26,7 +27,7 @@ func GetAllUsers(c *gin.Context) {
 		return
 	}
 
-	var userResponses []models.UserResponse
+	userResponses := make([]models.UserResponse, 0, len(users))
 	for _, user := range users {
 		userResponses = append(userResponses, user.ToResponse())
 	}
@@ -42,8 +43,11 @@ func DeleteUser(c *gin.Context) {
 		return
 	}
 
-	currentUser, _ := c.Get("user")
-	cu := currentUser.(*models.User)
+	cu, ok := currentUser(c)
+	if !ok {
+		response.Unauthorized(c, "User not found in context")
+		return
+	}
 
 	// Cannot delete yourself
 	if uint(userID) == cu.ID {
@@ -72,13 +76,13 @@ func DeleteUser(c *gin.Context) {
 			config.AppConfig.Network.BasePort,
 			config.AppConfig.Network.OutInterface,
 		)
-		
+
 		// 删除所有peers
 		database.DB.Where("server_id = ?", wgServer.ID).Delete(&models.WireguardPeer{})
-		
+
 		// 清理网络环境（忽略错误）
 		networkService.DestroyUserNetwork(&wgServer, targetUser.UserUID)
-		
+
 		// 删除服务器记录
 		database.DB.Delete(&wgServer)
 	}
@@ -87,6 +91,9 @@ func DeleteUser(c *gin.Context) {
 		response.InternalError(c, "Failed to delete user")
 		return
 	}
+
+	// 用户已删除，清理其认证缓存
+	middleware.InvalidateUserCache(targetUser.ID)
 
 	response.Success(c, "User deleted successfully", nil)
 }
@@ -158,6 +165,9 @@ func UpdateUser(c *gin.Context) {
 		response.InternalError(c, "Failed to update user")
 		return
 	}
+
+	// 角色/资料变更后立即失效用户缓存
+	middleware.InvalidateUserCache(targetUser.ID)
 
 	// Reload user
 	database.DB.First(&targetUser, targetUser.ID)

@@ -5,19 +5,52 @@ import (
 	"cloud-platform/internal/models"
 	"cloud-platform/internal/services"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 
-	"gorm.io/driver/postgres"
+	"github.com/glebarez/sqlite"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
+
+// 说明：数据库为嵌入式 SQLite（glebarez/sqlite，纯 Go 实现，无需 CGO）。
+// 连接数、busy_timeout、WAL 等参数来自 config 的 database 段，
+// 默认 max_open_conns=1（串行访问，从根上规避 "database is locked"）。
 
 var DB *gorm.DB
 
 func InitDB() error {
-	dsn := config.AppConfig.GetDSN()
+	cfg := config.AppConfig
+	dsn := cfg.GetDSN()
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	// 首次启动时数据库文件的父目录通常还不存在，先创建
+	if dir := filepath.Dir(cfg.DatabasePath()); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return fmt.Errorf("failed to create database directory %s: %w", dir, err)
+		}
+	}
+
+	// SQLite 下只用 Warn 级别日志，避免把常规查询刷进日志
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Warn),
+	})
 	if err != nil {
-		return fmt.Errorf("failed to connect to database: %w", err)
+		return fmt.Errorf("failed to open sqlite database %s: %w", cfg.DatabasePath(), err)
+	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		return fmt.Errorf("failed to access underlying sql.DB: %w", err)
+	}
+	sqlDB.SetMaxOpenConns(cfg.Database.MaxOpenConns)
+	sqlDB.SetMaxIdleConns(cfg.Database.MaxOpenConns)
+	// 文件型数据库无需回收"可能失效"的网络连接，保持零值即不限制存活时间
+
+	// 显式 Ping 一次，让文件不可写（权限/磁盘）等问题在启动阶段暴露
+	if err := sqlDB.Ping(); err != nil {
+		return fmt.Errorf("failed to ping sqlite database: %w", err)
 	}
 
 	DB = db
@@ -41,48 +74,64 @@ func InitDB() error {
 	return nil
 }
 
+// createDefaultPlatformAdmin 在没有任何管理员时创建默认管理员账号。
+// 账号信息取自配置的 default 段，密码在运行时用 bcrypt 生成（不再硬编码 hash）。
+// 网络 provisioning 失败不会阻止管理员创建：账号仍可登录，只是没有独立的 WireGuard 网络。
 func createDefaultPlatformAdmin() error {
 	var count int64
-	DB.Model(&models.User{}).Where("role = ?", models.RoleAdmin).Count(&count)
-
-	if count == 0 {
-		// Create default admin
-		defaultAdmin := models.User{
-			Email:        "admin@platform.com",
-			PasswordHash: "$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi", // password: password
-			Name:         "admin",
-			Role:         models.RoleAdmin,
-			UserUID:      "admin001", // 固定的管理员UserUID
-		}
-
-		if err := DB.Create(&defaultAdmin).Error; err != nil {
-			return err
-		}
-
-		// 为管理员配置网络环境
-		DB.First(&defaultAdmin, defaultAdmin.ID)
-		
-		networkService := services.NewUserNetworkService(
-			config.AppConfig.Network.ConfigDir,
-			config.AppConfig.Network.BaseSubnet,
-			config.AppConfig.Network.BasePort,
-			config.AppConfig.Network.OutInterface,
-		)
-
-		wgServer, err := networkService.ProvisionUserNetwork(&defaultAdmin)
-		if err != nil {
-			fmt.Printf("Warning: Failed to provision admin network: %v\n", err)
-			fmt.Println("Default admin created: admin@platform.com / password (without network)")
-		} else {
-			// 保存管理员的网络配置信息到数据库
-			if err := DB.Create(wgServer).Error; err != nil {
-				fmt.Printf("Warning: Failed to save admin network info: %v\n", err)
-				networkService.DestroyUserNetwork(wgServer, defaultAdmin.UserUID)
-			} else {
-				fmt.Println("Default admin created: admin@platform.com / password (with network)")
-			}
-		}
+	if err := DB.Model(&models.User{}).Where("role = ?", models.RoleAdmin).Count(&count).Error; err != nil {
+		return fmt.Errorf("failed to count existing platform admins: %w", err)
+	}
+	if count > 0 {
+		return nil
 	}
 
+	adminCfg := config.AppConfig.Default
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(adminCfg.AdminPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("failed to hash default admin password: %w", err)
+	}
+
+	defaultAdmin := models.User{
+		Email:        adminCfg.AdminEmail,
+		PasswordHash: string(hashedPassword),
+		Name:         adminCfg.AdminName,
+		Role:         models.RoleAdmin,
+		UserUID:      "admin001", // 固定的管理员UserUID
+	}
+
+	if err := DB.Create(&defaultAdmin).Error; err != nil {
+		return fmt.Errorf("failed to create default admin %s: %w", adminCfg.AdminEmail, err)
+	}
+
+	// 为管理员配置网络环境
+	networkService := services.NewUserNetworkService(
+		config.AppConfig.Network.ConfigDir,
+		config.AppConfig.Network.BaseSubnet,
+		config.AppConfig.Network.BasePort,
+		config.AppConfig.Network.OutInterface,
+	)
+
+	wgServer, err := networkService.ProvisionUserNetwork(&defaultAdmin)
+	if err != nil {
+		// 保留管理员账号：网络配置失败时管理员仍可登录并后续修复网络。
+		log.Printf("Warning: default admin %s was created, but network provisioning failed "+
+			"(namespace/veth/wireguard setup error): %v", adminCfg.AdminEmail, err)
+		return nil
+	}
+
+	// 保存管理员的网络配置信息到数据库
+	if err := DB.Create(wgServer).Error; err != nil {
+		log.Printf("Warning: default admin %s was created, but saving its network record failed; "+
+			"rolling back the provisioned network resources: %v", adminCfg.AdminEmail, err)
+		if destroyErr := networkService.DestroyUserNetwork(wgServer, defaultAdmin.UserUID); destroyErr != nil {
+			log.Printf("Warning: failed to roll back network resources for default admin %s: %v",
+				adminCfg.AdminEmail, destroyErr)
+		}
+		return nil
+	}
+
+	log.Printf("Default platform admin created: %s (network provisioned)", adminCfg.AdminEmail)
 	return nil
 }

@@ -3,273 +3,83 @@ package handlers
 import (
 	"cloud-platform/internal/database"
 	"cloud-platform/internal/models"
-	"net/http"
+	"cloud-platform/internal/response"
+	"cloud-platform/internal/services"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/shirou/gopsutil/v3/cpu"
-	"github.com/shirou/gopsutil/v3/disk"
-	"github.com/shirou/gopsutil/v3/host"
-	"github.com/shirou/gopsutil/v3/mem"
-	"github.com/shirou/gopsutil/v3/net"
 )
 
-// SystemStats represents the overall system statistics
-type SystemStats struct {
-	CPU     CPUStats     `json:"cpu"`
-	Memory  MemoryStats  `json:"memory"`
-	Disk    DiskStats    `json:"disk"`
-	Network NetworkStats `json:"network"`
-	Host    HostStats    `json:"host"`
-}
-
-// CPUStats represents CPU usage statistics
-type CPUStats struct {
-	UsagePercent float64   `json:"usage_percent"`
-	Cores        int       `json:"cores"`
-	PerCore      []float64 `json:"per_core"`
-}
-
-// MemoryStats represents memory usage statistics
-type MemoryStats struct {
-	Total       uint64  `json:"total"`
-	Used        uint64  `json:"used"`
-	Available   uint64  `json:"available"`
-	UsedPercent float64 `json:"used_percent"`
-}
-
-// DiskStats represents disk usage statistics
-type DiskStats struct {
-	Total       uint64  `json:"total"`
-	Used        uint64  `json:"used"`
-	Free        uint64  `json:"free"`
-	UsedPercent float64 `json:"used_percent"`
-}
-
-// NetworkStats represents network statistics
-type NetworkStats struct {
-	BytesSent   uint64  `json:"bytes_sent"`
-	BytesRecv   uint64  `json:"bytes_recv"`
-	PacketsSent uint64  `json:"packets_sent"`
-	PacketsRecv uint64  `json:"packets_recv"`
-	SpeedSent   float64 `json:"speed_sent"`   // bytes per second
-	SpeedRecv   float64 `json:"speed_recv"`   // bytes per second
-}
-
-// HostStats represents host information
-type HostStats struct {
-	Hostname        string `json:"hostname"`
-	OS              string `json:"os"`
-	Platform        string `json:"platform"`
-	PlatformVersion string `json:"platform_version"`
-	Uptime          uint64 `json:"uptime"`
-	BootTime        uint64 `json:"boot_time"`
-}
-
-// Store previous network stats for speed calculation
-var (
-	prevNetStats     *net.IOCountersStat
-	prevNetStatsTime time.Time
+// 类型别名：对外类型名与 JSON 字段名保持不变（前端契约冻结），
+// 数据来源改为 MetricsCollector 的内存快照，读路径不再阻塞。
+type (
+	SystemStats  = services.SystemSnapshot
+	CPUStats     = services.CPUSnapshot
+	MemoryStats  = services.MemorySnapshot
+	DiskStats    = services.DiskSnapshot
+	NetworkStats = services.NetworkSnapshot
+	HostStats    = services.HostSnapshot
 )
 
 // GetSystemStats returns current system statistics
 func GetSystemStats(c *gin.Context) {
-	stats := SystemStats{}
-
-	// Get CPU stats
-	cpuPercent, err := cpu.Percent(time.Second, false)
-	if err == nil && len(cpuPercent) > 0 {
-		stats.CPU.UsagePercent = cpuPercent[0]
+	stats, ok := currentSnapshot(c)
+	if !ok {
+		return
 	}
 
-	cpuCounts, err := cpu.Counts(true)
-	if err == nil {
-		stats.CPU.Cores = cpuCounts
-	}
-
-	cpuPerCore, err := cpu.Percent(time.Second, true)
-	if err == nil {
-		stats.CPU.PerCore = cpuPerCore
-	}
-
-	// Get memory stats
-	memInfo, err := mem.VirtualMemory()
-	if err == nil {
-		stats.Memory.Total = memInfo.Total
-		stats.Memory.Used = memInfo.Used
-		stats.Memory.Available = memInfo.Available
-		stats.Memory.UsedPercent = memInfo.UsedPercent
-	}
-
-	// Get disk stats (root partition)
-	diskInfo, err := disk.Usage("/")
-	if err == nil {
-		stats.Disk.Total = diskInfo.Total
-		stats.Disk.Used = diskInfo.Used
-		stats.Disk.Free = diskInfo.Free
-		stats.Disk.UsedPercent = diskInfo.UsedPercent
-	}
-
-	// Get network stats
-	netInfo, err := net.IOCounters(false)
-	if err == nil && len(netInfo) > 0 {
-		currentStats := &netInfo[0]
-		stats.Network.BytesSent = currentStats.BytesSent
-		stats.Network.BytesRecv = currentStats.BytesRecv
-		stats.Network.PacketsSent = currentStats.PacketsSent
-		stats.Network.PacketsRecv = currentStats.PacketsRecv
-
-		// Calculate network speed
-		now := time.Now()
-		if prevNetStats != nil && !prevNetStatsTime.IsZero() {
-			timeDiff := now.Sub(prevNetStatsTime).Seconds()
-			if timeDiff > 0 {
-				stats.Network.SpeedSent = float64(currentStats.BytesSent-prevNetStats.BytesSent) / timeDiff
-				stats.Network.SpeedRecv = float64(currentStats.BytesRecv-prevNetStats.BytesRecv) / timeDiff
-			}
-		}
-
-		// Update previous stats
-		prevNetStats = currentStats
-		prevNetStatsTime = now
-	}
-
-	// Get host info
-	hostInfo, err := host.Info()
-	if err == nil {
-		stats.Host.Hostname = hostInfo.Hostname
-		stats.Host.OS = hostInfo.OS
-		stats.Host.Platform = hostInfo.Platform
-		stats.Host.PlatformVersion = hostInfo.PlatformVersion
-		stats.Host.Uptime = hostInfo.Uptime
-		stats.Host.BootTime = hostInfo.BootTime
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "System statistics retrieved successfully",
-		"data":    stats,
-	})
+	response.Success(c, "System statistics retrieved successfully", stats)
 }
 
 // GetCPUStats returns detailed CPU statistics
 func GetCPUStats(c *gin.Context) {
-	stats := CPUStats{}
-
-	cpuPercent, err := cpu.Percent(time.Second, false)
-	if err == nil && len(cpuPercent) > 0 {
-		stats.UsagePercent = cpuPercent[0]
+	stats, ok := currentSnapshot(c)
+	if !ok {
+		return
 	}
 
-	cpuCounts, err := cpu.Counts(true)
-	if err == nil {
-		stats.Cores = cpuCounts
-	}
-
-	cpuPerCore, err := cpu.Percent(time.Second, true)
-	if err == nil {
-		stats.PerCore = cpuPerCore
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "CPU statistics retrieved successfully",
-		"data":    stats,
-	})
+	response.Success(c, "CPU statistics retrieved successfully", stats.CPU)
 }
 
 // GetMemoryStats returns memory statistics
 func GetMemoryStats(c *gin.Context) {
-	memInfo, err := mem.VirtualMemory()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Failed to retrieve memory statistics",
-			"error":   err.Error(),
-		})
+	stats, ok := currentSnapshot(c)
+	if !ok {
 		return
 	}
 
-	stats := MemoryStats{
-		Total:       memInfo.Total,
-		Used:        memInfo.Used,
-		Available:   memInfo.Available,
-		UsedPercent: memInfo.UsedPercent,
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "Memory statistics retrieved successfully",
-		"data":    stats,
-	})
+	response.Success(c, "Memory statistics retrieved successfully", stats.Memory)
 }
 
 // GetDiskStats returns disk statistics
 func GetDiskStats(c *gin.Context) {
-	diskInfo, err := disk.Usage("/")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Failed to retrieve disk statistics",
-			"error":   err.Error(),
-		})
+	stats, ok := currentSnapshot(c)
+	if !ok {
 		return
 	}
 
-	stats := DiskStats{
-		Total:       diskInfo.Total,
-		Used:        diskInfo.Used,
-		Free:        diskInfo.Free,
-		UsedPercent: diskInfo.UsedPercent,
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "Disk statistics retrieved successfully",
-		"data":    stats,
-	})
+	response.Success(c, "Disk statistics retrieved successfully", stats.Disk)
 }
 
 // GetNetworkStats returns network statistics
 func GetNetworkStats(c *gin.Context) {
-	netInfo, err := net.IOCounters(false)
-	if err != nil || len(netInfo) == 0 {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Failed to retrieve network statistics",
-			"error":   err.Error(),
-		})
+	stats, ok := currentSnapshot(c)
+	if !ok {
 		return
 	}
 
-	currentStats := &netInfo[0]
-	stats := NetworkStats{
-		BytesSent:   currentStats.BytesSent,
-		BytesRecv:   currentStats.BytesRecv,
-		PacketsSent: currentStats.PacketsSent,
-		PacketsRecv: currentStats.PacketsRecv,
+	response.Success(c, "Network statistics retrieved successfully", stats.Network)
+}
+
+// currentSnapshot 读取采集器快照；采集器尚未就绪时返回 false 并已写出 503。
+func currentSnapshot(c *gin.Context) (SystemStats, bool) {
+	collector := services.GetMetricsCollector()
+	if !collector.Ready() {
+		response.ServiceUnavailable(c, "System metrics are not available yet, please retry shortly")
+		return SystemStats{}, false
 	}
-
-	// Calculate network speed
-	now := time.Now()
-	if prevNetStats != nil && !prevNetStatsTime.IsZero() {
-		timeDiff := now.Sub(prevNetStatsTime).Seconds()
-		if timeDiff > 0 {
-			stats.SpeedSent = float64(currentStats.BytesSent-prevNetStats.BytesSent) / timeDiff
-			stats.SpeedRecv = float64(currentStats.BytesRecv-prevNetStats.BytesRecv) / timeDiff
-		}
-	}
-
-	// Update previous stats
-	prevNetStats = currentStats
-	prevNetStatsTime = now
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "Network statistics retrieved successfully",
-		"data":    stats,
-	})
+	return collector.Snapshot(), true
 }
 
 // GetMonitoringHistory returns historical monitoring records
@@ -299,41 +109,35 @@ func GetMonitoringHistory(c *gin.Context) {
 		since = time.Now().Add(-24 * time.Hour)
 	}
 
-	var records []models.MonitoringRecord
-	query := database.DB.Order("created_at DESC").Limit(limit)
-	
-	if !since.IsZero() {
-		query = query.Where("created_at >= ?", since)
-	}
-	
+	records := make([]models.MonitoringRecord, 0, limit)
+	query := database.DB.Order("created_at DESC").Limit(limit).Where("created_at >= ?", since)
+
 	if err := query.Find(&records).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Failed to retrieve monitoring history",
-			"error":   err.Error(),
-		})
+		response.InternalError(c, "Failed to retrieve monitoring history: "+err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "Monitoring history retrieved successfully",
-		"data": gin.H{
-			"records": records,
-			"count":   len(records),
-		},
+	response.Success(c, "Monitoring history retrieved successfully", gin.H{
+		"records": records,
+		"count":   len(records),
 	})
 }
 
 // ChartDataPoint represents a simplified data point for chart rendering
 type ChartDataPoint struct {
-	Timestamp        int64   `json:"timestamp"`         // Unix timestamp
-	CPUPercent       float64 `json:"cpu_percent"`       // CPU usage percentage
-	MemoryPercent    float64 `json:"memory_percent"`    // Memory usage percentage
-	DiskPercent      float64 `json:"disk_percent"`      // Disk usage percentage
+	Timestamp        int64   `json:"timestamp"`          // Unix timestamp
+	CPUPercent       float64 `json:"cpu_percent"`        // CPU usage percentage
+	MemoryPercent    float64 `json:"memory_percent"`     // Memory usage percentage
+	DiskPercent      float64 `json:"disk_percent"`       // Disk usage percentage
 	NetworkSpeedSent float64 `json:"network_speed_sent"` // Network upload speed (bytes/s)
 	NetworkSpeedRecv float64 `json:"network_speed_recv"` // Network download speed (bytes/s)
 }
+
+// 图表返回的最大点数：按小时范围动态选桶，保证前端渲染量可控
+const maxChartPoints = 720
+
+// 候选时间桶（秒），从细到粗；挑选出的桶需让总点数不超过 maxChartPoints
+var chartBucketSeconds = []int64{1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400}
 
 // GetMonitoringChart returns simplified monitoring data for chart rendering
 func GetMonitoringChart(c *gin.Context) {
@@ -353,40 +157,105 @@ func GetMonitoringChart(c *gin.Context) {
 	if err := database.DB.Where("created_at >= ?", since).
 		Order("created_at ASC").
 		Find(&records).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Failed to retrieve monitoring data",
-			"error":   err.Error(),
-		})
+		response.InternalError(c, "Failed to retrieve monitoring data: "+err.Error())
 		return
 	}
 
-	// Convert to chart data points
-	chartData := make([]ChartDataPoint, len(records))
-	for i, record := range records {
-		chartData[i] = ChartDataPoint{
-			Timestamp:        time.Time(record.CreatedAt).Unix(),
-			CPUPercent:       record.CPUUsagePercent,
-			MemoryPercent:    record.MemoryUsedPercent,
-			DiskPercent:      record.DiskUsedPercent,
-			NetworkSpeedSent: record.NetworkSpeedSent,
-			NetworkSpeedRecv: record.NetworkSpeedRecv,
+	points := downsampleRecords(records, hours)
+
+	response.Success(c, "Chart data retrieved successfully", gin.H{
+		"points": points,
+		"count":  len(points),
+		"period": gin.H{
+			"hours": hours,
+			"from":  since.Unix(),
+			"to":    time.Now().Unix(),
+		},
+	})
+}
+
+// downsampleRecords 把原始记录按时间桶聚合成图表点：CPU/内存/磁盘/网络速率取桶内平均，
+// 时间戳取桶起点，总点数不超过 maxChartPoints。
+func downsampleRecords(records []models.MonitoringRecord, hours float64) []ChartDataPoint {
+	if len(records) == 0 {
+		return []ChartDataPoint{}
+	}
+
+	bucket := pickBucketSeconds(hours, records)
+
+	type bucketAcc struct {
+		ts                                      int64
+		count                                   int64
+		cpu, memory, disk, speedSent, speedRecv float64
+	}
+
+	// records 已按 created_at ASC 排序，桶键单调递增，用切片保序即可，无需 map 排序
+	accumulators := make([]*bucketAcc, 0, len(records))
+	indexByBucket := make(map[int64]int, len(records))
+
+	for _, record := range records {
+		ts := time.Time(record.CreatedAt).Unix()
+		bucketTS := ts - ts%bucket
+
+		idx, ok := indexByBucket[bucketTS]
+		if !ok {
+			accumulators = append(accumulators, &bucketAcc{ts: bucketTS})
+			idx = len(accumulators) - 1
+			indexByBucket[bucketTS] = idx
+		}
+
+		acc := accumulators[idx]
+		acc.count++
+		acc.cpu += record.CPUUsagePercent
+		acc.memory += record.MemoryUsedPercent
+		acc.disk += record.DiskUsedPercent
+		acc.speedSent += record.NetworkSpeedSent
+		acc.speedRecv += record.NetworkSpeedRecv
+	}
+
+	points := make([]ChartDataPoint, 0, len(accumulators))
+	for _, acc := range accumulators {
+		if acc.count == 0 {
+			continue
+		}
+		divisor := float64(acc.count)
+		points = append(points, ChartDataPoint{
+			Timestamp:        acc.ts,
+			CPUPercent:       acc.cpu / divisor,
+			MemoryPercent:    acc.memory / divisor,
+			DiskPercent:      acc.disk / divisor,
+			NetworkSpeedSent: acc.speedSent / divisor,
+			NetworkSpeedRecv: acc.speedRecv / divisor,
+		})
+	}
+
+	return points
+}
+
+// pickBucketSeconds 依据查询范围与记录实际跨度选择时间桶大小，保证聚合后的点数不超过上限。
+// 采样间隔可配置，仅按 hours 选桶在采样更密时会突破上限，因此同时参考记录的真实时间跨度。
+func pickBucketSeconds(hours float64, records []models.MonitoringRecord) int64 {
+	windowSeconds := int64(hours * 3600)
+	if windowSeconds <= 0 {
+		windowSeconds = 1
+	}
+
+	if len(records) > 1 {
+		first := time.Time(records[0].CreatedAt).Unix()
+		last := time.Time(records[len(records)-1].CreatedAt).Unix()
+		if span := last - first; span > windowSeconds {
+			windowSeconds = span
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "Chart data retrieved successfully",
-		"data": gin.H{
-			"points": chartData,
-			"count":  len(chartData),
-			"period": gin.H{
-				"hours": hours,
-				"from":  since.Unix(),
-				"to":    time.Now().Unix(),
-			},
-		},
-	})
+	for _, candidate := range chartBucketSeconds {
+		if windowSeconds/candidate <= maxChartPoints {
+			return candidate
+		}
+	}
+
+	// 窗口超过候选表覆盖范围时，按窗口均分为 maxChartPoints 个桶
+	return (windowSeconds + maxChartPoints - 1) / maxChartPoints
 }
 
 // GetMonitoringStats returns aggregated monitoring statistics
@@ -407,23 +276,15 @@ func GetMonitoringStats(c *gin.Context) {
 	if err := database.DB.Where("created_at >= ?", since).
 		Order("created_at ASC").
 		Find(&records).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Failed to retrieve monitoring statistics",
-			"error":   err.Error(),
-		})
+		response.InternalError(c, "Failed to retrieve monitoring statistics: "+err.Error())
 		return
 	}
 
 	if len(records) == 0 {
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"message": "No monitoring data available for the specified time range",
-			"data": gin.H{
-				"records": []models.MonitoringRecord{},
-				"stats": gin.H{
-					"count": 0,
-				},
+		response.Success(c, "No monitoring data available for the specified time range", gin.H{
+			"records": []models.MonitoringRecord{},
+			"stats": gin.H{
+				"count": 0,
 			},
 		})
 		return
@@ -457,30 +318,26 @@ func GetMonitoringStats(c *gin.Context) {
 
 	count := float64(len(records))
 
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "Monitoring statistics retrieved successfully",
-		"data": gin.H{
-			"records": records,
-			"stats": gin.H{
-				"count": len(records),
-				"period": gin.H{
-					"hours": hours,
-					"from":  since.Unix(),
-					"to":    time.Now().Unix(),
-				},
-				"cpu": gin.H{
-					"average": totalCPU / count,
-					"max":     maxCPU,
-				},
-				"memory": gin.H{
-					"average": totalMemory / count,
-					"max":     maxMemory,
-				},
-				"disk": gin.H{
-					"average": totalDisk / count,
-					"max":     maxDisk,
-				},
+	response.Success(c, "Monitoring statistics retrieved successfully", gin.H{
+		"records": records,
+		"stats": gin.H{
+			"count": len(records),
+			"period": gin.H{
+				"hours": hours,
+				"from":  since.Unix(),
+				"to":    time.Now().Unix(),
+			},
+			"cpu": gin.H{
+				"average": totalCPU / count,
+				"max":     maxCPU,
+			},
+			"memory": gin.H{
+				"average": totalMemory / count,
+				"max":     maxMemory,
+			},
+			"disk": gin.H{
+				"average": totalDisk / count,
+				"max":     maxDisk,
 			},
 		},
 	})

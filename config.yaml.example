@@ -1,12 +1,22 @@
 server:
   port: 8080
+  # gin 运行模式：debug / release / test，默认 release
+  mode: "release"
+  # 允许的跨域来源，["*"] 表示不限制
+  cors_origins:
+    - "*"
 
 database:
-  host: localhost
-  port: 5432
-  user: root
-  password: root123
-  name: cloud_platform
+  # SQLite 数据库文件路径。相对路径基于进程工作目录：
+  #   本地开发（仓库根目录运行）-> ./data/cloud_platform.db
+  #   Docker（WORKDIR=/root）  -> /root/data/cloud_platform.db，对应挂载 ./data:/root/data
+  path: "./data/cloud_platform.db"
+  # 最大连接数：1 表示串行访问，可彻底规避 SQLite 的 "database is locked"
+  max_open_conns: 1
+  # 写锁等待超时（毫秒），并发写入时的重试窗口
+  busy_timeout_ms: 5000
+  # WAL 日志模式，提升读写并发下的表现（关闭则回落为 DELETE 模式）
+  wal: true
 
 jwt:
   secret: "supersecretkey"
@@ -18,7 +28,17 @@ network:
   base_port: 51820
   out_interface: "eth0"
   server_ip: "1.2.3.4"  # 替换为您的服务器公网IP地址
+  dns: "1.1.1.1, 8.8.8.8"  # 下发给客户端的 DNS
+
+monitoring:
+  interval_seconds: 10        # 指标采样间隔
+  retention_hours: 168        # 监控记录保留时长（7 天）
+  cleanup_interval_hours: 24  # 过期记录清理周期
 
 default:
-  username: admin@platform.com
-  password: password
+  admin_email: "admin@platform.com"
+  admin_password: "password"
+  admin_name: "admin"
+  # 兼容旧字段名：username 等价 admin_email，password 等价 admin_password
+  # username: "admin@platform.com"
+  # password: "password"
