@@ -44,6 +44,10 @@ jobs:
           - name: frontend
             context: ./frontend
             dockerfile: ./frontend/Dockerfile
+          # 单容器镜像：Nginx + 后端 + 工具链打包在一起
+          - name: allinone
+            context: .
+            dockerfile: ./Dockerfile.allinone
 
     steps:
       - name: Checkout

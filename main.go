@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -75,6 +76,14 @@ func main() {
 
 	// Setup routes
 	routes.SetupRoutes(r)
+
+	// 单进程/单容器模式：设置 WEB_ROOT 后由后端直接托管前端构建产物
+	if webRoot := strings.TrimSpace(os.Getenv("WEB_ROOT")); webRoot != "" {
+		if err := routes.MountFrontend(r, webRoot); err != nil {
+			log.Fatalf("Failed to serve frontend from %s: %v", webRoot, err)
+		}
+		log.Printf("Serving frontend from %s", webRoot)
+	}
 
 	// Health check endpoint（存活探针）
 	r.GET("/health", func(c *gin.Context) {
