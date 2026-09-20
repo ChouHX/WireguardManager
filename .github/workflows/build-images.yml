@@ -1,4 +1,4 @@
-name: Build and Push Images
+name: Build and Push Image
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
       - 'main.go'
       - 'go.mod'
       - 'go.sum'
-      - 'Dockerfile.backend'
+      - 'Dockerfile'
       - 'frontend/**'
       - '.github/workflows/build-images.yml'
   workflow_dispatch:
@@ -29,25 +29,11 @@ env:
 
 jobs:
   build:
-    name: build-${{ matrix.name }}
+    name: build-image
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: backend
-            context: .
-            dockerfile: ./Dockerfile.backend
-          - name: frontend
-            context: ./frontend
-            dockerfile: ./frontend/Dockerfile
-          # 单容器镜像：Nginx + 后端 + 工具链打包在一起
-          - name: allinone
-            context: .
-            dockerfile: ./Dockerfile.allinone
 
     steps:
       - name: Checkout
@@ -75,7 +61,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}-${{ matrix.name }}
+          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
           tags: |
             type=ref,event=branch
             type=sha,format=short
@@ -84,8 +70,8 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.dockerfile }}
+          context: .
+          file: ./Dockerfile
           # 手动触发时可指定多平台；push 触发时固定 amd64
           platforms: ${{ inputs.platforms || 'linux/amd64' }}
           push: true
@@ -94,5 +80,5 @@ jobs:
           # CI runner 在国外，前端构建走官方源更快
           build-args: |
             NPM_REGISTRY=https://registry.npmjs.org
-          cache-from: type=gha,scope=${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          cache-from: type=gha,scope=allinone
+          cache-to: type=gha,mode=max,scope=allinone

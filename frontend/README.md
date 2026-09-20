@@ -60,26 +60,23 @@ npm run preview      # 本地预览构建产物
 
 | 变量 | 作用域 | 说明 |
 | --- | --- | --- |
-| `VITE_API_BASE_URL` | 浏览器运行时 | 接口基地址，留空表示同源（生产由 Nginx 反代 `/api`） |
+| `VITE_API_BASE_URL` | 浏览器运行时 | 接口基地址，留空表示同源（生产与 API 同端口） |
 | `VITE_API_PROXY_TARGET` | 开发服务器 | Vite dev proxy 的目标后端地址 |
-| `BACKEND_UPSTREAM` | 容器运行时 | Nginx 反代的后端地址，由 docker-compose 注入 |
 
-## 容器部署
+## 生产部署
 
-前端镜像为两阶段构建：Node 构建静态产物 → Nginx 托管并反代后端。
+前端不再单独打包成镜像：仓库根的 `Dockerfile` 会先构建本目录的静态产物，再交给后端进程托管（后端以 `WEB_ROOT` 模式提供页面、SPA 回退与 `/api`）。因此整个系统只有一个容器、一个端口。
 
 ```bash
 # 在仓库根目录
-docker compose build frontend
-docker compose up -d frontend
+docker compose up -d          # 使用 GHCR 预构建镜像
+docker compose up -d --build  # 本地从源码构建
 # 访问 http://<host>:3000
 ```
 
-Nginx 配置位于 `nginx/default.conf.template`，其中 `${BACKEND_UPSTREAM}` 在容器启动时由官方镜像的 envsubst 机制注入。
-
 ## 设计约定
 
-- 品牌色为 WireGuard 标识的氧化红（Mantine 主题 `wg` 色板），数据高亮使用 `teal`，状态色沿用 Mantine 语义色。
+- 品牌色为 WireGuard 红向中国红靠拢的色板（Mantine 主题 `wg`，主色 `#dc2318`），数据高亮使用 `teal`，状态色沿用 Mantine 语义色。
 - 侧边栏在明暗两种配色下都保持深色控制台质感；主内容区背景带网格纹理，避免大面积纯色。
 - 首屏元素统一用 `.wm-rise` 做一次性错峰浮现；数值/密钥/ID 统一加 `.wm-mono` 等宽字体避免抖动。
 - 所有文案走 i18n，`zh.json` 与 `en.json` 键必须保持一致。

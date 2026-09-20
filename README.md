@@ -58,20 +58,20 @@ flowchart LR
     API["Gin API :8080<br/>嵌入式 SQLite"]
   end
 
-  WEB["控制台 · Nginx :3000"]
+  WEB["控制台 · :3000"]
   INET((互联网))
 
   D1 -- "WireGuard UDP" --> W1
   D2 -- "WireGuard UDP" --> W2
   W1 -- "veth + NAT" --> INET
   W2 -- "veth + NAT" --> INET
-  WEB -- "/api 反向代理" --> API
+  WEB -- "同进程提供页面与 /api" --> API
   API -. "netns / wg 编排与统计" .-> ns1
   API -. "netns / wg 编排与统计" .-> ns2
 ```
 
 - **后端**（Go + Gin + GORM）：以 host 网络运行，负责 WireGuard 操作、命名空间编排与数据持久化。
-- **前端**（React + Vite + Mantine）：构建为静态产物，由 Nginx 托管并反向代理 `/api`。
+- **前端**（React + Vite + Mantine）：构建为静态产物，由后端一并托管（`WEB_ROOT` 模式），无需单独的 Web 容器。
 - **数据库**（嵌入式 SQLite）：单文件持久化，随镜像一起部署，无需外部服务。
 - **共享命名空间**（`/var/run/netns`）：宿主可直接管理容器创建的 netns。
 
@@ -104,24 +104,18 @@ cp config.yaml.example config.yaml
 #   network.out_interface 网卡名（可用 ip route show default 查看）
 ```
 
-部署方式二选一：
-
-**单容器（推荐）** —— 后端直接托管前端产物，只有一个进程、一个端口，没有 Nginx 反代、没有跨容器网络：
+启动服务（单容器：一个进程同时提供控制台与 API，只占一个端口）：
 
 ```bash
-docker compose -f docker-compose.allinone.yml up -d
-# 本地源码构建加 --build；使用 ./deploy.sh 则走双容器方案
-```
-
-**双容器** —— 前端由独立 Nginx 容器托管，可以单独更新前端而不动后端：
-
-```bash
-docker compose up -d
-# 或使用带环境检查与部署自检的脚本
+docker compose up -d                 # 使用 GHCR 预构建镜像
+# 或本地从源码构建
+docker compose up -d --build
+# 或使用带环境检查与部署自检的脚本（等价于上面两种，默认拉取镜像）
 ./deploy.sh
+./deploy.sh --build
 ```
 
-两种方式访问地址一致：`http://<SERVER_IP>:3000`，默认账号 `admin@platform.com` / `password`（**首次登录后请立即修改**）。
+访问 `http://<SERVER_IP>:3000`，默认账号 `admin@platform.com` / `password`（**首次登录后请立即修改**）。
 
 镜像标签可用 `WM_IMAGE_TAG` 指定，默认 `latest`，也可用 `sha-<短哈希>` 回滚到某次构建：
 
@@ -232,11 +226,9 @@ network:
 │   ├── routes/                 # 路由注册
 │   └── services/               # netns / WireGuard / 监控采样 / 存活探测
 ├── frontend/                   # React + Vite + MantineUI 源码
-├── internal/routes/frontend.go # 单容器模式下由后端托管前端产物
-├── docker-compose.allinone.yml # 单容器（后端同时提供控制台与 API）
-├── docker-compose.yml          # 双容器：使用 GHCR 预构建镜像
-├── docker-compose.build.yml    # 双容器：本地构建编排
-├── Dockerfile.allinone         # 单容器镜像定义
+├── internal/routes/frontend.go # 由后端托管前端产物（WEB_ROOT 模式）
+├── Dockerfile                  # 单容器镜像：Go 后端 + 前端产物 + wg 工具链
+├── docker-compose.yml          # 单容器编排（host 网络、一个端口）
 ├── wg_config/                  # 挂载至 /etc/wg_config
 └── data/                       # SQLite 数据目录（容器内 /root/data）
 ```
@@ -270,11 +262,10 @@ go test ./internal/...
 ## 常用命令
 
 ```bash
-docker compose ps                     # 查看服务状态
-docker compose logs -f backend        # 跟踪后端日志
-docker compose logs -f frontend       # 跟踪前端日志
+docker compose ps                             # 查看服务状态
+docker compose logs -f app                    # 跟踪服务日志
 docker compose pull && docker compose up -d   # 更新到最新镜像
-docker compose down                   # 停止服务
+docker compose down                           # 停止服务
 ```
 
 ## 常见问题

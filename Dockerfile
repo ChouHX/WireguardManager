@@ -1,12 +1,12 @@
 # 单容器镜像：后端直接托管前端静态产物 + WireGuard 工具链。
 #
-# 与双容器方案的区别：前端不再单独用 Nginx 托管，而是由后端进程一并提供，
+# 前端不再单独用 Nginx 托管，而是由后端进程一并提供，
 # 于是整个系统只有一个进程、一个端口、一个容器——不需要进程管理器，
 # 停止信号由 Go 直接处理，关闭过程天然优雅。
 #
-#   docker build -f Dockerfile.allinone -t wireguardmanager-allinone:latest .
+#   docker build -t wireguardmanager:latest .
 #
-# 构建上下文为仓库根目录，配合 Dockerfile.allinone.dockerignore 使用。
+# 构建上下文为仓库根目录。
 
 # ---------- 阶段 1：构建前端静态产物 ----------
 FROM node:22-alpine AS web-builder
