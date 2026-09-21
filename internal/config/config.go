@@ -1,11 +1,14 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -151,12 +154,12 @@ func defaultConfig() *Config {
 		},
 		Liveness: LivenessConfig{
 			Enabled:                 true,
-			IntervalSeconds:         2,    // 每 2 秒探测一轮
-			ProbeTimeoutMS:          1000, // 单次探测超时 1 秒
+			IntervalSeconds:         2,     // 每 2 秒探测一轮
+			ProbeTimeoutMS:          1000,  // 单次探测超时 1 秒
 			ProbePort:               49151, // 高位端口，多数情况下未监听，内核必回 RST
-			OfflineThreshold:        2,    // 连续两次无响应即判离线（约 4 秒）
-			HandshakeTimeoutSeconds: 180,  // 握手时效，作为最后的弱信号
-			TrafficStaleSeconds:     40,   // 保护窗口需大于保活间隔（默认 25s）
+			OfflineThreshold:        2,     // 连续两次无响应即判离线（约 4 秒）
+			HandshakeTimeoutSeconds: 180,   // 握手时效，作为最后的弱信号
+			TrafficStaleSeconds:     40,    // 保护窗口需大于保活间隔（默认 25s）
 			MaxConcurrency:          16,
 		},
 		// Default 段留空，由 normalize 依次完成 legacy 字段兼容与内置默认值填充
@@ -187,11 +190,74 @@ func LoadConfig(configPath string) error {
 
 	AppConfig = cfg
 
+	// 未显式配置密钥时，从数据目录读取或自动生成一份并持久化，
+	// 这样部署侧无需再关心 JWT 密钥。
+	if err := cfg.ensureJWTSecret(); err != nil {
+		return err
+	}
 	if err := cfg.validateJWT(); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// ensureJWTSecret 保证存在可用的签名密钥，取值顺序：
+//  1. 显式配置（config.yaml 的 jwt.secret 或 WM_JWT_SECRET）；
+//  2. 数据目录下持久化的 jwt.secret 文件；
+//  3. 自动生成 32 字节随机密钥并写入该文件（0600）。
+//
+// 第 3 步失败（目录不可写）时降级为进程内临时密钥并告警，不阻断启动。
+func (c *Config) ensureJWTSecret() error {
+	if strings.TrimSpace(c.JWT.Secret) != "" {
+		return nil
+	}
+
+	keyPath := c.jwtSecretPath()
+
+	if data, err := os.ReadFile(keyPath); err == nil {
+		if secret := strings.TrimSpace(string(data)); len(secret) >= MinJWTSecretLength {
+			c.JWT.Secret = secret
+			log.Printf("Using the persisted JWT secret from %s", keyPath)
+			return nil
+		}
+		log.Printf("Warning: persisted JWT secret in %s is too short, generating a new one", keyPath)
+	}
+
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Errorf("failed to generate JWT secret: %w", err)
+	}
+	secret := hex.EncodeToString(buf)
+
+	if dir := filepath.Dir(keyPath); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			log.Printf("Warning: cannot create %s to persist JWT secret: %v; using an ephemeral key "+
+				"(tokens will be invalidated on restart)", dir, err)
+			c.JWT.Secret = secret
+			return nil
+		}
+	}
+
+	if err := os.WriteFile(keyPath, []byte(secret+"\n"), 0o600); err != nil {
+		log.Printf("Warning: cannot write %s: %v; using an ephemeral key "+
+			"(tokens will be invalidated on restart)", keyPath, err)
+		c.JWT.Secret = secret
+		return nil
+	}
+
+	log.Printf("Generated a JWT secret and saved it to %s (keep this file with your data)", keyPath)
+	c.JWT.Secret = secret
+	return nil
+}
+
+// jwtSecretPath 密钥文件的存放位置：与数据库同目录，随数据一起备份。
+func (c *Config) jwtSecretPath() string {
+	dir := filepath.Dir(strings.TrimSpace(c.Database.Path))
+	if dir == "" || dir == "." {
+		dir = "."
+	}
+	return filepath.Join(dir, "jwt.secret")
 }
 
 // normalize 填充空值，保证下游拿到的配置始终可用。
@@ -361,7 +427,8 @@ func setBool(dst *bool, envKey string) {
 func (c *Config) validateJWT() error {
 	secret := c.JWT.Secret
 	if strings.TrimSpace(secret) == "" {
-		return errors.New("jwt.secret is required: set jwt.secret in config.yaml or the WM_JWT_SECRET environment variable")
+		// ensureJWTSecret 已保证有值，走到这里说明密钥来源异常
+		return errors.New("jwt secret is unavailable: set WM_JWT_SECRET or ensure the data directory is writable")
 	}
 	if len(secret) < MinJWTSecretLength {
 		return fmt.Errorf("jwt.secret is invalid: got %d characters, at least %d required", len(secret), MinJWTSecretLength)

@@ -29,11 +29,9 @@ services:
       - /lib/modules:/lib/modules:ro
       - /var/run/netns:/var/run/netns:shared
     environment:
-      # 必填：JWT 签名密钥（未设置时 compose 会直接报错提示）
-      - WM_JWT_SECRET=${WM_JWT_SECRET:?请在 .env 中设置 WM_JWT_SECRET，可用 openssl rand -hex 32 生成}
+      # 端口与数据目录可用 .env 覆盖；其余运行参数在管理界面「系统设置」中调整
       - WM_SERVER_PORT=${WM_SERVER_PORT:-3000}
-      - WM_SERVER_MODE=${WM_SERVER_MODE:-release}
-      - WM_DB_PATH=${WM_DB_PATH:-./data/cloud_platform.db}
+      - WM_DB_PATH=/root/data/cloud_platform.db
       - WM_NETWORK_CONFIG_DIR=/etc/wg_config
       - WM_DEFAULT_ADMIN_EMAIL=${WM_DEFAULT_ADMIN_EMAIL:-admin@platform.com}
       - WM_DEFAULT_ADMIN_PASSWORD=${WM_DEFAULT_ADMIN_PASSWORD:-password}

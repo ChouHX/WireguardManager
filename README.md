@@ -35,7 +35,7 @@
 - **秒级在线感知** —— 每 2 秒进入设备所属命名空间，向其隧道地址的高位端口发起一次 TCP 探测（纯 Go `setns`，无外部进程）：对端内核回 RST 或完成握手即为在线，连续无响应即离线，约 4 秒完成，不受 WireGuard 握手周期拖累。
 - **流量与资源监控** —— 设备握手状态、收发流量、系统 CPU / 内存 / 磁盘 / 网络趋势一屏掌握。
 - **精细管控** —— 设备粒度限速、启用禁用、网关转发模式、AllowedIPs 网段自定义，支持为单个设备启用预共享密钥（PSK）以增强抗中间人与抗量子能力。
-- **配置即改即生效** —— 网段、出口网卡、公网 IP、DNS、监控与在线判定参数都在管理界面「系统设置」中调整并持久化到数据库；部署侧只需一个 `.env`，填上 JWT 密钥即可。
+- **零配置部署** —— 开箱即用：JWT 密钥首次启动自动生成并随数据一起持久化，网络与监控等参数全部在管理界面「系统设置」中调整；部署侧无需任何配置文件。
 - **现代控制台** —— React 19 + Mantine，紧凑式布局、明暗主题、中英文双语、移动端自适应。
 - **轻量部署** —— 嵌入式 SQLite（纯 Go 驱动，无需 CGO、无需独立数据库服务）；支持单容器部署，一个进程同时提供控制台与 API。镜像由 CI 构建并推送 GHCR。
 
@@ -97,9 +97,8 @@ flowchart LR
 git clone https://github.com/ChouHX/WireguardManager.git
 cd WireguardManager
 
-cp .env.example .env
-# 只需填一项：JWT 签名密钥（./deploy.sh 会自动生成）
-#   WM_JWT_SECRET=...    可用 openssl rand -hex 32 生成
+# 零配置即可启动：端口 3000、数据写入 ./data、JWT 密钥首次启动自动生成
+# 需要覆盖默认值时再执行 cp .env.example .env
 ```
 
 启动服务（单容器：一个进程同时提供控制台与 API，只占一个端口）：
@@ -128,17 +127,17 @@ WM_IMAGE_TAG=sha-2df1b06 docker compose up -d
 
 ### 配置项
 
-配置分两层：**启动参数**通过 `.env`（容器部署）或环境变量传入，见 [`.env.example`](.env.example)；**运行时可调项**在管理界面「系统设置」中维护并持久化到数据库。非容器部署时也仍然支持 `config.yaml`，字段与环境变量同名（下划线转下划线），文件不存在时自动降级为环境变量与内置默认值。
+配置分两层：**启动参数**通过 `.env` 或环境变量传入（全部可选，见 [`.env.example`](.env.example)）；**运行时可调项**在管理界面「系统设置」中维护并持久化到数据库。非容器部署时也仍支持 `config.yaml`，文件不存在时自动降级为环境变量与内置默认值。
 
 **启动参数**（通过 `.env` / 环境变量传入，改动需重启）：
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `WM_JWT_SECRET` | 无 | **必填**，少于 8 字符会拒绝启动（`deploy.sh` 会自动生成） |
+| `WM_JWT_SECRET` | 自动生成 | 留空时首次启动自动生成并保存到 `data/jwt.secret`（0600），无需手工配置 |
 | `WM_SERVER_PORT` | `3000` | 控制台与 API 共用端口 |
 | `WM_SERVER_MODE` | `release` | Gin 运行模式：`debug` / `release` / `test` |
 | `WM_SERVER_CORS_ORIGINS` | `*` | 允许的跨域来源，逗号分隔 |
-| `WM_DB_PATH` | `./data/cloud_platform.db` | SQLite 文件路径 |
+| `WM_DB_PATH` | `./data/cloud_platform.db` | SQLite 文件路径（容器内为 `/root/data/...`） |
 | `WM_DB_MAX_OPEN_CONNS` | `1` | 连接数，1 表示串行访问，规避 `database is locked` |
 | `WM_DB_BUSY_TIMEOUT_MS` | `5000` | 写锁等待超时 |
 | `WM_DB_WAL` | `true` | 是否启用 WAL 日志模式 |
@@ -237,7 +236,7 @@ network:
 ├── docker-compose.yml          # 默认编排：拉取 GHCR 镜像
 ├── docker-compose.build.yml    # 本地源码构建编排
 ├── wg_config/                  # 挂载至 /etc/wg_config
-└── data/                       # SQLite 数据目录（容器内 /root/data）
+└── data/                       # 数据目录：SQLite 数据库 + 自动生成的 jwt.secret
 ```
 
 ## 本地开发
@@ -297,15 +296,18 @@ docker compose down                           # 停止服务
 **忘记管理员密码？**
 停掉服务，删除 `data/cloud_platform.db` 后重启，会重新创建默认管理员（同时也会清空所有数据）；或在数据库中直接更新 `password_hash`。
 
+**JWT 密钥放在哪？**
+未显式配置时，后端首次启动会生成一个随机密钥并写入 `data/jwt.secret`（权限 0600），之后每次启动复用同一个密钥，因此重启不会导致登录失效。**备份数据时请连同这个文件一起复制**；若它丢失，所有已签发的 Token 会失效，用户需要重新登录。想自己掌控密钥时，设置 `WM_JWT_SECRET` 即可覆盖（优先级高于文件）。若数据目录不可写，后端会退回进程内临时密钥并打印告警，服务仍可启动，但重启后需要重新登录。
+
 **如何备份数据？**
-SQLite 数据都在 `data/` 目录，停服务后整体复制即可（建议连 `-wal`、`-shm` 一起复制）。
+SQLite 数据与 JWT 密钥都在 `data/` 目录，停服务后整体复制即可（建议连 `-wal`、`-shm` 一起复制）。
 
 **可以多个后端副本共享同一数据库吗？**
 SQLite 面向单实例部署设计。需要横向扩容时应改用支持并发的数据库，并重新评估 netns 的归属。
 
 ## 安全提示
 
-- `jwt.secret` 必须替换为随机长字符串，默认示例值会被拒绝或告警。
+- JWT 密钥默认自动生成并持久化到 `data/jwt.secret`（0600）；若通过 `WM_JWT_SECRET` 显式指定，请使用足够长的随机字符串。
 - 默认管理员密码请在首次登录后立即修改。
 - 后端需要 `privileged` 与 host 网络才能管理 netns、iptables，请仅在受控主机上部署，并限制控制台的网络暴露面（建议置于 TLS 反向代理之后）。
 - 设备配置中包含私钥，下载链路应确保可信。

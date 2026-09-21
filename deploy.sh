@@ -91,31 +91,20 @@ fi
 # 容器以特权 + host 网络运行并共享 /var/run/netns，因此能直接管理宿主的网络环境。
 echo -e "  ${GREEN}提示:${NC} 宿主机无需安装 wg 命令，工具链由后端容器提供（第 8 步会自检）"
 
-# 准备环境变量文件
-echo -e "${YELLOW}[5/8] 准备环境变量文件...${NC}"
+# 检查部署变量（可选）
+echo -e "${YELLOW}[5/8] 检查部署变量...${NC}"
 
-if [ ! -f ".env" ]; then
-    if [ -f ".env.example" ]; then
-        cp .env.example .env
-        echo -e "${GREEN}✓ 已从 .env.example 创建 .env${NC}"
-    else
-        echo -e "${RED}错误: 未找到 .env.example${NC}"
-        exit 1
+if [ -f ".env" ]; then
+    echo -e "${GREEN}✓ 使用现有的 .env${NC}"
+    # 兼容旧版：.env 里若是空的 WM_JWT_SECRET，补一个随机值
+    if grep -qE '^WM_JWT_SECRET=$' .env; then
+        secret=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+        sed -i "s|^WM_JWT_SECRET=.*|WM_JWT_SECRET=${secret}|" .env
+        echo -e "${GREEN}✓ 已为旧版 .env 补全 WM_JWT_SECRET${NC}"
     fi
 else
-    echo -e "${GREEN}✓ .env 文件已存在${NC}"
-fi
-
-# JWT 密钥：为空时自动生成，避免部署后因缺少密钥而无法启动
-if grep -qE '^WM_JWT_SECRET=.+' .env; then
-    echo -e "${GREEN}✓ WM_JWT_SECRET 已设置${NC}"
-else
-    secret=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
-    if sed -i "s|^WM_JWT_SECRET=.*|WM_JWT_SECRET=${secret}|" .env; then
-        echo -e "${GREEN}✓ 已自动生成 WM_JWT_SECRET${NC}"
-    else
-        echo -e "${YELLOW}提示: 请手动在 .env 中设置 WM_JWT_SECRET${NC}"
-    fi
+    echo -e "${GREEN}✓ 未提供 .env，使用内置默认值${NC}"
+    echo "    端口 3000 · 数据 ./data · JWT 密钥首次启动自动生成"
 fi
 
 echo -e "  ${GREEN}提示:${NC} 网络、监控、在线判定等参数已移至管理界面「系统设置」，无需在此配置"
