@@ -81,7 +81,7 @@ interface PeerFormValues {
 
 const EMPTY_FORM: PeerFormValues = {
   allowed_ips: [],
-  persistent_keepalive: 25,
+  persistent_keepalive: 10,
   comment: '',
   enable_forwarding: false,
   forward_interface: '',

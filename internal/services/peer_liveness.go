@@ -18,15 +18,17 @@ import (
 //   - 探测间隔 2s：满足"秒级感知"，同时不会给对端与自身带来可观开销；
 //   - 单次超时 1s：小于探测间隔，保证一轮探测不会拖到下一轮；
 //   - 离线确认 2 次：约 4 秒完成判定，规避单次丢包造成的误报；
-//   - 流量窗口 30s：略大于客户端默认保活间隔（PersistentKeepalive=25s），
-//     用于在探测被对端防火墙拦截时，靠对端发来的保活流量继续维持在线
-//     （只统计接收方向的流量，避免本机探测包自身造成的误判）；
+//   - 流量窗口 13s：必须大于客户端保活间隔（默认 PersistentKeepalive=10s），
+//     用于在探测被对端防火墙拦截时，靠对端发来的保活流量继续维持在线。
+//     这个窗口直接决定离线判定的最坏耗时（窗口 + 确认次数×间隔），
+//     所以保活间隔越小、窗口就能越紧、判定越快；调整两者时必须保持
+//     窗口 > 保活间隔，否则在线设备会在两次保活之间被误判离线；
 //   - 并发上限 16：限制同一时刻 fork 的探测数量。
 const (
 	livenessInterval      = 2 * time.Second
 	livenessProbeTimeout  = time.Second
 	livenessOfflineAfter  = 2
-	livenessTrafficStale  = 30 * time.Second
+	livenessTrafficStale  = 13 * time.Second
 	livenessMaxConcurrent = 16
 )
 
