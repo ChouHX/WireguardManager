@@ -352,16 +352,12 @@
     "clientAllowedIps": "Client AllowedIPs",
     "monitoringInterval": "Sample interval (s)",
     "monitoringRetention": "Retention (hours)",
-    "livenessEnabled": "Enable liveness check",
-    "livenessInterval": "Recheck interval (s)",
-    "livenessOfflineThreshold": "Offline confirmations",
     "jwtExpireHours": "Token lifetime (hours)",
     "defaultPresharedKey": "Use preshared key for new devices",
     "livenessProbePort": "Probe port",
-    "livenessTrafficStale": "Traffic hold window (s)",
-    "livenessProbeTimeout": "Probe timeout (ms)",
     "on": "Enabled",
     "off": "Disabled",
-    "allowedIpsPlaceholder": "Empty = derive from device subnet"
+    "allowedIpsPlaceholder": "Empty = derive from device subnet",
+    "livenessNote": "Other timing parameters (interval, timeout, offline confirmations, traffic window) are decided internally by the server."
   }
 }

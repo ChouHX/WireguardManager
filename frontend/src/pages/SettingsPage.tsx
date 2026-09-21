@@ -38,12 +38,7 @@ const LABEL_KEY: Record<string, string> = {
   'network.client_allowed_ips': 'clientAllowedIps',
   'monitoring.interval_seconds': 'monitoringInterval',
   'monitoring.retention_hours': 'monitoringRetention',
-  'liveness.enabled': 'livenessEnabled',
-  'liveness.interval_seconds': 'livenessInterval',
-  'liveness.probe_timeout_ms': 'livenessProbeTimeout',
   'liveness.probe_port': 'livenessProbePort',
-  'liveness.offline_threshold': 'livenessOfflineThreshold',
-  'liveness.traffic_stale_seconds': 'livenessTrafficStale',
   'jwt.expire_hours': 'jwtExpireHours',
   'wireguard.default_preshared_key': 'defaultPresharedKey',
 };
@@ -263,6 +258,13 @@ export default function SettingsPage() {
               </Text>
             </Group>
             <Divider mb="xs" variant="dashed" />
+
+            {/* 在线判定只有一项：补一行说明，讲清其余参数为何无需配置 */}
+            {group === 'liveness' ? (
+              <Text fz={11.5} c="dimmed" mb={6}>
+                {t('settings.livenessNote')}
+              </Text>
+            ) : null}
 
             {/* 统一的行结构：左侧标签固定列宽，右侧控件，逐行对齐 */}
             <Stack gap={2}>

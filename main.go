@@ -242,12 +242,7 @@ func settingsDefaults() map[string]string {
 		services.SettingMonitoringInterval:  strconv.Itoa(cfg.Monitoring.IntervalSeconds),
 		services.SettingMonitoringRetention: strconv.Itoa(cfg.Monitoring.RetentionHours),
 
-		services.SettingLivenessEnabled:          strconv.FormatBool(cfg.Liveness.Enabled),
-		services.SettingLivenessInterval:         strconv.Itoa(cfg.Liveness.IntervalSeconds),
-		services.SettingLivenessProbeTimeout:     strconv.Itoa(cfg.Liveness.ProbeTimeoutMS),
-		services.SettingLivenessProbePort:        strconv.Itoa(cfg.Liveness.ProbePort),
-		services.SettingLivenessTrafficStale:     strconv.Itoa(cfg.Liveness.TrafficStaleSeconds),
-		services.SettingLivenessOfflineThreshold: strconv.Itoa(cfg.Liveness.OfflineThreshold),
+		services.SettingLivenessProbePort: strconv.Itoa(cfg.Liveness.ProbePort),
 
 		services.SettingJWTExpireHours: strconv.Itoa(cfg.JWT.ExpireHours),
 

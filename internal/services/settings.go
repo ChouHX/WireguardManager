@@ -26,12 +26,8 @@ const (
 	SettingMonitoringInterval  = "monitoring.interval_seconds"
 	SettingMonitoringRetention = "monitoring.retention_hours"
 
-	SettingLivenessEnabled          = "liveness.enabled"
-	SettingLivenessInterval         = "liveness.interval_seconds"
-	SettingLivenessProbeTimeout     = "liveness.probe_timeout_ms"
-	SettingLivenessProbePort        = "liveness.probe_port"
-	SettingLivenessTrafficStale     = "liveness.traffic_stale_seconds"
-	SettingLivenessOfflineThreshold = "liveness.offline_threshold"
+	// 在线判定只需一个端口：其余节奏参数与实现强相关，由服务端内部决定
+	SettingLivenessProbePort = "liveness.probe_port"
 
 	SettingJWTExpireHours = "jwt.expire_hours"
 
@@ -52,6 +48,11 @@ type SettingDef struct {
 // 会因白名单校验而报 "Unknown setting key"。
 var deprecatedSettings = []string{
 	"liveness.handshake_timeout_seconds",
+	"liveness.enabled",
+	"liveness.interval_seconds",
+	"liveness.probe_timeout_ms",
+	"liveness.traffic_stale_seconds",
+	"liveness.offline_threshold",
 }
 
 // SettingDefs 全部可运行时调整的配置项定义。
@@ -66,12 +67,7 @@ var SettingDefs = []SettingDef{
 	{Key: SettingMonitoringInterval, Type: "int", Group: "monitoring", Min: 1, Max: 3600},
 	{Key: SettingMonitoringRetention, Type: "int", Group: "monitoring", Min: 1, Max: 8760},
 
-	{Key: SettingLivenessEnabled, Type: "bool", Group: "liveness"},
-	{Key: SettingLivenessInterval, Type: "int", Group: "liveness", Min: 1, Max: 300},
-	{Key: SettingLivenessProbeTimeout, Type: "int", Group: "liveness", Min: 100, Max: 10000},
 	{Key: SettingLivenessProbePort, Type: "int", Group: "liveness", Min: 1, Max: 65535},
-	{Key: SettingLivenessTrafficStale, Type: "int", Group: "liveness", Min: 1, Max: 3600},
-	{Key: SettingLivenessOfflineThreshold, Type: "int", Group: "liveness", Min: 1, Max: 60},
 
 	{Key: SettingJWTExpireHours, Type: "int", Group: "auth", Min: 1, Max: 8760},
 

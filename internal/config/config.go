@@ -91,23 +91,17 @@ type MonitoringConfig struct {
 // 宿主机命名空间，而隧道网段只在各账号的 netns 内可达，探测包根本到不了
 // 对端，导致设备明明在线却被判离线。
 type LivenessConfig struct {
-	Enabled bool `yaml:"enabled"` // 是否启用在线判定
-	// IntervalSeconds 判定间隔：每轮在各账号命名空间内主动探测一次
-	IntervalSeconds int `yaml:"interval_seconds"`
-	// ProbeTimeoutMS 单次 TCP 探测超时
-	ProbeTimeoutMS int `yaml:"probe_timeout_ms"`
-	// ProbePort 探测端口：选高位空闲端口，避免与对端真实服务冲突或误判
+	// Enabled 是否启用在线判定。属于部署决策（探测会产生 TCP 连接），
+	// 用 liveness.enabled / WM_LIVENESS_ENABLED 控制，不在管理界面暴露。
+	Enabled bool `yaml:"enabled"`
+	// ProbePort 探测端口：唯一需要人工介入的参数，可在管理界面调整。
+	// 选高位空闲端口，避免与对端真实服务冲突或被安全策略拦截。
 	ProbePort int `yaml:"probe_port"`
-	// OfflineThreshold 连续多少次「无响应且无流量」后才置为离线
-	OfflineThreshold int `yaml:"offline_threshold"`
-	// HandshakeTimeoutSeconds 已不参与在线判定（客户端断开后握手时间只是停住，
-	// 用它判定会导致滞后），保留字段仅为兼容旧配置。
-	HandshakeTimeoutSeconds int `yaml:"handshake_timeout_seconds"`
-	// TrafficStaleSeconds 流量保护窗口：最近这段时间内有流量则仍视为在线
-	TrafficStaleSeconds int `yaml:"traffic_stale_seconds"`
-	// MaxConcurrency 并发探测上限
-	MaxConcurrency int `yaml:"max_concurrency"`
 }
+
+// 说明：判定节奏、超时、离线确认次数与流量窗口均与实现强相关，
+// 由服务端内部决定（见 services/peer_liveness.go 顶部的常量），不再作为配置项。
+// 这样用户只需关心一个端口，其余交给实现保证。
 
 // DefaultConfig 平台默认管理员账号
 type DefaultConfig struct {
@@ -154,14 +148,8 @@ func defaultConfig() *Config {
 			CleanupIntervalHours: 24,
 		},
 		Liveness: LivenessConfig{
-			Enabled:                 true,
-			IntervalSeconds:         2,     // 每 2 秒探测一轮
-			ProbeTimeoutMS:          1000,  // 单次探测超时 1 秒
-			ProbePort:               49151, // 高位端口，多数情况下未监听，内核必回 RST
-			OfflineThreshold:        2,     // 连续两次无响应即判离线（约 4 秒）
-			HandshakeTimeoutSeconds: 180,   // 握手时效，作为最后的弱信号
-			TrafficStaleSeconds:     40,    // 保护窗口需大于保活间隔（默认 25s）
-			MaxConcurrency:          16,
+			Enabled:   true,
+			ProbePort: 49151, // 高位端口，多数情况下未监听，内核必回 RST
 		},
 		// Default 段留空，由 normalize 依次完成 legacy 字段兼容与内置默认值填充
 		Default: DefaultConfig{},
@@ -313,28 +301,8 @@ func (c *Config) normalize() {
 		c.Monitoring.CleanupIntervalHours = 24
 	}
 
-	// 探测参数兜底。Enabled 不在此处兜底：默认值已在 defaultConfig 注入，
-	// 强制置 true 会覆盖用户在配置中显式关闭探测的意图。
-	if c.Liveness.IntervalSeconds <= 0 {
-		c.Liveness.IntervalSeconds = 2
-	}
-	if c.Liveness.ProbeTimeoutMS <= 0 {
-		c.Liveness.ProbeTimeoutMS = 1000
-	}
 	if c.Liveness.ProbePort <= 0 || c.Liveness.ProbePort > 65535 {
 		c.Liveness.ProbePort = 49151
-	}
-	if c.Liveness.HandshakeTimeoutSeconds <= 0 {
-		c.Liveness.HandshakeTimeoutSeconds = 180
-	}
-	if c.Liveness.TrafficStaleSeconds <= 0 {
-		c.Liveness.TrafficStaleSeconds = 30
-	}
-	if c.Liveness.OfflineThreshold <= 0 {
-		c.Liveness.OfflineThreshold = 2
-	}
-	if c.Liveness.MaxConcurrency <= 0 {
-		c.Liveness.MaxConcurrency = 16
 	}
 
 	if c.JWT.ExpireHours <= 0 {
@@ -379,13 +347,7 @@ func applyEnvOverrides(c *Config) {
 	setInt(&c.Monitoring.CleanupIntervalHours, "WM_MONITORING_CLEANUP_INTERVAL_HOURS")
 
 	setBool(&c.Liveness.Enabled, "WM_LIVENESS_ENABLED")
-	setInt(&c.Liveness.IntervalSeconds, "WM_LIVENESS_INTERVAL_SECONDS")
-	setInt(&c.Liveness.ProbeTimeoutMS, "WM_LIVENESS_PROBE_TIMEOUT_MS")
 	setInt(&c.Liveness.ProbePort, "WM_LIVENESS_PROBE_PORT")
-	setInt(&c.Liveness.HandshakeTimeoutSeconds, "WM_LIVENESS_HANDSHAKE_TIMEOUT_SECONDS")
-	setInt(&c.Liveness.TrafficStaleSeconds, "WM_LIVENESS_TRAFFIC_STALE_SECONDS")
-	setInt(&c.Liveness.OfflineThreshold, "WM_LIVENESS_OFFLINE_THRESHOLD")
-	setInt(&c.Liveness.MaxConcurrency, "WM_LIVENESS_MAX_CONCURRENCY")
 
 	setString(&c.Default.AdminEmail, "WM_DEFAULT_ADMIN_EMAIL")
 	setString(&c.Default.AdminPassword, "WM_DEFAULT_ADMIN_PASSWORD")
@@ -493,11 +455,8 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.Default.AdminPassword) == "" {
 		problems = append(problems, "default.admin_password must not be empty")
 	}
-	if c.Liveness.HandshakeTimeoutSeconds < 1 {
-		problems = append(problems, fmt.Sprintf("liveness.handshake_timeout_seconds must be >= 1, got %d", c.Liveness.HandshakeTimeoutSeconds))
-	}
-	if c.Liveness.MaxConcurrency < 1 {
-		problems = append(problems, fmt.Sprintf("liveness.max_concurrency must be >= 1, got %d", c.Liveness.MaxConcurrency))
+	if c.Liveness.ProbePort < 1 || c.Liveness.ProbePort > 65535 {
+		problems = append(problems, fmt.Sprintf("liveness.probe_port must be within 1..65535, got %d", c.Liveness.ProbePort))
 	}
 
 	if len(problems) > 0 {
@@ -538,25 +497,6 @@ func (m MonitoringConfig) Retention() time.Duration {
 
 func (m MonitoringConfig) CleanupInterval() time.Duration {
 	return time.Duration(m.CleanupIntervalHours) * time.Hour
-}
-
-func (l LivenessConfig) Interval() time.Duration {
-	return time.Duration(l.IntervalSeconds) * time.Second
-}
-
-// HandshakeTimeout 握手超过该时长未更新即不再作为在线依据
-func (l LivenessConfig) HandshakeTimeout() time.Duration {
-	return time.Duration(l.HandshakeTimeoutSeconds) * time.Second
-}
-
-// ProbeTimeout 单次主动探测超时
-func (l LivenessConfig) ProbeTimeout() time.Duration {
-	return time.Duration(l.ProbeTimeoutMS) * time.Millisecond
-}
-
-// TrafficStale 流量保护窗口
-func (l LivenessConfig) TrafficStale() time.Duration {
-	return time.Duration(l.TrafficStaleSeconds) * time.Second
 }
 
 // GetDSN 返回 SQLite 连接串（glebarez/sqlite 支持 _pragma= 形式的内联参数）。

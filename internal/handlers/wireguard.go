@@ -897,11 +897,10 @@ func GetLiveness(c *gin.Context) {
 
 	if !livenessEnabled() {
 		response.Success(c, "Liveness probing is disabled", gin.H{
-			"enabled":                   false,
-			"online":                    0,
-			"total":                     0,
-			"handshake_timeout_seconds": config.AppConfig.Liveness.HandshakeTimeoutSeconds,
-			"peers":                     gin.H{},
+			"enabled": false,
+			"online":  0,
+			"total":   0,
+			"peers":   gin.H{},
 		})
 		return
 	}
@@ -936,11 +935,10 @@ func GetLiveness(c *gin.Context) {
 	}
 
 	response.Success(c, "Liveness retrieved successfully", gin.H{
-		"enabled":                   true,
-		"online":                    online,
-		"total":                     len(peers),
-		"handshake_timeout_seconds": config.AppConfig.Liveness.HandshakeTimeoutSeconds,
-		"peers":                     peerResults,
+		"enabled": true,
+		"online":  online,
+		"total":   len(peers),
+		"peers":   peerResults,
 	})
 }
 

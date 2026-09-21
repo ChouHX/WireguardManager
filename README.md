@@ -150,10 +150,7 @@ WM_IMAGE_TAG=sha-2df1b06 docker compose up -d
 | | `network.dns` | 下发给客户端的 DNS |
 | | `network.client_allowed_ips` | 客户端 AllowedIPs，留空按设备所在网段推导 |
 | 监控 | `monitoring.interval_seconds` / `retention_hours` | 采样间隔与记录保留时长 |
-| 在线判定 | `liveness.enabled` | 是否启用在线判定 |
-| | `liveness.interval_seconds` / `probe_timeout_ms` / `probe_port` | 探测间隔、超时与探测端口 |
-| | `liveness.offline_threshold` | 连续多少次无响应判离线 |
-| | `liveness.traffic_stale_seconds` | 流量保护窗口（略大于客户端保活间隔） |
+| 在线判定 | `liveness.probe_port` | 探测端口（唯一需要人工介入的参数） |
 | 鉴权 | `jwt.expire_hours` | 登录有效期 |
 | 设备默认值 | `wireguard.default_preshared_key` | 新建设备是否默认启用预共享密钥 |
 
@@ -280,13 +277,13 @@ docker compose down                           # 停止服务
 注册需要创建命名空间、veth 对、wg 接口并拉起路由与 NAT 规则，通常需要数秒；任一步失败会整体回滚，不会留下残留资源。
 
 **在线状态是怎么判定的？**
-每 `liveness.interval_seconds`（默认 2 秒），后端会 `setns` 进入设备所属的网络命名空间，向它的隧道地址加一个高位端口（`liveness.probe_port`，默认 49151）发起一次 TCP 连接，判定顺序为：
+服务端每 2 秒进入设备所属的网络命名空间，向它的隧道地址加探测端口（`liveness.probe_port`，默认 49151）发起一次 TCP 连接，判定顺序为：
 
 1. 完成握手，或收到 `connection refused`（对端内核回 RST）→ **在线**，并显示往返耗时；
-2. 探测无响应，但近 `traffic_stale_seconds`（默认 30 秒）内隧道仍有流量（保活包即可）→ **在线**；
-3. 两者都不满足 → 计一次失败，连续 `offline_threshold` 次（默认 2 次）后判**离线**。
+2. 探测无响应，但近 30 秒内隧道仍有流量（保活包即可）→ **在线**；
+3. 两者都不满足 → 计一次失败，连续 2 次（约 4 秒）后判**离线**。
 
-设备列表里会同时显示判定依据（探测有响应 / 隧道有流量 / 近期有流量 / 探测无响应），便于排查。
+节奏、超时、确认次数与流量窗口都与实现强相关，由服务端内部决定，不开放配置——用户只需关心探测端口这一个参数。设备列表里会显示判定依据（探测有响应 / 隧道有流量 / 近期有流量 / 探测无响应），便于排查。
 
 **为什么必须在设备的命名空间里探测？**
 每台设备的隧道地址（如 `10.100.0.2`）只存在于它所属账号的 netns 内，宿主机路由表里没有该网段——从宿主命名空间发包会落到默认路由上，无论对端是否在线都只会超时。后端在容器内以特权模式运行并共享 `/var/run/netns`，用 `setns` 切入目标命名空间，探测完再切回，整个过程是纯 Go 的，不 fork 任何外部命令。

@@ -352,16 +352,12 @@
     "clientAllowedIps": "客户端 AllowedIPs",
     "monitoringInterval": "采样间隔（秒）",
     "monitoringRetention": "记录保留时长（小时）",
-    "livenessEnabled": "启用在线判定",
-    "livenessInterval": "复核间隔（秒）",
-    "livenessOfflineThreshold": "离线确认次数",
     "jwtExpireHours": "登录有效期（小时）",
     "defaultPresharedKey": "新设备默认启用预共享密钥",
     "livenessProbePort": "探测端口",
-    "livenessTrafficStale": "流量保护窗口（秒）",
-    "livenessProbeTimeout": "单次探测超时（毫秒）",
     "on": "已启用",
     "off": "已关闭",
-    "allowedIpsPlaceholder": "留空按设备所在网段推导"
+    "allowedIpsPlaceholder": "留空按设备所在网段推导",
+    "livenessNote": "其余节奏参数（探测间隔、超时、离线确认次数、流量窗口）由服务端内部决定，无需配置。"
   }
 }

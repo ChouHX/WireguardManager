@@ -12,6 +12,23 @@ import (
 	"gorm.io/gorm"
 )
 
+// 判定参数由服务端内部决定，不对外暴露为配置项。
+//
+// 取值依据：
+//   - 探测间隔 2s：满足"秒级感知"，同时不会给对端与自身带来可观开销；
+//   - 单次超时 1s：小于探测间隔，保证一轮探测不会拖到下一轮；
+//   - 离线确认 2 次：约 4 秒完成判定，规避单次丢包造成的误报；
+//   - 流量窗口 30s：略大于客户端默认保活间隔（PersistentKeepalive=25s），
+//     用于在探测被对端防火墙拦截时，靠保活流量继续维持在线；
+//   - 并发上限 16：限制同一时刻 fork 的探测数量。
+const (
+	livenessInterval      = 2 * time.Second
+	livenessProbeTimeout  = time.Second
+	livenessOfflineAfter  = 2
+	livenessTrafficStale  = 30 * time.Second
+	livenessMaxConcurrent = 16
+)
+
 // LivenessState 设备在线状态
 type LivenessState string
 
@@ -68,13 +85,7 @@ type LivenessMonitor struct {
 	db *gorm.DB
 	wg *WireguardService
 
-	interval        time.Duration
-	probeTimeout    time.Duration
-	probePort       int
-	offlineAfter    int
-	handshakeWindow time.Duration
-	trafficStale    time.Duration
-	maxConcurrency  int
+	probePort int
 
 	mu              sync.RWMutex
 	results         map[string]*LivenessResult
@@ -91,12 +102,7 @@ func NewLivenessMonitor(db *gorm.DB, cfg config.LivenessConfig) *LivenessMonitor
 	return &LivenessMonitor{
 		db:              db,
 		wg:              NewWireguardService(config.AppConfig.Network.ConfigDir),
-		interval:        cfg.Interval(),
-		probeTimeout:    cfg.ProbeTimeout(),
-		offlineAfter:    cfg.OfflineThreshold,
-		handshakeWindow: cfg.HandshakeTimeout(),
-		trafficStale:    cfg.TrafficStale(),
-		maxConcurrency:  cfg.MaxConcurrency,
+		probePort:       cfg.ProbePort,
 		results:         make(map[string]*LivenessResult),
 		traffic:         make(map[string]trafficSample),
 		lastTrafficSeen: make(map[string]time.Time),
@@ -111,7 +117,7 @@ func (m *LivenessMonitor) Start(parent context.Context) {
 	go func() {
 		defer m.done.Done()
 
-		ticker := time.NewTicker(m.currentInterval())
+		ticker := time.NewTicker(livenessInterval)
 		defer ticker.Stop()
 
 		m.checkAll()
@@ -119,11 +125,6 @@ func (m *LivenessMonitor) Start(parent context.Context) {
 		for {
 			select {
 			case <-ticker.C:
-				if interval := m.currentInterval(); interval != m.interval {
-					m.interval = interval
-					ticker.Reset(interval)
-					log.Printf("Liveness monitor interval updated to %v", interval)
-				}
 				m.checkAll()
 			case <-m.ctx.Done():
 				return
@@ -132,7 +133,7 @@ func (m *LivenessMonitor) Start(parent context.Context) {
 	}()
 
 	log.Printf("Liveness monitor started: interval=%v probe_timeout=%v probe_port=%d offline_after=%d traffic_stale=%v",
-		m.interval, m.probeTimeout, m.probePort, m.offlineAfter, m.trafficStale)
+		livenessInterval, livenessProbeTimeout, m.probePort, livenessOfflineAfter, livenessTrafficStale)
 }
 
 // Stop 停止判定循环。
@@ -148,46 +149,13 @@ func (m *LivenessMonitor) ProbeEnabled() bool {
 	return m.ctx != nil
 }
 
-// ---- 运行时参数（支持在管理界面调整） ----
-
-func (m *LivenessMonitor) currentInterval() time.Duration {
-	seconds := GetSettings().Int(SettingLivenessInterval, int(m.interval/time.Second))
-	if seconds < 1 {
-		seconds = 2
-	}
-	return time.Duration(seconds) * time.Second
-}
-
-func (m *LivenessMonitor) currentProbeTimeout() time.Duration {
-	ms := GetSettings().Int(SettingLivenessProbeTimeout, int(m.probeTimeout/time.Millisecond))
-	if ms < 100 {
-		ms = 1000
-	}
-	return time.Duration(ms) * time.Millisecond
-}
-
+// currentProbePort 探测端口是唯一可配置项（管理界面可改）。
 func (m *LivenessMonitor) currentProbePort() int {
 	port := GetSettings().Int(SettingLivenessProbePort, m.probePort)
 	if port <= 0 || port > 65535 {
-		port = 49151
+		return 49151
 	}
 	return port
-}
-
-func (m *LivenessMonitor) currentTrafficStale() time.Duration {
-	seconds := GetSettings().Int(SettingLivenessTrafficStale, int(m.trafficStale/time.Second))
-	if seconds < 1 {
-		seconds = 30
-	}
-	return time.Duration(seconds) * time.Second
-}
-
-func (m *LivenessMonitor) offlineConfirmations() int {
-	count := GetSettings().Int(SettingLivenessOfflineThreshold, m.offlineAfter)
-	if count < 1 {
-		count = 2
-	}
-	return count
 }
 
 // checkAll 遍历所有账号，探测设备并更新状态。
@@ -199,8 +167,8 @@ func (m *LivenessMonitor) checkAll() {
 	}
 
 	now := time.Now()
-	timeout := m.currentProbeTimeout()
-	sem := make(chan struct{}, m.maxConcurrency)
+	timeout := livenessProbeTimeout
+	sem := make(chan struct{}, livenessMaxConcurrent)
 	var wg sync.WaitGroup
 
 	for _, server := range servers {
@@ -321,7 +289,7 @@ func (m *LivenessMonitor) evaluate(
 		// 统计持续读取失败（账号禁用、网络未就绪）达阈值后标记为未知，
 		// 避免界面长期停留在过期结论上。
 		result.NoStats++
-		if result.NoStats >= m.offlineConfirmations()*3 {
+		if result.NoStats >= livenessOfflineAfter*3 {
 			result.State = LivenessUnknown
 		}
 		return
@@ -339,12 +307,12 @@ func (m *LivenessMonitor) evaluate(
 		// 保护窗口：最近这段时间内隧道仍有数据往来（保活包即可）。
 		// 刻意不使用握手时间：客户端断开后 last handshake 只是停住而不会清空，
 		// 拿它当依据会让离线判定滞后一个重协商周期（最长 180 秒）。
-		if lastSeen, ok := m.lastTrafficSeen[key]; ok && now.Sub(lastSeen) <= m.currentTrafficStale() {
+		if lastSeen, ok := m.lastTrafficSeen[key]; ok && now.Sub(lastSeen) <= livenessTrafficStale {
 			result.Reason = ReasonRecent
 		} else {
 			result.Failures++
 			result.Reason = ReasonTimeout
-			if result.Failures >= m.offlineConfirmations() {
+			if result.Failures >= livenessOfflineAfter {
 				result.State = LivenessOffline
 			}
 			return

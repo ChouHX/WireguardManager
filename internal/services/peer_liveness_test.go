@@ -11,13 +11,10 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+// 判定参数已是内部常量，夹具只需初始化容器字段。
 func newTestMonitor() *LivenessMonitor {
 	return &LivenessMonitor{
-		interval:        2 * time.Second,
-		probeTimeout:    time.Second,
-		offlineAfter:    2,
-		trafficStale:    30 * time.Second,
-		maxConcurrency:  4,
+		probePort:       49151,
 		results:         make(map[string]*LivenessResult),
 		traffic:         make(map[string]trafficSample),
 		lastTrafficSeen: make(map[string]time.Time),
