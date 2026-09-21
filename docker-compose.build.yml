@@ -5,7 +5,8 @@
 # 日常部署请使用默认的 docker-compose.yml（拉取预构建镜像）。
 # 两个文件的服务名与容器名一致，切换前先执行 docker compose down。
 #
-# 其余说明与默认编排一致：无需配置文件，端口 3000，数据写入 ./data。
+# 端口可用 WM_SERVER_PORT 覆盖，默认 3000：
+#   WM_SERVER_PORT=8080 docker compose -f docker-compose.build.yml up -d --build
 services:
   app:
     build:
@@ -29,3 +30,5 @@ services:
       - ./data:/root/data
       - /lib/modules:/lib/modules:ro
       - /var/run/netns:/var/run/netns:shared
+    environment:
+      - WM_SERVER_PORT=${WM_SERVER_PORT:-3000}

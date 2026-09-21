@@ -106,6 +106,14 @@ docker compose -f docker-compose.build.yml up -d --build
 
 启动后使用内置默认值：端口 `3000`，数据写入 `./data`，JWT 密钥首次启动自动生成并保存到 `./data/jwt.secret`。
 
+指定端口（三选一）：
+
+```bash
+WM_SERVER_PORT=8080 docker compose up -d    # 临时指定
+echo "WM_SERVER_PORT=8080" >> .env          # 写进 .env（自动读取）
+# 或直接改 docker-compose.yml 里的默认值
+```
+
 访问 `http://<SERVER_IP>:3000`，默认账号 `admin@platform.com` / `password`（**首次登录后请立即修改**）。
 
 镜像标签可用 `WM_IMAGE_TAG` 指定，默认 `latest`，也可用 `sha-<短哈希>` 回滚到某次构建：
@@ -124,7 +132,7 @@ WM_IMAGE_TAG=sha-2df1b06 docker compose up -d
 
 | 变量 | 默认值 | 覆盖方式 |
 | --- | --- | --- |
-| 端口 | `3000` | 给 `app` 服务加 `environment: ["WM_SERVER_PORT=8080"]` |
+| 端口 | `3000` | `WM_SERVER_PORT=8080 docker compose up -d`，或写进 `.env`，或改 compose 默认值 |
 | 数据目录 | `./data` | 改 `docker-compose.yml` 中 `./data:/root/data` 的左侧 |
 | 配置目录 | `./wg_config` | 改 `docker-compose.yml` 中 `./wg_config:/etc/wg_config` 的左侧 |
 | JWT 密钥 | 自动生成 | 首次启动写入 `data/jwt.secret`；也可用 `WM_JWT_SECRET` 显式指定 |
@@ -154,11 +162,13 @@ WM_IMAGE_TAG=sha-2df1b06 docker compose up -d
 
 ### 环境变量
 
-所有参数都可选用 `WM_*` 环境变量覆盖（优先级高于配置文件与内置默认值）。容器部署时最常用的是端口：
+所有参数都可选用 `WM_*` 环境变量覆盖（优先级高于配置文件与内置默认值）。容器部署时最常用的是端口，compose 已默认透传这一项：
 
 ```bash
 WM_SERVER_PORT=8080 docker compose up -d
 ```
+
+其余变量未在 compose 中声明，需要时按同样格式加进 `environment:` 即可。
 
 其余变量与其内置默认值可在 [`internal/config/config.go`](internal/config/config.go) 的 `defaultConfig()` 中查到；管理界面「系统设置」里的各项也都能用同名环境变量设定初始值（首次启动写入数据库后即以界面配置为准）。
 

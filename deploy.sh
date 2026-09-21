@@ -11,8 +11,9 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# 解析部署模式
+# 部署模式
 BUILD_LOCAL=false
+COMPOSE_FILE="docker-compose.yml"
 for arg in "$@"; do
     case "$arg" in
         --build|-b) BUILD_LOCAL=true ;;
@@ -117,7 +118,8 @@ if [ "$BUILD_LOCAL" = true ]; then
     echo "使用 docker-compose.build.yml 从源码编译，可能需要几分钟..."
     echo ""
 
-    UP_CMD="docker compose -f docker-compose.build.yml up -d --build"
+    COMPOSE_FILE="docker-compose.build.yml"
+    UP_CMD="docker compose -f ${COMPOSE_FILE} up -d --build"
 else
     echo -e "${YELLOW}[6/7] 拉取 GHCR 镜像并启动服务...${NC}"
     echo "使用默认 docker-compose.yml（预构建镜像）..."
@@ -141,7 +143,8 @@ if $UP_CMD; then
     echo -e "${GREEN}  部署完成！${NC}"
     echo -e "${GREEN}========================================${NC}"
     echo ""
-    echo "访问地址: http://$(hostname -I | awk '{print $1}'):3000/"
+    PORT=$(docker compose -f "${COMPOSE_FILE:-docker-compose.yml}" exec -T app printenv WM_SERVER_PORT 2>/dev/null | tr -d '\r\n')
+    echo "访问地址: http://$(hostname -I | awk '{print $1}'):${PORT:-3000}/"
     echo "默认账号: admin@platform.com"
     echo "默认密码: password"
     echo ""
@@ -158,11 +161,6 @@ fi
 echo -e "${YELLOW}[7/7] 运行部署自检...${NC}"
 
 SELF_CHECK_FAILED=0
-if [ "$BUILD_LOCAL" = true ]; then
-    COMPOSE_FILE="docker-compose.build.yml"
-else
-    COMPOSE_FILE="docker-compose.yml"
-fi
 
 # 优先 curl，其次 wget；返回 2 表示宿主机两者都没有
 http_ok() {

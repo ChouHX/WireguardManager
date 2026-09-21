@@ -8,14 +8,15 @@
 # JWT 密钥首次启动自动生成并保存到 ./data/jwt.secret，
 # 网络、监控、在线判定等参数在管理界面「系统设置」中调整。
 #
-# 常用调整（直接改本文件即可）：
-#   换宿主机端口    给 app 加上  environment: ["WM_SERVER_PORT=8080"]
-#   换数据目录      改下面的 ./data:/root/data 冒号左侧
-#   换配置目录      改下面的 ./wg_config:/etc/wg_config 冒号左侧
-#   回滚镜像版本    把 image 里的 latest 换成具体标签，如 sha-2648b94
+# 指定端口（三选一）：
+#   1. 临时指定：WM_SERVER_PORT=8080 docker compose up -d
+#   2. 写进 .env：echo "WM_SERVER_PORT=8080" >> .env
+#   3. 改本文件：把下面的 ${WM_SERVER_PORT:-3000} 换成 8080
+#
+# 其它调整：数据/配置目录改下面冒号左侧；回滚镜像版本改 image 的标签。
 services:
   app:
-    image: ghcr.io/chouhx/wireguardmanager:latest
+    image: ghcr.io/chouhx/wireguardmanager:${WM_IMAGE_TAG:-latest}
     container_name: cloud-app
     restart: unless-stopped
     # 需要管理宿主机的 netns / iptables / WireGuard 接口，必须使用宿主网络与特权
@@ -25,10 +26,13 @@ services:
       - NET_ADMIN
       - SYS_MODULE
     volumes:
-      # 账号的 WireGuard 配置（映射到后端默认的 network.config_dir）
+      # 账号的 WireGuard 配置（对应后端默认的 network.config_dir）
       - ./wg_config:/etc/wg_config
       # 数据目录：SQLite 数据库与自动生成的 jwt.secret
-      # （相对路径 ./data 由后端的 WORKDIR /root 解析为 /root/data）
+      # （容器内路径固定为 /root/data，与后端默认值一致）
       - ./data:/root/data
       - /lib/modules:/lib/modules:ro
       - /var/run/netns:/var/run/netns:shared
+    environment:
+      # 只暴露端口这一项：默认 3000，需要时用环境变量覆盖
+      - WM_SERVER_PORT=${WM_SERVER_PORT:-3000}
