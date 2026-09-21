@@ -249,10 +249,6 @@ export default function WireguardPage() {
       setAddIpError(t('wireguard.invalidIPFormat'));
       return;
     }
-    if (addValues.enable_forwarding && !addValues.forward_interface.trim()) {
-      setError(t('wireguard.forwardInterfaceRequired'));
-      return;
-    }
 
     setSubmitting(true);
     setError(null);
@@ -289,10 +285,6 @@ export default function WireguardPage() {
     const invalid = editValues.allowed_ips.some((ip) => !isValidIPOrCIDR(ip));
     if (invalid) {
       setEditIpError(t('wireguard.invalidIPFormat'));
-      return;
-    }
-    if (editValues.enable_forwarding && !editValues.forward_interface.trim()) {
-      setError(t('wireguard.forwardInterfaceRequired'));
       return;
     }
 
@@ -476,7 +468,7 @@ export default function WireguardPage() {
           <TextInput
             mt="md"
             label={t('wireguard.forwardInterface')}
-            placeholder={t('wireguard.forwardInterfacePlaceholder')}
+            placeholder={t('wireguard.forwardInterfaceOptional')}
             description={t('wireguard.forwardInterfaceHelp')}
             value={values.forward_interface}
             onChange={(event) => setValues({ ...values, forward_interface: event.currentTarget.value })}

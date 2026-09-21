@@ -245,8 +245,8 @@
     "editConfig": "编辑配置",
     "moreActions": "更多操作",
     "enableForwarding": "启用转发（作为网关）",
-    "forwardInterface": "客户端网卡名称",
-    "forwardInterfacePlaceholder": "例如：eth0、wlan0、enp3s0",
+    "forwardInterface": "客户端网卡（可选）",
+    "forwardInterfacePlaceholder": "留空即自动识别（推荐）",
     "forwardingHelp": "启用后，该设备可作为网关，让其他设备经它访问 VPN。此处填写的是【该设备自己】用于 NAT 的物理网卡名，不是服务器的网卡——填写错误会导致客户端连上后无法上网。",
     "forwardingEnabled": "已启用转发",
     "forwardingDisabled": "未启用转发",
@@ -271,10 +271,10 @@
     "livenessHint": "每 {interval} 秒进入设备所属网络命名空间，向其隧道地址的探测端口发起 TCP 连接：收到响应或 RST 立即在线，连续无响应即判离线。",
     "usePresharedKey": "启用预共享密钥",
     "usePresharedKeyHelp": "在服务端与设备之间再加一层对称密钥，提升抗中间人与抗量子能力。开启或关闭后需要重新下载客户端配置。",
-    "forwardInterfaceHelp": "该客户端设备上的物理网卡名（如 eth0、wlan0、enp3s0），用于客户端侧的 iptables NAT。",
+    "forwardInterfaceHelp": "留空时下发 ! -o %i —— 由 wg-quick 自动展开为隧道接口名，即「只要不是从隧道出去就做 NAT」，无需知道客户端网卡叫什么。仅当自动模式不适用时才填写客户端自己的物理网卡名（如 eth0、wlan0）。",
     "ifaceServerHint": "这是服务器自身的出口网卡（用于服务端 NAT），可在下方选择探测到的接口。",
     "ifaceDetected": "已自动探测到默认出口：{name}",
-    "forwardInterfaceRequired": "启用转发时必须填写客户端网卡名称"
+    "forwardInterfaceOptional": "留空即自动识别"
   },
   "monitoring": {
     "title": "系统监控",

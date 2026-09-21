@@ -390,12 +390,6 @@ func AddPeer(c *gin.Context) {
 		return
 	}
 
-	// 启用转发必须给出客户端网卡名，否则注入的 NAT 规则会静默失效
-	if req.EnableForwarding && strings.TrimSpace(req.ForwardInterface) == "" {
-		response.BadRequest(c, "forward_interface is required when forwarding is enabled", nil)
-		return
-	}
-
 	// 获取用户的 WireGuard 服务器
 	var wgServer models.WireguardServer
 	if err := database.DB.Where("user_id = ?", u.ID).First(&wgServer).Error; err != nil {
@@ -432,6 +426,29 @@ const peerRecordCreateAttempts = 3
 // createPeerRecord 生成密钥、分配 IP 并写入 peer 记录。
 // 命中唯一约束冲突时会重新生成密钥并重新分配 IP，最多重试 peerRecordCreateAttempts 次。
 // 返回的错误文案面向客户端，故保留原有 "Failed to xxx: cause" 形式。
+// buildServerAllowedIPs 计算服务端该 peer 的 allowed-ips：
+// 设备自身地址 + 它背后的网段（用于跨网段转发）。
+//
+// 全局代理（0.0.0.0/0、::/0）会被排除——那是客户端把流量送进隧道的行为，
+// 若写进服务端 allowed-ips 会导致所有流量都被转发给该设备。
+func buildServerAllowedIPs(peer *models.WireguardPeer) string {
+	self := peer.PeerAddress + "/32"
+	parts := []string{self}
+
+	for _, cidr := range strings.Split(peer.AllowedIPs, ",") {
+		cidr = strings.TrimSpace(cidr)
+		if cidr == "" || cidr == self || cidr == peer.PeerAddress {
+			continue
+		}
+		if cidr == "0.0.0.0/0" || cidr == "::/0" {
+			continue
+		}
+		parts = append(parts, cidr)
+	}
+
+	return strings.Join(parts, ",")
+}
+
 // usePresharedKeyForNewPeer 决定新设备是否启用预共享密钥：
 // 请求显式指定优先，否则取运行时配置中的默认值。
 func usePresharedKeyForNewPeer(explicit *bool) bool {
@@ -513,8 +530,12 @@ func createPeerRecord(wgService *services.WireguardService, wgServer *models.Wir
 func provisionPeerResources(wgService *services.WireguardService, netnsService *services.NetnsService, namespace, wgInterface string, peer *models.WireguardPeer) error {
 	peerAllowedIPs := peer.PeerAddress + "/32"
 
-	// 5. 添加到WireGuard配置（使用peer的IP地址作为allowed-ips）
-	if err := wgService.AddPeer(namespace, wgInterface, peer.PublicKey, peerAllowedIPs, ""); err != nil {
+	// 5. 添加到WireGuard配置。allowed-ips 需要包含该设备背后的网段，
+	// 否则命名空间内的转发会失败：WireGuard 依据 allowed-ips 决定把包加密发给哪个
+	// peer（cryptokey routing），只加 ip route 而不声明 allowed-ips 时包会被直接丢弃。
+	// 声明之后内核会自动为这些网段生成指向本接口的路由，无需再手工添加。
+	serverAllowedIPs := buildServerAllowedIPs(peer)
+	if err := wgService.AddPeer(namespace, wgInterface, peer.PublicKey, serverAllowedIPs, ""); err != nil {
 		return fmt.Errorf("Failed to add peer to WireGuard: %w", err)
 	}
 
@@ -526,8 +547,9 @@ func provisionPeerResources(wgService *services.WireguardService, netnsService *
 		}
 	}
 
-	// 6. 同步路由规则：确保命名空间知道如何访问peer指定的网段
-	// 注意：如果allowedIPs就是peer自己的IP，不需要额外的路由规则（WireGuard已经处理）
+	// 6. 路由：allowed-ips 声明后内核通常已自动生成路由；这里仅在缺失时补一条，
+	// 作为兜底（重复添加会被判定 File exists 并忽略）。
+	// 全局代理（0.0.0.0/0）不参与服务端路由，它只是客户端的行为。
 	needExtraRouting := peer.AllowedIPs != peerAllowedIPs && peer.AllowedIPs != "0.0.0.0/0"
 	if !needExtraRouting {
 		return nil
@@ -716,20 +738,6 @@ func UpdatePeer(c *gin.Context) {
 		return
 	}
 
-	// 转发已开启或本次要开启时，网卡名不能为空，否则 NAT 规则不会生效
-	forwardingEnabled := peer.EnableForwarding
-	if req.EnableForwarding != nil {
-		forwardingEnabled = *req.EnableForwarding
-	}
-	forwardInterface := peer.ForwardInterface
-	if req.ForwardInterface != "" {
-		forwardInterface = req.ForwardInterface
-	}
-	if forwardingEnabled && strings.TrimSpace(forwardInterface) == "" {
-		response.BadRequest(c, "forward_interface is required when forwarding is enabled", nil)
-		return
-	}
-
 	updates := make(map[string]interface{})
 
 	needWgUpdate := false
@@ -797,11 +805,23 @@ func UpdatePeer(c *gin.Context) {
 	// WireGuard 配置中的 allowed-ips 始终是 peer 的 IP 地址
 	if needWgUpdate {
 		netnsService := services.NewNetnsService()
+		wgService := services.NewWireguardService(config.AppConfig.Network.ConfigDir)
 
-		// 1. 清理旧的路由和iptables规则
+		// 1. 先同步服务端 allowed-ips（cryptokey routing 的依据），
+		//    否则改了网段也转发不到该设备——只调整路由是无效的。
+		updatedPeer := peer
+		updatedPeer.AllowedIPs = req.AllowedIPs
+		if err := wgService.SetPeerAllowedIPs(
+			wgServer.Namespace, wgServer.WgInterface, peer.PublicKey, buildServerAllowedIPs(&updatedPeer),
+		); err != nil {
+			response.InternalError(c, "Failed to update peer allowed-ips: "+err.Error())
+			return
+		}
+
+		// 2. 清理旧的路由和iptables规则
 		clearPeerRoutes(netnsService, wgServer.Namespace, wgServer.WgInterface, peer.AllowedIPs)
 
-		// 2. 添加新的路由和iptables规则
+		// 3. 添加新的路由和iptables规则
 		if req.AllowedIPs != "" && req.AllowedIPs != "0.0.0.0/0" {
 			if err := netnsService.AddRouteForPeer(wgServer.Namespace, wgServer.WgInterface, req.AllowedIPs); err != nil {
 				// 尝试恢复旧规则
@@ -1136,15 +1156,22 @@ DNS = %s
 		dns,
 	)
 
-	// 启用转发时注入客户端侧的 NAT 规则：
-	// 这段脚本在【客户端设备】上执行，因此 ForwardInterface 必须是该设备自己的
-	// 物理网卡名（不是服务器出口网卡），否则客户端连上后会无法上网。
-	if peer.EnableForwarding && peer.ForwardInterface != "" {
-		postUp := fmt.Sprintf(`PostUp = iptables -t nat -A POSTROUTING -o %s -j MASQUERADE; iptables -A FORWARD -i %%i -j ACCEPT; iptables -A FORWARD -o %%i -j ACCEPT
-PreDown = iptables -t nat -D POSTROUTING -o %s -j MASQUERADE; iptables -D FORWARD -i %%i -j ACCEPT; iptables -D FORWARD -o %%i -j ACCEPT
+	// 启用转发时注入客户端侧的 NAT 规则。
+	// 这段脚本在【客户端设备】上执行，因此网卡指的是该设备自己的物理网卡；
+	// 未指定时使用取反匹配 `! -o %i`（%i 由 wg-quick 展开为接口名），
+	// 即"只要不是从隧道出去的流量就做 NAT"，从而无需知道对端网卡叫什么。
+	// 注意 iptables 要求感叹号写在选项之前：`! -o wg0` 合法，`-o ! wg0` 会报错。
+	if peer.EnableForwarding {
+		match := "! -o %i"
+		if iface := strings.TrimSpace(peer.ForwardInterface); iface != "" {
+			match = "-o " + iface
+		}
+
+		postUp := fmt.Sprintf(`PostUp = iptables -t nat -A POSTROUTING %s -j MASQUERADE; iptables -A FORWARD -i %%i -j ACCEPT; iptables -A FORWARD -o %%i -j ACCEPT
+PreDown = iptables -t nat -D POSTROUTING %s -j MASQUERADE; iptables -D FORWARD -i %%i -j ACCEPT; iptables -D FORWARD -o %%i -j ACCEPT
 `,
-			peer.ForwardInterface,
-			peer.ForwardInterface,
+			match,
+			match,
 		)
 		configContent += postUp
 	}

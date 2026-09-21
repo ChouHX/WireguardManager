@@ -87,6 +87,8 @@ PostUp = sysctl -w net.ipv4.ip_forward=1
 # 1. WireGuard <-> veth 转发
 PostUp = iptables -A FORWARD -i %%i -o %s -j ACCEPT
 PostUp = iptables -A FORWARD -i %s -o %%i -j ACCEPT
+# 1.1 发夹转发：允许隧道内部互转（设备 A 经本机访问设备 B 背后的网段）
+PostUp = iptables -A FORWARD -i %%i -o %%i -j ACCEPT
 # 2. veth <-> 外网接口转发（关键：允许访问外网）
 PostUp = iptables -A FORWARD -i %s -o %s -j ACCEPT
 PostUp = iptables -A FORWARD -i %s -o %s -j ACCEPT
@@ -98,6 +100,7 @@ PostUp = iptables -t nat -A POSTROUTING -o %s -j MASQUERADE
 # PostDown 规则：清理上述规则
 PostDown = iptables -D FORWARD -i %%i -o %s -j ACCEPT
 PostDown = iptables -D FORWARD -i %s -o %%i -j ACCEPT
+PostDown = iptables -D FORWARD -i %%i -o %%i -j ACCEPT
 PostDown = iptables -D FORWARD -i %s -o %s -j ACCEPT
 PostDown = iptables -D FORWARD -i %s -o %s -j ACCEPT
 PostDown = iptables -t nat -D POSTROUTING -s %s -o %s -j MASQUERADE
@@ -167,6 +170,23 @@ func (s *WireguardService) GeneratePresharedKey() (string, error) {
 		return "", fmt.Errorf("failed to generate preshared key: %v", err)
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+// SetPeerAllowedIPs 更新已存在 peer 的 allowed-ips。
+// 这是 WireGuard 的加密路由表，决定把哪些目标网段的流量发给该 peer。
+func (s *WireguardService) SetPeerAllowedIPs(nsName, interfaceName, peerPublicKey, allowedIPs string) error {
+	if strings.TrimSpace(allowedIPs) == "" {
+		return fmt.Errorf("allowed-ips must not be empty")
+	}
+
+	cmd := exec.Command("ip", "netns", "exec", nsName,
+		"wg", "set", interfaceName, "peer", peerPublicKey, "allowed-ips", allowedIPs)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to set peer allowed-ips: %v, output: %s", err, string(output))
+	}
+
+	InvalidateStatsCache(nsName, interfaceName)
+	return nil
 }
 
 // SetPeerPresharedKey 为已存在的 peer 设置预共享密钥。
