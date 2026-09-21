@@ -1,4 +1,5 @@
 import {
+  IconAdjustments,
   IconDeviceLaptop,
   IconLayoutDashboard,
   IconSettings,
@@ -37,6 +38,13 @@ const NAV_ITEMS: NavItem[] = [
     group: 'wireguard',
   },
   { to: '/users', labelKey: 'nav.users', icon: IconUsers, roles: ['admin'], group: 'settings' },
+  {
+    to: '/settings',
+    labelKey: 'nav.systemSettings',
+    icon: IconAdjustments,
+    roles: ['admin'],
+    group: 'settings',
+  },
   { to: '/account', labelKey: 'nav.account', icon: IconSettings, group: 'settings' },
 ];
 
@@ -67,6 +75,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/admin-wireguard': 'wireguard.adminTitle',
   '/users': 'users.title',
   '/account': 'user.profile',
+  '/settings': 'settings.title',
 };
 
 export const APP_BRAND = {

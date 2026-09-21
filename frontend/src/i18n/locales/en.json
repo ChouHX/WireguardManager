@@ -39,7 +39,8 @@
     "adminWireguard": "WireGuard Admin",
     "monitoring": "System Monitoring",
     "company": "Company Admin",
-    "platform": "Platform Admin"
+    "platform": "Platform Admin",
+    "systemSettings": "Settings"
   },
   "auth": {
     "login": "Login",
@@ -267,7 +268,9 @@
     "detecting": "Detecting",
     "onlineDevices": "Online devices",
     "onlineHint": "{online} / {total} online",
-    "livenessHint": "Liveness is derived from WireGuard handshakes: a handshake within {seconds}s counts as online."
+    "livenessHint": "Liveness is derived from WireGuard handshakes: a handshake within {seconds}s counts as online.",
+    "usePresharedKey": "Preshared key",
+    "usePresharedKeyHelp": "Adds a symmetric key between server and device for extra protection. Re-download the client config after toggling."
   },
   "monitoring": {
     "title": "System Monitoring",
@@ -315,5 +318,33 @@
     "normal": "Normal",
     "high": "High Load",
     "critical": "Critical Load"
+  },
+  "settings": {
+    "title": "Settings",
+    "subtitle": "Stored in the database; changes apply immediately or on the next refresh",
+    "saveFailed": "Failed to save settings",
+    "saved": "Settings saved",
+    "footerHint": "config.yaml keeps only startup parameters (listen port, database path, JWT secret); everything else is configured here.",
+    "group": {
+      "network": "Network",
+      "monitoring": "Monitoring",
+      "liveness": "Liveness",
+      "auth": "Authentication",
+      "wireguard": "Device defaults"
+    },
+    "serverIp": "Public server IP",
+    "outInterface": "Outbound interface",
+    "baseSubnet": "Tunnel subnet prefix",
+    "basePort": "Base port",
+    "dns": "Client DNS",
+    "clientAllowedIps": "Client AllowedIPs",
+    "monitoringInterval": "Sample interval (s)",
+    "monitoringRetention": "Retention (hours)",
+    "livenessEnabled": "Enable liveness check",
+    "livenessInterval": "Recheck interval (s)",
+    "livenessHandshakeTimeout": "Handshake window (s)",
+    "livenessOfflineThreshold": "Offline confirmations",
+    "jwtExpireHours": "Token lifetime (hours)",
+    "defaultPresharedKey": "Use preshared key for new devices"
   }
 }

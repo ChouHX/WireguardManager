@@ -79,6 +79,8 @@ interface PeerFormValues {
   comment: string;
   enable_forwarding: boolean;
   forward_interface: string;
+  /** 是否启用预共享密钥 */
+  use_preshared_key: boolean;
 }
 
 const EMPTY_FORM: PeerFormValues = {
@@ -87,6 +89,7 @@ const EMPTY_FORM: PeerFormValues = {
   comment: '',
   enable_forwarding: false,
   forward_interface: '',
+  use_preshared_key: false,
 };
 
 /**
@@ -308,6 +311,7 @@ export default function WireguardPage() {
         comment: addValues.comment,
         enable_forwarding: addValues.enable_forwarding,
         forward_interface: addValues.enable_forwarding ? addValues.forward_interface : undefined,
+        use_preshared_key: addValues.use_preshared_key,
       };
 
       const response = await wireguardService.addPeer(payload);
@@ -345,6 +349,7 @@ export default function WireguardPage() {
         comment: editValues.comment,
         enable_forwarding: editValues.enable_forwarding,
         forward_interface: editValues.enable_forwarding ? editValues.forward_interface : undefined,
+        use_preshared_key: editValues.use_preshared_key,
       };
 
       const response = await wireguardService.updatePeer(selected.id, payload);
@@ -418,6 +423,7 @@ export default function WireguardPage() {
       comment: peer.comment ?? '',
       enable_forwarding: peer.enable_forwarding,
       forward_interface: peer.forward_interface ?? '',
+      use_preshared_key: peer.use_preshared_key,
     });
     editModal.open();
   };
@@ -536,6 +542,27 @@ export default function WireguardPage() {
             nothingFoundMessage={t('common.noData')}
           />
         ) : null}
+      </Card>
+
+      <Card withBorder radius="xs" p="md">
+        <Group justify="space-between" align="flex-start" wrap="nowrap">
+          <Box>
+            <Text size="sm" fw={600}>
+              {t('wireguard.usePresharedKey')}
+            </Text>
+            <Text fz={11.5} c="dimmed" mt={4} maw={420}>
+              {t('wireguard.usePresharedKeyHelp')}
+            </Text>
+          </Box>
+          <Switch
+            checked={values.use_preshared_key}
+            onChange={(event) =>
+              setValues({ ...values, use_preshared_key: event.currentTarget.checked })
+            }
+            color="wg"
+            disabled={disabled}
+          />
+        </Group>
       </Card>
     </Stack>
   );
@@ -711,6 +738,13 @@ export default function WireguardPage() {
                               <Tooltip label={t('wireguard.forwardingEnabled')}>
                                 <Badge size="xs" color="teal" variant="light">
                                   GW
+                                </Badge>
+                              </Tooltip>
+                            ) : null}
+                            {peer.use_preshared_key ? (
+                              <Tooltip label={t('wireguard.usePresharedKey')}>
+                                <Badge size="xs" color="wg" variant="light">
+                                  PSK
                                 </Badge>
                               </Tooltip>
                             ) : null}

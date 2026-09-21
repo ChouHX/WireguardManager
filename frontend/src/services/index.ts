@@ -3,3 +3,4 @@ export { authService } from './auth';
 export { adminService } from './admin';
 export { wireguardService } from './wireguard';
 export { monitoringService } from './monitoring';
+export { settingsService } from './settings';

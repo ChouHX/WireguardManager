@@ -34,7 +34,8 @@
 - **设备即开即用** —— 一键生成客户端配置，支持 `.conf` 下载与二维码扫码导入，转发出口自动探测。
 - **秒级在线感知** —— 依据 WireGuard 自身的握手状态判定，客户端零 Agent：握手新鲜即刻在线，握手过期需连续确认才判离线，不受客户端防火墙与路由差异影响。
 - **流量与资源监控** —— 设备握手状态、收发流量、系统 CPU / 内存 / 磁盘 / 网络趋势一屏掌握。
-- **精细管控** —— 设备粒度限速、启用禁用、网关转发模式、AllowedIPs 网段自定义。
+- **精细管控** —— 设备粒度限速、启用禁用、网关转发模式、AllowedIPs 网段自定义，支持为单个设备启用预共享密钥（PSK）以增强抗中间人与抗量子能力。
+- **配置即改即生效** —— 网段、出口网卡、公网 IP、DNS、监控与在线判定参数都在管理界面「系统设置」中调整并持久化到数据库；`config.yaml` 只保留监听端口、数据库路径、JWT 密钥等启动必需项。
 - **现代控制台** —— React 19 + Mantine，紧凑式布局、明暗主题、中英文双语、移动端自适应。
 - **轻量部署** —— 嵌入式 SQLite（纯 Go 驱动，无需 CGO、无需独立数据库服务）；支持单容器部署，一个进程同时提供控制台与 API。镜像由 CI 构建并推送 GHCR。
 
@@ -130,35 +131,39 @@ WM_IMAGE_TAG=sha-2df1b06 docker compose up -d
 
 ### 配置项
 
-`config.yaml` 按段组织，完整示例见 [`config.yaml.example`](config.yaml.example)：
+配置分两层：**启动参数**只能写在 `config.yaml`（或 `WM_*` 环境变量），**运行时可调项**在管理界面「系统设置」中维护并持久化到数据库。完整示例见 [`config.yaml.example`](config.yaml.example)。
 
-| 段 | 键 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `server` | `port` | `8080` | 后端监听端口 |
-| | `mode` | `release` | Gin 运行模式：`debug` / `release` / `test` |
-| | `cors_origins` | `["*"]` | 允许的跨域来源 |
-| `database` | `path` | `./data/cloud_platform.db` | SQLite 文件路径 |
-| | `max_open_conns` | `1` | 连接数，1 表示串行访问，规避 `database is locked` |
-| | `busy_timeout_ms` | `5000` | 写锁等待超时 |
-| | `wal` | `true` | 是否启用 WAL 日志模式 |
-| `jwt` | `secret` | 无 | **必填**，签名密钥，少于 8 字符会拒绝启动 |
-| | `expire_hours` | `24` | Token 有效期 |
-| `network` | `config_dir` | `/etc/wg_config` | WireGuard 配置存放目录 |
-| | `base_subnet` | `10.200` | 隧道网段的基础前缀 |
-| | `base_port` | `51820` | 端口起始值 |
-| | `out_interface` | `eth0` | 宿主出口网卡（探测失败时的回退值） |
-| | `server_ip` | 无 | 服务器公网 IP，下发到客户端配置的 Endpoint |
-| | `dns` | `1.1.1.1, 8.8.8.8` | 下发给客户端的 DNS |
-| | `client_allowed_ips` | 空 | 客户端 AllowedIPs，留空按设备所在网段推导；全局代理填 `0.0.0.0/0, ::/0` |
-| `monitoring` | `interval_seconds` | `10` | 系统指标采样间隔 |
-| | `retention_hours` | `168` | 监控记录保留时长（7 天） |
-| | `cleanup_interval_hours` | `24` | 过期记录清理周期 |
-| `liveness` | `enabled` | `true` | 是否启用在线判定 |
-| | `interval_seconds` | `3` | 复核间隔 |
-| | `handshake_timeout_seconds` | `180` | 握手超过该时长未更新即判定离线 |
-| | `offline_threshold` | `2` | 连续多少次超时才置为离线（防抖动） |
-| `default` | `admin_email` | `admin@platform.com` | 首次启动创建的管理员邮箱 |
-| | `admin_password` | `password` | 初始密码 |
+**启动参数**（改动需重启）：
+
+| 键 | 默认值 | 说明 |
+| --- | --- | --- |
+| `server.port` | `3000` | 控制台与 API 共用端口 |
+| `server.mode` | `release` | Gin 运行模式：`debug` / `release` / `test` |
+| `server.cors_origins` | `["*"]` | 允许的跨域来源 |
+| `database.path` | `./data/cloud_platform.db` | SQLite 文件路径 |
+| `database.max_open_conns` | `1` | 连接数，1 表示串行访问，规避 `database is locked` |
+| `database.busy_timeout_ms` | `5000` | 写锁等待超时 |
+| `database.wal` | `true` | 是否启用 WAL 日志模式 |
+| `jwt.secret` | 无 | **必填**，少于 8 字符会拒绝启动 |
+| `network.config_dir` | `/etc/wg_config` | WireGuard 配置存放目录 |
+| `default.admin_email` / `admin_password` / `admin_name` | 见示例 | 首次启动创建的管理员 |
+
+**管理界面可调项**（「系统设置」页面，存库即时生效）：
+
+| 分组 | 键 | 说明 |
+| --- | --- | --- |
+| 网络 | `network.server_ip` | 服务器公网 IP，下发到客户端 Endpoint |
+| | `network.out_interface` | 出口网卡（界面可自动探测并改选） |
+| | `network.base_subnet` / `base_port` | 隧道网段前缀与端口起始值 |
+| | `network.dns` | 下发给客户端的 DNS |
+| | `network.client_allowed_ips` | 客户端 AllowedIPs，留空按设备所在网段推导 |
+| 监控 | `monitoring.interval_seconds` / `retention_hours` | 采样间隔与记录保留时长 |
+| 在线判定 | `liveness.enabled` | 是否启用在线判定 |
+| | `liveness.interval_seconds` / `handshake_timeout_seconds` / `offline_threshold` | 复核间隔、握手时效阈值、离线确认次数 |
+| 鉴权 | `jwt.expire_hours` | 登录有效期 |
+| 设备默认值 | `wireguard.default_preshared_key` | 新建设备是否默认启用预共享密钥 |
+
+> 同名的 `WM_*` 环境变量仍可覆盖启动默认值；数据库中一旦存在该键，以界面上的值为准。
 
 ### 环境变量
 

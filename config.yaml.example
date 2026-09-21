@@ -1,8 +1,22 @@
+# ============================================================
+#  WireGuard Manager 启动配置
+#
+#  这里只保留「必须在启动时决定」的参数：
+#    监听端口、数据库路径、JWT 密钥、配置目录、初始管理员。
+#
+#  网络网段 / 起始端口 / 出口网卡 / 公网 IP / DNS / 客户端 AllowedIPs、
+#  监控采集、在线判定、登录有效期、新设备是否默认启用预共享密钥——
+#  这些都可以在管理界面「系统设置」里调整，并持久化在数据库中。
+#
+#  下表中的值仅作为「首次启动的初始默认值」：一旦在界面上改过，
+#  就以数据库中的值为准，这里的改动不再生效。
+#
+#  环境变量优先级最高（WM_*），容器部署可用它注入密钥。
+# ============================================================
+
 server:
-  port: 8080
-  # gin 运行模式：debug / release / test，默认 release
-  mode: "release"
-  # 允许的跨域来源，["*"] 表示不限制
+  port: 3000                 # 控制台与 API 共用端口（单容器）
+  mode: "release"            # debug / release / test
   cors_origins:
     - "*"
 
@@ -11,46 +25,35 @@ database:
   #   本地开发（仓库根目录运行）-> ./data/cloud_platform.db
   #   Docker（WORKDIR=/root）  -> /root/data/cloud_platform.db，对应挂载 ./data:/root/data
   path: "./data/cloud_platform.db"
-  # 最大连接数：1 表示串行访问，可彻底规避 SQLite 的 "database is locked"
-  max_open_conns: 1
-  # 写锁等待超时（毫秒），并发写入时的重试窗口
-  busy_timeout_ms: 5000
-  # WAL 日志模式，提升读写并发下的表现（关闭则回落为 DELETE 模式）
-  wal: true
 
 jwt:
-  secret: "supersecretkey"
-  expire_hours: 24
+  secret: "change-me-to-a-long-random-string"   # 必填，至少 8 个字符
+  expire_hours: 24                              # 之后可在系统设置中调整
 
 network:
-  config_dir: "/etc/wg_config"
-  base_subnet: "10.200"
-  base_port: 51820
-  out_interface: "eth0"
-  server_ip: "1.2.3.4"  # 替换为您的服务器公网IP地址
-  dns: "1.1.1.1, 8.8.8.8"  # 下发给客户端的 DNS
-  # 下发给客户端配置的 AllowedIPs（客户端把哪些流量送进隧道）
-  # 留空 = 按 peer 所在网段自动推导：
-  #   服务端接口 10.100.0.1/24，分配给某 peer 的地址为 10.100.0.2，则下发 10.100.0.0/24
-  # 需要全局代理（所有流量走 VPN）时显式写 "0.0.0.0/0, ::/0"
-  client_allowed_ips: ""
+  config_dir: "/etc/wg_config"   # WireGuard 配置文件目录（容器内路径）
+
+  # 以下为初始默认值，可在管理界面调整（改这里只在首次启动时生效）
+  base_subnet: "10.100"          # 隧道网段前缀
+  base_port: 51820               # 每账号 WireGuard 端口起始值
+  out_interface: "eth0"          # 出口网卡（管理界面可自动探测并改选）
+  server_ip: "1.2.3.4"           # 服务器公网 IP，下发到客户端配置
+  dns: "1.1.1.1, 8.8.8.8"        # 下发给客户端的 DNS
+  client_allowed_ips: ""         # 客户端 AllowedIPs，留空按设备所在网段推导
 
 monitoring:
-  interval_seconds: 10        # 指标采样间隔
-  retention_hours: 168        # 监控记录保留时长（7 天）
-  cleanup_interval_hours: 24  # 过期记录清理周期
+  interval_seconds: 10           # 指标采样间隔
+  retention_hours: 168           # 监控记录保留时长（7 天）
+  cleanup_interval_hours: 24     # 过期记录清理周期
 
-# 客户端在线判定：依据 WireGuard 自身的握手状态，客户端无需安装任何 Agent
 liveness:
   enabled: true
   interval_seconds: 3            # 复核间隔
-  handshake_timeout_seconds: 180 # 握手超过该时长未更新即判定离线
-  offline_threshold: 2           # 连续多少次超时才置为离线（防边界抖动）
+  handshake_timeout_seconds: 180 # 握手超过该时长未更新即判离线
+  offline_threshold: 2           # 连续多少次超时才置为离线
 
+# 首次启动时创建的管理员账号，仅在数据库中还没有管理员时生效
 default:
   admin_email: "admin@platform.com"
   admin_password: "password"
   admin_name: "admin"
-  # 兼容旧字段名：username 等价 admin_email，password 等价 admin_password
-  # username: "admin@platform.com"
-  # password: "password"

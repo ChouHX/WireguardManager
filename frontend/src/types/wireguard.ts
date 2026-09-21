@@ -23,6 +23,8 @@ export interface WireguardPeer {
   comment?: string;
   enable_forwarding: boolean;
   forward_interface?: string;
+  /** 是否启用预共享密钥（密钥本身不下发到前端） */
+  use_preshared_key: boolean;
   created_at: string;
 }
 
@@ -154,11 +156,14 @@ export interface AdminLivenessResponse {
   servers: Record<string, ServerLivenessAggregate>;
 }
 
-export interface AddPeerRequest {  allowed_ips?: string;
+export interface AddPeerRequest {
+  allowed_ips?: string;
   persistent_keepalive?: number;
   comment?: string;
   enable_forwarding?: boolean;
   forward_interface?: string;
+  /** 是否启用预共享密钥；留空则取运行时默认值 */
+  use_preshared_key?: boolean;
 }
 
 export interface UpdatePeerRequest {
@@ -167,4 +172,5 @@ export interface UpdatePeerRequest {
   comment?: string;
   enable_forwarding?: boolean;
   forward_interface?: string;
+  use_preshared_key?: boolean;
 }

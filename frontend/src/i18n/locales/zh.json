@@ -39,7 +39,8 @@
     "adminWireguard": "WireGuard 管理",
     "monitoring": "系统监控",
     "company": "企业管理",
-    "platform": "平台管理"
+    "platform": "平台管理",
+    "systemSettings": "系统设置"
   },
   "auth": {
     "login": "登录",
@@ -267,7 +268,9 @@
     "detecting": "检测中",
     "onlineDevices": "在线设备",
     "onlineHint": "{online} / {total} 台在线",
-    "livenessHint": "依据 WireGuard 握手状态判定：握手时间在 {seconds} 秒内视为在线。"
+    "livenessHint": "依据 WireGuard 握手状态判定：握手时间在 {seconds} 秒内视为在线。",
+    "usePresharedKey": "启用预共享密钥",
+    "usePresharedKeyHelp": "在服务端与设备之间再加一层对称密钥，提升抗中间人与抗量子能力。开启或关闭后需要重新下载客户端配置。"
   },
   "monitoring": {
     "title": "系统监控",
@@ -315,5 +318,33 @@
     "normal": "运行正常",
     "high": "负载较高",
     "critical": "负载过高"
+  },
+  "settings": {
+    "title": "系统设置",
+    "subtitle": "以下配置保存在数据库中，修改后立即生效或在下一次刷新时生效",
+    "saveFailed": "保存失败",
+    "saved": "设置已保存",
+    "footerHint": "config.yaml 只保留监听端口、数据库路径与 JWT 密钥等启动参数，其余项均在此处调整。",
+    "group": {
+      "network": "网络",
+      "monitoring": "监控采集",
+      "liveness": "在线判定",
+      "auth": "鉴权",
+      "wireguard": "设备默认值"
+    },
+    "serverIp": "服务器公网 IP",
+    "outInterface": "出口网卡",
+    "baseSubnet": "隧道网段前缀",
+    "basePort": "起始端口",
+    "dns": "客户端 DNS",
+    "clientAllowedIps": "客户端 AllowedIPs",
+    "monitoringInterval": "采样间隔（秒）",
+    "monitoringRetention": "记录保留时长（小时）",
+    "livenessEnabled": "启用在线判定",
+    "livenessInterval": "复核间隔（秒）",
+    "livenessHandshakeTimeout": "握手时效阈值（秒）",
+    "livenessOfflineThreshold": "离线确认次数",
+    "jwtExpireHours": "登录有效期（小时）",
+    "defaultPresharedKey": "新设备默认启用预共享密钥"
   }
 }

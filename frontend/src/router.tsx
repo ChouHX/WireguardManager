@@ -12,6 +12,7 @@ import AccountPage from '@/pages/AccountPage';
 import AdminWireguardPage from '@/pages/AdminWireguardPage';
 import DashboardPage from '@/pages/DashboardPage';
 import NotFoundPage from '@/pages/NotFoundPage';
+import SettingsPage from '@/pages/SettingsPage';
 import UsersPage from '@/pages/UsersPage';
 import WireguardPage from '@/pages/WireguardPage';
 import LoginPage from '@/pages/auth/LoginPage';
@@ -75,6 +76,14 @@ export function AppRoutes() {
             element={
               <AuthGuard requiredRole="admin">
                 <UsersPage />
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/settings"
+            element={
+              <AuthGuard requiredRole="admin">
+                <SettingsPage />
               </AuthGuard>
             }
           />
