@@ -221,9 +221,23 @@ func (s *WireguardService) SetPeerPresharedKey(nsName, interfaceName, peerPublic
 	return nil
 }
 
+// serverKeepaliveSeconds 服务端向设备发送保活包的间隔。
+//
+// 必要性：WireGuard 客户端的 persistent-keepalive 定时器只有在「收到对端数据包」
+// 后才会续期（内核的 timer_need_another_keepalive 标志）。服务端若从不主动发包，
+// 客户端会在首个保活之后停止发送，直到 120 秒重协商才恢复——表现为「设了 25 秒
+// 却两分钟才动一次」。双向保活后，客户端的保活会持续生效，接收方向的流量
+// 才能作为可靠的在线证据。
+const serverKeepaliveSeconds = 10
+
 // AddPeer 添加WireGuard peer
 func (s *WireguardService) AddPeer(nsName, interfaceName, peerPublicKey, allowedIPs, endpoint string) error {
-	args := []string{"netns", "exec", nsName, "wg", "set", interfaceName, "peer", peerPublicKey, "allowed-ips", allowedIPs}
+	args := []string{
+		"netns", "exec", nsName,
+		"wg", "set", interfaceName, "peer", peerPublicKey,
+		"allowed-ips", allowedIPs,
+		"persistent-keepalive", strconv.Itoa(serverKeepaliveSeconds),
+	}
 	if endpoint != "" {
 		args = append(args, "endpoint", endpoint)
 	}

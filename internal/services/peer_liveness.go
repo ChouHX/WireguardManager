@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"cloud-platform/internal/config"
@@ -15,20 +16,20 @@ import (
 // 判定参数由服务端内部决定，不对外暴露为配置项。
 //
 // 取值依据：
-//   - 探测间隔 2s：满足"秒级感知"，同时不会给对端与自身带来可观开销；
-//   - 单次超时 1s：小于探测间隔，保证一轮探测不会拖到下一轮；
+//   - 探测间隔 1s：配合"连续 2 次确认"，断开后约 2 秒即可判定，真正的秒级；
+//   - 单次超时 600ms：必须明显小于探测间隔，否则对端不可达时单轮会耗掉整个
+//     间隔（实测 1s 超时会让判定从 2 秒拖到 5 秒）。隧道内往返实测亚毫秒级，
+//     600ms 给了移动网络充足的余量；
 //   - 离线确认 2 次：约 4 秒完成判定，规避单次丢包造成的误报；
-//   - 流量窗口 13s：必须大于客户端保活间隔（默认 PersistentKeepalive=10s），
-//     用于在探测被对端防火墙拦截时，靠对端发来的保活流量继续维持在线。
-//     这个窗口直接决定离线判定的最坏耗时（窗口 + 确认次数×间隔），
-//     所以保活间隔越小、窗口就能越紧、判定越快；调整两者时必须保持
-//     窗口 > 保活间隔，否则在线设备会在两次保活之间被误判离线；
 //   - 并发上限 16：限制同一时刻 fork 的探测数量。
+//
+// 判定不设"流量保护窗口"：那会引入一个必须大于保活间隔的等待期，直接拖慢判定，
+// 而保活本就不可靠（见 wireguard.go 中 serverKeepaliveSeconds 的说明）。
+// 现在以主动探测为唯一主判据，接收方向的流量只作为辅助证据。
 const (
-	livenessInterval      = 2 * time.Second
-	livenessProbeTimeout  = time.Second
+	livenessInterval      = time.Second
+	livenessProbeTimeout  = 600 * time.Millisecond
 	livenessOfflineAfter  = 2
-	livenessTrafficStale  = 13 * time.Second
 	livenessMaxConcurrent = 16
 )
 
@@ -46,7 +47,6 @@ const (
 const (
 	ReasonProbe     = "probe"     // 主动探测有响应
 	ReasonTraffic   = "traffic"   // 隧道内有流量
-	ReasonRecent    = "recent"    // 近期有流量（保护窗口内）
 	ReasonHandshake = "handshake" // 握手仍在时效内
 	ReasonTimeout   = "timeout"   // 探测无响应且无流量
 	ReasonNoStats   = "no_stats"  // 无法读取接口统计
@@ -94,25 +94,27 @@ type LivenessMonitor struct {
 
 	probePort int
 
-	mu              sync.RWMutex
-	results         map[string]*LivenessResult
-	traffic         map[string]trafficSample
-	lastTrafficSeen map[string]time.Time
+	mu      sync.RWMutex
+	results map[string]*LivenessResult
+	traffic map[string]trafficSample
 
 	ctx    context.Context
 	cancel context.CancelFunc
 	done   sync.WaitGroup
+
+	// checking 防止上一轮探测尚未结束就启动下一轮（间隔与超时相当，
+	// 对端不可达时单轮耗时接近超时，不加保护会让 goroutine 逐轮堆积）。
+	checking atomic.Bool
 }
 
 // NewLivenessMonitor 创建在线判定监控器。
 func NewLivenessMonitor(db *gorm.DB, cfg config.LivenessConfig) *LivenessMonitor {
 	return &LivenessMonitor{
-		db:              db,
-		wg:              NewWireguardService(config.AppConfig.Network.ConfigDir),
-		probePort:       cfg.ProbePort,
-		results:         make(map[string]*LivenessResult),
-		traffic:         make(map[string]trafficSample),
-		lastTrafficSeen: make(map[string]time.Time),
+		db:        db,
+		wg:        NewWireguardService(config.AppConfig.Network.ConfigDir),
+		probePort: cfg.ProbePort,
+		results:   make(map[string]*LivenessResult),
+		traffic:   make(map[string]trafficSample),
 	}
 }
 
@@ -139,8 +141,8 @@ func (m *LivenessMonitor) Start(parent context.Context) {
 		}
 	}()
 
-	log.Printf("Liveness monitor started: interval=%v probe_timeout=%v probe_port=%d offline_after=%d traffic_stale=%v",
-		livenessInterval, livenessProbeTimeout, m.probePort, livenessOfflineAfter, livenessTrafficStale)
+	log.Printf("Liveness monitor started: interval=%v probe_timeout=%v probe_port=%d offline_after=%d",
+		livenessInterval, livenessProbeTimeout, m.probePort, livenessOfflineAfter)
 }
 
 // Stop 停止判定循环。
@@ -223,7 +225,7 @@ func (m *LivenessMonitor) checkAll() {
 					reachable, rtt, _ = ProbeTCPInNamespace(server.Namespace, target, timeout)
 				}
 
-				trafficActive := m.recordTraffic(peerCopy.PublicKey, sample, now)
+				trafficActive := m.recordTraffic(peerCopy.PublicKey, sample)
 				m.evaluate(peerCopy.PublicKey, handshakes[peerCopy.PublicKey],
 					reachable, rtt, trafficActive, statsOK, now)
 			}()
@@ -234,7 +236,9 @@ func (m *LivenessMonitor) checkAll() {
 }
 
 // recordTraffic 记录累计流量并判断本轮是否有增长。
-func (m *LivenessMonitor) recordTraffic(key string, sample trafficSample, now time.Time) bool {
+// 仅以 rx 增长作为对端活跃的判据（见 trafficSample 的说明）：
+// tx 增长可能只是本机主动探测所致，不能证明对端在线。
+func (m *LivenessMonitor) recordTraffic(key string, sample trafficSample) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -244,14 +248,7 @@ func (m *LivenessMonitor) recordTraffic(key string, sample trafficSample, now ti
 	if !seen {
 		return false
 	}
-
-	// 仅以 rx 增长作为对端活跃的判据（见 trafficSample 的说明）。
-	// tx 增长可能只是本机主动探测所致，不能证明对端在线。
-	if sample.rx > previous.rx {
-		m.lastTrafficSeen[key] = now
-		return true
-	}
-	return false
+	return sample.rx > previous.rx
 }
 
 // evaluate 综合主动探测、隧道流量与握手状态得出在线结论。
@@ -314,19 +311,12 @@ func (m *LivenessMonitor) evaluate(
 		result.Reason = ReasonTraffic
 
 	default:
-		// 保护窗口：最近这段时间内隧道仍有数据往来（保活包即可）。
-		// 刻意不使用握手时间：客户端断开后 last handshake 只是停住而不会清空，
-		// 拿它当依据会让离线判定滞后一个重协商周期（最长 180 秒）。
-		if lastSeen, ok := m.lastTrafficSeen[key]; ok && now.Sub(lastSeen) <= livenessTrafficStale {
-			result.Reason = ReasonRecent
-		} else {
-			result.Failures++
-			result.Reason = ReasonTimeout
-			if result.Failures >= livenessOfflineAfter {
-				result.State = LivenessOffline
-			}
-			return
+		result.Failures++
+		result.Reason = ReasonTimeout
+		if result.Failures >= livenessOfflineAfter {
+			result.State = LivenessOffline
 		}
+		return
 	}
 
 	result.State = LivenessOnline

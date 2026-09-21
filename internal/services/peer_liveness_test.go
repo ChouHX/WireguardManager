@@ -14,10 +14,9 @@ import (
 // 判定参数已是内部常量，夹具只需初始化容器字段。
 func newTestMonitor() *LivenessMonitor {
 	return &LivenessMonitor{
-		probePort:       49151,
-		results:         make(map[string]*LivenessResult),
-		traffic:         make(map[string]trafficSample),
-		lastTrafficSeen: make(map[string]time.Time),
+		probePort: 49151,
+		results:   make(map[string]*LivenessResult),
+		traffic:   make(map[string]trafficSample),
 	}
 }
 
@@ -55,141 +54,107 @@ func TestLivenessOnlineOnProbe(t *testing.T) {
 	}
 }
 
-// 探测无响应但隧道仍有流量：判在线（保活流量即可维持）。
-func TestLivenessOnlineOnTraffic(t *testing.T) {
+// 探测无响应但对端仍有来向流量：判在线（探测可能被其防火墙拦截）。
+func TestLivenessOnlineOnInboundTraffic(t *testing.T) {
 	monitor := newTestMonitor()
 	now := time.Now()
 
 	monitor.evaluate("peer-b", now.Add(-10*time.Minute), false, 0, true, true, now)
 
 	if got := stateOf(t, monitor, "peer-b"); got != LivenessOnline {
-		t.Fatalf("有流量应判定在线，实际 %q", got)
+		t.Fatalf("有来向流量应判定在线，实际 %q", got)
 	}
 	if got := reasonOf(t, monitor, "peer-b"); got != ReasonTraffic {
 		t.Fatalf("判定依据应为 %s，实际 %q", ReasonTraffic, got)
 	}
 }
 
-// 探测无响应、本轮无流量，但保护窗口内仍有流量：维持在线（避免误判）。
-func TestLivenessKeepsOnlineWithinTrafficWindow(t *testing.T) {
+// 核心场景：探测失败即开始累计，连续两次（约 4 秒）判离线——这是"秒级感知"的来源。
+func TestLivenessOfflineWithinTwoFailures(t *testing.T) {
 	monitor := newTestMonitor()
 	now := time.Now()
+	const key = "peer-c"
 
-	// 先制造一次流量，随后不再有流量
-	monitor.recordTraffic("peer-c", trafficSample{rx: 100, tx: 200}, now)
-	monitor.recordTraffic("peer-c", trafficSample{rx: 300, tx: 400}, now)
-
-	// 10 秒后探测失败：保护窗口 40 秒内应维持在线
-	later := now.Add(10 * time.Second)
-	monitor.evaluate("peer-c", later.Add(-10*time.Minute), false, 0, false, true, later)
-
-	if got := stateOf(t, monitor, "peer-c"); got != LivenessOnline {
-		t.Fatalf("保护窗口内应维持在线，实际 %q", got)
+	// 首次失败：尚未达阈值，维持原状态
+	monitor.evaluate(key, now, false, 0, false, true, now)
+	if got := stateOf(t, monitor, key); got == LivenessOffline {
+		t.Fatal("单次失败不应立即判离线（防止丢包误报）")
 	}
-	if got := reasonOf(t, monitor, "peer-c"); got != ReasonRecent {
-		t.Fatalf("判定依据应为 %s，实际 %q", ReasonRecent, got)
+
+	// 第二次失败：判离线
+	monitor.evaluate(key, now.Add(2*time.Second), false, 0, false, true, now.Add(2*time.Second))
+	if got := stateOf(t, monitor, key); got != LivenessOffline {
+		t.Fatalf("连续两次无响应应判离线，实际 %q", got)
+	}
+	if got := reasonOf(t, monitor, key); got != ReasonTimeout {
+		t.Fatalf("判定依据应为 %s，实际 %q", ReasonTimeout, got)
+	}
+
+	// 探测恢复：立即回到在线
+	monitor.evaluate(key, now.Add(4*time.Second), true, 2*time.Millisecond, false, true, now.Add(4*time.Second))
+	if got := stateOf(t, monitor, key); got != LivenessOnline {
+		t.Fatalf("探测恢复后应立即在线，实际 %q", got)
+	}
+}
+
+// 客户端断开后握手时间戳只是停住、不会清空，不能作为在线依据。
+func TestLivenessOfflineDespiteFreshHandshake(t *testing.T) {
+	monitor := newTestMonitor()
+	now := time.Now()
+	const key = "peer-d"
+
+	freshHandshake := now.Add(-30 * time.Second)
+	for i := 0; i < 2; i++ {
+		monitor.evaluate(key, freshHandshake, false, 0, false, true, now)
+	}
+
+	if got := stateOf(t, monitor, key); got != LivenessOffline {
+		t.Fatalf("探测无响应时应判离线，不应被握手时间拖住，实际 %q", got)
 	}
 }
 
 // 关键回归：本机主动探测会抬高 tx，不能因此把离线对端判成在线。
-// 只有 rx（本机从对端收到的字节）增长才证明对端真的在发包。
 func TestTrafficIgnoresOutboundOnly(t *testing.T) {
 	monitor := newTestMonitor()
-	now := time.Now()
 	const key = "peer-tx"
 
-	// 建立基线
-	monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 2000}, now)
+	monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 2000})
 
 	// 对端离线：本机不停发探测包，tx 持续增长，rx 不变
-	if active := monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 9000}, now.Add(2*time.Second)); active {
+	if active := monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 9000}); active {
 		t.Fatal("仅 tx 增长不得判定为活跃（那是本机探测包自身造成的）")
 	}
-
-	// 连续多轮 tx 增长同样不得累积成在线
-	for i := 0; i < 5; i++ {
-		if active := monitor.recordTraffic(key, trafficSample{rx: 1000, tx: int64(9000 + i*1000)}, now.Add(time.Duration(i+3)*time.Second)); active {
-			t.Fatalf("第 %d 轮仅 tx 增长仍被误判为活跃", i+1)
+	for i := 1; i <= 5; i++ {
+		if active := monitor.recordTraffic(key, trafficSample{rx: 1000, tx: int64(9000 + i*1000)}); active {
+			t.Fatalf("第 %d 轮仅 tx 增长仍被误判为活跃", i)
 		}
 	}
 
-	// 端到端：探测无响应 + 只有 tx 增长 → 应判离线
-	expired := now.Add(31 * time.Second)
+	// 端到端：仅 tx 增长 + 探测无响应 → 应判离线
+	now := time.Now()
 	for i := 0; i < 2; i++ {
-		active := monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 50000}, expired)
-		monitor.evaluate(key, expired.Add(-10*time.Minute), false, 0, active, true, expired)
+		active := monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 50000})
+		monitor.evaluate(key, now.Add(-10*time.Minute), false, 0, active, true, now)
 	}
 	if got := stateOf(t, monitor, key); got != LivenessOffline {
 		t.Fatalf("对端离线（仅本机发包）时应判离线，实际 %q", got)
 	}
 }
 
-// 对端在发包（rx 增长）时仍应维持在线——保活流量是有效的在线证据。
+// rx 增长是对端发包的直接证据，应判定活跃并维持在线。
 func TestTrafficCountsInboundOnly(t *testing.T) {
 	monitor := newTestMonitor()
-	now := time.Now()
 	const key = "peer-rx"
 
-	monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 2000}, now)
-
-	// 对端发来保活包：rx 增长
-	if active := monitor.recordTraffic(key, trafficSample{rx: 1200, tx: 2000}, now.Add(25*time.Second)); !active {
+	monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 2000})
+	if active := monitor.recordTraffic(key, trafficSample{rx: 1200, tx: 2000}); !active {
 		t.Fatal("rx 增长应判定为活跃")
 	}
 
-	// 探测可能被对端防火墙拦截，但保活流量足以维持在线
-	monitor.evaluate(key, now.Add(-10*time.Minute), false, 0, true, true, now.Add(25*time.Second))
+	now := time.Now()
+	monitor.evaluate(key, now.Add(-10*time.Minute), false, 0, true, true, now)
 	if got := stateOf(t, monitor, key); got != LivenessOnline {
 		t.Fatalf("有对端来向流量时应维持在线，实际 %q", got)
-	}
-	if got := reasonOf(t, monitor, key); got != ReasonTraffic {
-		t.Fatalf("判定依据应为 %s，实际 %q", ReasonTraffic, got)
-	}
-}
-
-// 核心场景：客户端断开后不得被"残留的握手时间"拖住。
-// 握手时间戳在断开后只是停住，若拿它当依据会滞后一个重协商周期。
-func TestLivenessOfflineDespiteFreshHandshake(t *testing.T) {
-	monitor := newTestMonitor()
-	now := time.Now()
-	const key = "peer-d"
-
-	// 30 秒前刚握过手（远小于旧版 180 秒窗口），但此刻探测无响应、无流量
-	freshHandshake := now.Add(-30 * time.Second)
-
-	for i := 0; i < 2; i++ {
-		monitor.evaluate(key, freshHandshake, false, 0, false, true, now)
-	}
-
-	if got := stateOf(t, monitor, key); got != LivenessOffline {
-		t.Fatalf("探测无响应且无流量时应判离线，不应被握手时间拖住，实际 %q", got)
-	}
-	if got := reasonOf(t, monitor, key); got != ReasonTimeout {
-		t.Fatalf("判定依据应为 %s，实际 %q", ReasonTimeout, got)
-	}
-}
-
-// 流量停止后经过保护窗口即判离线。
-func TestLivenessOfflineAfterTrafficStops(t *testing.T) {
-	monitor := newTestMonitor()
-	now := time.Now()
-	const key = "peer-e"
-
-	// 窗口内仍有流量：维持在线
-	monitor.recordTraffic(key, trafficSample{rx: 100, tx: 200}, now)
-	monitor.recordTraffic(key, trafficSample{rx: 300, tx: 400}, now)
-	monitor.evaluate(key, now.Add(-10*time.Minute), false, 0, false, true, now)
-	if got := stateOf(t, monitor, key); got != LivenessOnline {
-		t.Fatalf("保护窗口内应维持在线，实际 %q", got)
-	}
-
-	// 窗口过期后：连续两次无响应即离线
-	expired := now.Add(31 * time.Second)
-	for i := 0; i < 2; i++ {
-		monitor.evaluate(key, expired.Add(-10*time.Minute), false, 0, false, true, expired)
-	}
-	if got := stateOf(t, monitor, key); got != LivenessOffline {
-		t.Fatalf("保护窗口过期后应判离线，实际 %q", got)
 	}
 }
 
@@ -204,13 +169,11 @@ func TestLivenessNoStatsBehaviour(t *testing.T) {
 		t.Fatalf("前置条件：应为在线，实际 %q", got)
 	}
 
-	// 短时不可用：保持在线
 	monitor.evaluate(key, time.Time{}, false, 0, false, false, now)
 	if got := stateOf(t, monitor, key); got != LivenessOnline {
 		t.Fatalf("短时统计不可用时应保持在线，实际 %q", got)
 	}
 
-	// 持续不可用：转为未知
 	for i := 0; i < 10; i++ {
 		monitor.evaluate(key, time.Time{}, false, 0, false, false, now)
 	}
@@ -305,7 +268,7 @@ func TestCheckAllSkipsWhenStatsUnavailable(t *testing.T) {
 	}
 	peer := models.WireguardPeer{
 		ServerID: server.ID, PublicKey: "PEERKEY=", PrivateKey: "KEY=",
-		PeerAddress: "10.100.0.2", AllowedIPs: "10.100.0.2/32", PersistentKeepalive: 25,
+		PeerAddress: "10.100.0.2", AllowedIPs: "10.100.0.2/32", PersistentKeepalive: 10,
 	}
 	if err := db.Create(&peer).Error; err != nil {
 		t.Fatalf("create peer: %v", err)
