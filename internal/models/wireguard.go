@@ -66,8 +66,12 @@ type WireguardPeer struct {
 	Endpoint            string    `json:"endpoint" gorm:""`
 	PersistentKeepalive int       `json:"persistent_keepalive" gorm:"default:0"`
 	Comment             string    `json:"comment" gorm:""` // 备注，如设备名称
-	EnableForwarding    bool      `json:"enable_forwarding" gorm:"default:false"` // 是否启用转发（作为网关）
-	ForwardInterface    string    `json:"forward_interface" gorm:""` // 转发接口名称（如 eth0）
+	// EnableForwarding 是否让该设备充当网关。开启后会在【客户端配置】中注入
+	// iptables NAT 规则（PostUp/PreDown），使其他设备能经它访问 VPN。
+	EnableForwarding bool `json:"enable_forwarding" gorm:"default:false"`
+	// ForwardInterface 客户端设备自己的物理网卡名（如 eth0、wlan0），
+	// 用于客户端侧的 iptables MASQUERADE —— 注意不是服务器的出口网卡。
+	ForwardInterface string `json:"forward_interface" gorm:""`
 	CreatedAt           time.Time `json:"created_at"`
 	UpdatedAt           time.Time `json:"updated_at"`
 }

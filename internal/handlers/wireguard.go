@@ -390,6 +390,12 @@ func AddPeer(c *gin.Context) {
 		return
 	}
 
+	// 启用转发必须给出客户端网卡名，否则注入的 NAT 规则会静默失效
+	if req.EnableForwarding && strings.TrimSpace(req.ForwardInterface) == "" {
+		response.BadRequest(c, "forward_interface is required when forwarding is enabled", nil)
+		return
+	}
+
 	// 获取用户的 WireGuard 服务器
 	var wgServer models.WireguardServer
 	if err := database.DB.Where("user_id = ?", u.ID).First(&wgServer).Error; err != nil {
@@ -707,6 +713,20 @@ func UpdatePeer(c *gin.Context) {
 	// 确保peer属于当前用户的服务器
 	if peer.ServerID != wgServer.ID {
 		response.Forbidden(c, "You don't have permission to update this peer")
+		return
+	}
+
+	// 转发已开启或本次要开启时，网卡名不能为空，否则 NAT 规则不会生效
+	forwardingEnabled := peer.EnableForwarding
+	if req.EnableForwarding != nil {
+		forwardingEnabled = *req.EnableForwarding
+	}
+	forwardInterface := peer.ForwardInterface
+	if req.ForwardInterface != "" {
+		forwardInterface = req.ForwardInterface
+	}
+	if forwardingEnabled && strings.TrimSpace(forwardInterface) == "" {
+		response.BadRequest(c, "forward_interface is required when forwarding is enabled", nil)
 		return
 	}
 
@@ -1116,7 +1136,9 @@ DNS = %s
 		dns,
 	)
 
-	// 如果启用转发，添加 PostUp 和 PreDown 脚本
+	// 启用转发时注入客户端侧的 NAT 规则：
+	// 这段脚本在【客户端设备】上执行，因此 ForwardInterface 必须是该设备自己的
+	// 物理网卡名（不是服务器出口网卡），否则客户端连上后会无法上网。
 	if peer.EnableForwarding && peer.ForwardInterface != "" {
 		postUp := fmt.Sprintf(`PostUp = iptables -t nat -A POSTROUTING -o %s -j MASQUERADE; iptables -A FORWARD -i %%i -j ACCEPT; iptables -A FORWARD -o %%i -j ACCEPT
 PreDown = iptables -t nat -D POSTROUTING -o %s -j MASQUERADE; iptables -D FORWARD -i %%i -j ACCEPT; iptables -D FORWARD -o %%i -j ACCEPT

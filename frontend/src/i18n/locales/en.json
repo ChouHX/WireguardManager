@@ -245,9 +245,9 @@
     "editConfig": "Edit Config",
     "moreActions": "More Actions",
     "enableForwarding": "Enable Forwarding (Gateway Mode)",
-    "forwardInterface": "Forward Interface",
-    "forwardInterfacePlaceholder": "e.g., eth0, wlan0",
-    "forwardingHelp": "When enabled, this device acts as a gateway, allowing other devices to access networks specified in AllowedIPs. Requires physical network interface name.",
+    "forwardInterface": "Client interface name",
+    "forwardInterfacePlaceholder": "e.g. eth0, wlan0, enp3s0",
+    "forwardingHelp": "When enabled, this device acts as a gateway so other devices can reach the VPN through it. Enter the physical NIC of THIS device used for NAT — not the server’s NIC. A wrong value breaks the client’s internet access.",
     "forwardingEnabled": "Forwarding Enabled",
     "forwardingDisabled": "Forwarding Disabled",
     "showQrCode": "Show QR Code",
@@ -270,7 +270,11 @@
     "onlineHint": "{online} / {total} online",
     "livenessHint": "Every {interval}s the backend enters the device namespace and opens a TCP connection to a high port on its tunnel address: a response or RST marks it online, consecutive failures mark it offline.",
     "usePresharedKey": "Preshared key",
-    "usePresharedKeyHelp": "Adds a symmetric key between server and device for extra protection. Re-download the client config after toggling."
+    "usePresharedKeyHelp": "Adds a symmetric key between server and device for extra protection. Re-download the client config after toggling.",
+    "forwardInterfaceHelp": "Physical NIC on this client device (e.g. eth0, wlan0, enp3s0) used for client-side iptables NAT.",
+    "ifaceServerHint": "This is the server’s own outbound interface (for server-side NAT); pick a detected one below.",
+    "ifaceDetected": "Detected default route interface: {name}",
+    "forwardInterfaceRequired": "A client interface name is required when forwarding is enabled"
   },
   "monitoring": {
     "title": "System Monitoring",

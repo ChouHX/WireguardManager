@@ -6,6 +6,7 @@ import {
   Divider,
   Group,
   NumberInput,
+  Select,
   SimpleGrid,
   Stack,
   Switch,
@@ -20,8 +21,9 @@ import { InlineLoader } from '@/components/common/LoadingScreen';
 import { PageHeader } from '@/components/common/PageHeader';
 import { useTranslation } from '@/i18n';
 import { messageOf } from '@/lib/format';
-import { settingsService } from '@/services';
+import { settingsService, wireguardService } from '@/services';
 import type { SettingDef, SettingGroup, SettingsResponse } from '@/types/settings';
+import type { NetworkInterfacesResponse } from '@/types/wireguard';
 
 /** 分组展示顺序 */
 const GROUP_ORDER: SettingGroup[] = ['network', 'monitoring', 'liveness', 'auth', 'wireguard'];
@@ -54,6 +56,8 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** 服务器出口网卡的候选列表（由后端探测默认路由得出） */
+  const [interfaces, setInterfaces] = useState<NetworkInterfacesResponse | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -70,8 +74,21 @@ export default function SettingsPage() {
     }
   }, [t]);
 
+  // 出口网卡是服务器自身的参数，探测结果在这里才有意义
+  const loadInterfaces = useCallback(async () => {
+    try {
+      const response = await wireguardService.getInterfaces();
+      if (response.success && response.data) {
+        setInterfaces(response.data);
+      }
+    } catch {
+      // 探测失败时降级为手动输入
+    }
+  }, []);
+
   useEffect(() => {
     void load();
+    void loadInterfaces();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -143,6 +160,32 @@ export default function SettingsPage() {
           onChange={(next) => setDraft((prev) => ({ ...prev, [def.key]: String(next ?? 0) }))}
           min={def.min}
           max={def.max}
+        />
+      );
+    }
+
+    // 服务器出口网卡：用探测到的接口作为候选项，同时允许自由输入
+    if (def.key === 'network.out_interface') {
+      const candidates = (interfaces?.interfaces ?? []).filter((item) => !item.is_loopback);
+      const options = candidates.map((item) => ({
+        value: item.name,
+        label: item.is_default ? `${item.name} (${t('wireguard.ifaceDefault')})` : item.name,
+      }));
+      if (value && !options.some((option) => option.value === value)) {
+        options.unshift({ value, label: `${value} (${t('wireguard.ifaceCustom')})` });
+      }
+
+      return (
+        <Select
+          key={def.key}
+          label={label}
+          description={t('wireguard.ifaceServerHint')}
+          data={options}
+          value={value || null}
+          onChange={(next) => setDraft((prev) => ({ ...prev, [def.key]: next ?? '' }))}
+          searchable
+          clearable
+          nothingFoundMessage={t('common.noData')}
         />
       );
     }
