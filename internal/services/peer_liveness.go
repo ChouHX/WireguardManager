@@ -50,8 +50,10 @@ type LivenessResult struct {
 	// Reason 本次状态的判定依据
 	Reason string `json:"reason,omitempty"`
 	// Failures 当前连续判为「无响应且无流量」的次数
-	Failures int   `json:"failures"`
-	Checks   int64 `json:"checks"`
+	Failures int `json:"failures"`
+	// NoStats 连续无法读取接口统计的次数
+	NoStats int   `json:"no_stats"`
+	Checks  int64 `json:"checks"`
 }
 
 // trafficSample 上一次采样到的累计流量，用于判断隧道是否仍有数据往来
@@ -172,18 +174,10 @@ func (m *LivenessMonitor) currentProbePort() int {
 	return port
 }
 
-func (m *LivenessMonitor) currentHandshakeWindow() time.Duration {
-	seconds := GetSettings().Int(SettingLivenessHandshakeTimeout, int(m.handshakeWindow/time.Second))
-	if seconds < 1 {
-		seconds = 180
-	}
-	return time.Duration(seconds) * time.Second
-}
-
 func (m *LivenessMonitor) currentTrafficStale() time.Duration {
 	seconds := GetSettings().Int(SettingLivenessTrafficStale, int(m.trafficStale/time.Second))
 	if seconds < 1 {
-		seconds = 40
+		seconds = 30
 	}
 	return time.Duration(seconds) * time.Second
 }
@@ -324,8 +318,15 @@ func (m *LivenessMonitor) evaluate(
 
 	if !statsOK {
 		result.Reason = ReasonNoStats
+		// 统计持续读取失败（账号禁用、网络未就绪）达阈值后标记为未知，
+		// 避免界面长期停留在过期结论上。
+		result.NoStats++
+		if result.NoStats >= m.offlineConfirmations()*3 {
+			result.State = LivenessUnknown
+		}
 		return
 	}
+	result.NoStats = 0
 
 	switch {
 	case reachable:
@@ -335,11 +336,11 @@ func (m *LivenessMonitor) evaluate(
 		result.Reason = ReasonTraffic
 
 	default:
-		// 保护窗口：最近仍有流量，或握手仍在时效内
+		// 保护窗口：最近这段时间内隧道仍有数据往来（保活包即可）。
+		// 刻意不使用握手时间：客户端断开后 last handshake 只是停住而不会清空，
+		// 拿它当依据会让离线判定滞后一个重协商周期（最长 180 秒）。
 		if lastSeen, ok := m.lastTrafficSeen[key]; ok && now.Sub(lastSeen) <= m.currentTrafficStale() {
 			result.Reason = ReasonRecent
-		} else if !handshake.IsZero() && now.Sub(handshake) <= m.currentHandshakeWindow() {
-			result.Reason = ReasonHandshake
 		} else {
 			result.Failures++
 			result.Reason = ReasonTimeout

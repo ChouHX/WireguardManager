@@ -100,7 +100,8 @@ type LivenessConfig struct {
 	ProbePort int `yaml:"probe_port"`
 	// OfflineThreshold 连续多少次「无响应且无流量」后才置为离线
 	OfflineThreshold int `yaml:"offline_threshold"`
-	// HandshakeTimeoutSeconds 握手时效：超过则不再作为在线依据
+	// HandshakeTimeoutSeconds 已不参与在线判定（客户端断开后握手时间只是停住，
+	// 用它判定会导致滞后），保留字段仅为兼容旧配置。
 	HandshakeTimeoutSeconds int `yaml:"handshake_timeout_seconds"`
 	// TrafficStaleSeconds 流量保护窗口：最近这段时间内有流量则仍视为在线
 	TrafficStaleSeconds int `yaml:"traffic_stale_seconds"`
@@ -327,7 +328,7 @@ func (c *Config) normalize() {
 		c.Liveness.HandshakeTimeoutSeconds = 180
 	}
 	if c.Liveness.TrafficStaleSeconds <= 0 {
-		c.Liveness.TrafficStaleSeconds = 40
+		c.Liveness.TrafficStaleSeconds = 30
 	}
 	if c.Liveness.OfflineThreshold <= 0 {
 		c.Liveness.OfflineThreshold = 2

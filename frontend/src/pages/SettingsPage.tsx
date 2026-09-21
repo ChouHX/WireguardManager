@@ -42,7 +42,6 @@ const LABEL_KEY: Record<string, string> = {
   'liveness.interval_seconds': 'livenessInterval',
   'liveness.probe_timeout_ms': 'livenessProbeTimeout',
   'liveness.probe_port': 'livenessProbePort',
-  'liveness.handshake_timeout_seconds': 'livenessHandshakeTimeout',
   'liveness.offline_threshold': 'livenessOfflineThreshold',
   'jwt.expire_hours': 'jwtExpireHours',
   'wireguard.default_preshared_key': 'defaultPresharedKey',

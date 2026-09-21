@@ -131,6 +131,15 @@ function LivenessIndicator({
           {result.latency_ms > 0 ? `${result.latency_ms}ms` : '<1ms'}
         </Text>
       ) : null}
+      {result?.reason ? (
+        <Tooltip label={t('wireguard.lastProbe')}>
+          <Text fz={11} c="dimmed">
+            {t(`wireguard.reason.${result.reason}`) === `wireguard.reason.${result.reason}`
+              ? result.reason
+              : t(`wireguard.reason.${result.reason}`)}
+          </Text>
+        </Tooltip>
+      ) : null}
     </Group>
   );
 }

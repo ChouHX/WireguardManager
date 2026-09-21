@@ -274,7 +274,15 @@
     "forwardInterfaceHelp": "When empty, emits ! -o %i — wg-quick expands %i to the tunnel interface, meaning \"NAT anything not leaving via the tunnel\". No need to know the client NIC name. Only fill this when auto-detection does not fit your case (e.g. eth0, wlan0).",
     "ifaceServerHint": "This is the server’s own outbound interface (for server-side NAT); pick a detected one below.",
     "ifaceDetected": "Detected default route interface: {name}",
-    "forwardInterfaceOptional": "Leave empty to auto-detect"
+    "forwardInterfaceOptional": "Leave empty to auto-detect",
+    "reason": {
+      "probe": "probe replied",
+      "traffic": "tunnel traffic",
+      "recent": "recent traffic",
+      "timeout": "no probe reply",
+      "no_stats": "stats unavailable"
+    },
+    "lastProbe": "Signal"
   },
   "monitoring": {
     "title": "System Monitoring",
@@ -346,11 +354,11 @@
     "monitoringRetention": "Retention (hours)",
     "livenessEnabled": "Enable liveness check",
     "livenessInterval": "Recheck interval (s)",
-    "livenessHandshakeTimeout": "Handshake window (s)",
     "livenessOfflineThreshold": "Offline confirmations",
     "jwtExpireHours": "Token lifetime (hours)",
     "defaultPresharedKey": "Use preshared key for new devices",
-    "livenessProbeTimeout": "Probe timeout (ms)",
-    "livenessProbePort": "Probe port"
+    "livenessProbePort": "Probe port",
+    "livenessTrafficStale": "Traffic hold window (s)",
+    "livenessProbeTimeout": "Probe timeout (ms)"
   }
 }

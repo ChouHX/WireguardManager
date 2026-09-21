@@ -246,7 +246,6 @@ func settingsDefaults() map[string]string {
 		services.SettingLivenessInterval:         strconv.Itoa(cfg.Liveness.IntervalSeconds),
 		services.SettingLivenessProbeTimeout:     strconv.Itoa(cfg.Liveness.ProbeTimeoutMS),
 		services.SettingLivenessProbePort:        strconv.Itoa(cfg.Liveness.ProbePort),
-		services.SettingLivenessHandshakeTimeout: strconv.Itoa(cfg.Liveness.HandshakeTimeoutSeconds),
 		services.SettingLivenessTrafficStale:     strconv.Itoa(cfg.Liveness.TrafficStaleSeconds),
 		services.SettingLivenessOfflineThreshold: strconv.Itoa(cfg.Liveness.OfflineThreshold),
 

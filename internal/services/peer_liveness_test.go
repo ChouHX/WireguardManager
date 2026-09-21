@@ -16,8 +16,7 @@ func newTestMonitor() *LivenessMonitor {
 		interval:        2 * time.Second,
 		probeTimeout:    time.Second,
 		offlineAfter:    2,
-		handshakeWindow: 180 * time.Second,
-		trafficStale:    40 * time.Second,
+		trafficStale:    30 * time.Second,
 		maxConcurrency:  4,
 		results:         make(map[string]*LivenessResult),
 		traffic:         make(map[string]trafficSample),
@@ -95,64 +94,75 @@ func TestLivenessKeepsOnlineWithinTrafficWindow(t *testing.T) {
 	}
 }
 
-// 断开后的实时判定：探测失败 + 流量停止 + 保护窗口过期 → 连续两次即离线。
-func TestLivenessOfflineQuicklyAfterTrafficStops(t *testing.T) {
+// 核心场景：客户端断开后不得被"残留的握手时间"拖住。
+// 握手时间戳在断开后只是停住，若拿它当依据会滞后一个重协商周期。
+func TestLivenessOfflineDespiteFreshHandshake(t *testing.T) {
 	monitor := newTestMonitor()
 	now := time.Now()
 	const key = "peer-d"
 
-	// 历史上曾有流量（已超出保护窗口）
-	monitor.recordTraffic(key, trafficSample{rx: 100, tx: 200}, now.Add(-5*time.Minute))
-	monitor.recordTraffic(key, trafficSample{rx: 300, tx: 400}, now.Add(-5*time.Minute))
+	// 30 秒前刚握过手（远小于旧版 180 秒窗口），但此刻探测无响应、无流量
+	freshHandshake := now.Add(-30 * time.Second)
 
-	// 第一轮：探测失败、无新流量，但握手仍在时效内 → 作为弱信号维持在线
-	monitor.evaluate(key, now.Add(-30*time.Second), false, 0, false, true, now)
-	if got := stateOf(t, monitor, key); got != LivenessOnline {
-		t.Fatalf("握手仍在时效内应维持在线，实际 %q", got)
-	}
-	if got := reasonOf(t, monitor, key); got != ReasonHandshake {
-		t.Fatalf("判定依据应为 %s，实际 %q", ReasonHandshake, got)
+	for i := 0; i < 2; i++ {
+		monitor.evaluate(key, freshHandshake, false, 0, false, true, now)
 	}
 
-	// 握手过期后：连续两次无响应即判离线
-	stale := now.Add(-10 * time.Minute)
-	monitor.evaluate(key, stale, false, 0, false, true, now)
-	if got := stateOf(t, monitor, key); got != LivenessOnline {
-		t.Fatalf("首次超时不应立即判离线，实际 %q", got)
-	}
-
-	monitor.evaluate(key, stale, false, 0, false, true, now)
 	if got := stateOf(t, monitor, key); got != LivenessOffline {
-		t.Fatalf("连续两次无响应应判离线，实际 %q", got)
+		t.Fatalf("探测无响应且无流量时应判离线，不应被握手时间拖住，实际 %q", got)
 	}
 	if got := reasonOf(t, monitor, key); got != ReasonTimeout {
 		t.Fatalf("判定依据应为 %s，实际 %q", ReasonTimeout, got)
 	}
-
-	// 重新探测成功：立即恢复在线
-	monitor.evaluate(key, now, true, 2*time.Millisecond, false, true, now)
-	if got := stateOf(t, monitor, key); got != LivenessOnline {
-		t.Fatalf("探测恢复后应立即在线，实际 %q", got)
-	}
 }
 
-// 统计不可用（账号禁用/网络未就绪）时不改变既有结论。
-func TestLivenessKeepsStateWhenStatsUnavailable(t *testing.T) {
+// 流量停止后经过保护窗口即判离线。
+func TestLivenessOfflineAfterTrafficStops(t *testing.T) {
 	monitor := newTestMonitor()
 	now := time.Now()
 	const key = "peer-e"
+
+	// 窗口内仍有流量：维持在线
+	monitor.recordTraffic(key, trafficSample{rx: 100, tx: 200}, now)
+	monitor.recordTraffic(key, trafficSample{rx: 300, tx: 400}, now)
+	monitor.evaluate(key, now.Add(-10*time.Minute), false, 0, false, true, now)
+	if got := stateOf(t, monitor, key); got != LivenessOnline {
+		t.Fatalf("保护窗口内应维持在线，实际 %q", got)
+	}
+
+	// 窗口过期后：连续两次无响应即离线
+	expired := now.Add(31 * time.Second)
+	for i := 0; i < 2; i++ {
+		monitor.evaluate(key, expired.Add(-10*time.Minute), false, 0, false, true, expired)
+	}
+	if got := stateOf(t, monitor, key); got != LivenessOffline {
+		t.Fatalf("保护窗口过期后应判离线，实际 %q", got)
+	}
+}
+
+// 统计短时不可用时保留既有结论；持续不可用则转为未知，避免停在过期结论上。
+func TestLivenessNoStatsBehaviour(t *testing.T) {
+	monitor := newTestMonitor()
+	now := time.Now()
+	const key = "peer-f"
 
 	monitor.evaluate(key, now, true, time.Millisecond, false, true, now)
 	if got := stateOf(t, monitor, key); got != LivenessOnline {
 		t.Fatalf("前置条件：应为在线，实际 %q", got)
 	}
 
-	for i := 0; i < 5; i++ {
-		monitor.evaluate(key, time.Time{}, false, 0, false, false, now)
+	// 短时不可用：保持在线
+	monitor.evaluate(key, time.Time{}, false, 0, false, false, now)
+	if got := stateOf(t, monitor, key); got != LivenessOnline {
+		t.Fatalf("短时统计不可用时应保持在线，实际 %q", got)
 	}
 
-	if got := stateOf(t, monitor, key); got != LivenessOnline {
-		t.Fatalf("统计不可用时应保持在线，实际 %q", got)
+	// 持续不可用：转为未知
+	for i := 0; i < 10; i++ {
+		monitor.evaluate(key, time.Time{}, false, 0, false, false, now)
+	}
+	if got := stateOf(t, monitor, key); got != LivenessUnknown {
+		t.Fatalf("统计持续不可用时应转为 unknown，实际 %q", got)
 	}
 	if got := reasonOf(t, monitor, key); got != ReasonNoStats {
 		t.Fatalf("判定依据应标记为 %s，实际 %q", ReasonNoStats, got)
