@@ -9,6 +9,9 @@
   --wm-nav-width-collapsed: 64px;
   /* WireGuard 官方 logo 主色（浅色主题用官方红，与主题的中国红同色系） */
   --wm-logo-color: #88171a;
+  /* 分组容器的层次底色：与页面背景保持约 8 级亮度差，
+     使无描边的分组仍可辨识（亮色下页面为 #fff，暗色下为 #242424） */
+  --wm-surface: #f6f7f9;
 }
 
 [data-mantine-color-scheme='dark'] {
@@ -16,6 +19,7 @@
   --wm-surface-raised: rgba(28, 31, 38, 0.78);
   /* 深色背景下换用色板 shade 4，保证 logo 可辨识 */
   --wm-logo-color: #fa6c61;
+  --wm-surface: #2c2c2c;
 }
 
 html,

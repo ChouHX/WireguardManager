@@ -3,8 +3,6 @@ import {
   Box,
   Button,
   Card,
-  Divider,
-  Grid,
   Group,
   NumberInput,
   Select,
@@ -14,7 +12,7 @@ import {
   TextInput,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { IconAdjustments, IconDeviceFloppy, IconRefresh } from '@tabler/icons-react';
+import { IconDeviceFloppy, IconRefresh } from '@tabler/icons-react';
 
 import { ErrorAlert } from '@/components/common/Feedback';
 import { InlineLoader } from '@/components/common/LoadingScreen';
@@ -43,12 +41,12 @@ const LABEL_KEY: Record<string, string> = {
   'wireguard.default_preshared_key': 'defaultPresharedKey',
 };
 
-/** 标签列宽：固定后左右两侧的行都能对齐 */
-const LABEL_COL = { base: 12, sm: 5 } as const;
-const FIELD_COL = { base: 12, sm: 7 } as const;
+/** 标签列固定宽度，保证左右两列各自对齐 */
+const LABEL_WIDTH = 190;
 
-/** 统一行高：让开关行与输入行在视觉上完全齐平 */
-const ROW_HEIGHT = 49;
+/** 单行控件区的基准高度（与输入框一致）：标签按此高度居中，
+ *  使带说明文字的字段也不会让标签与输入框错位。 */
+const CONTROL_HEIGHT = 36;
 
 export default function SettingsPage() {
   const { t } = useTranslation();
@@ -133,22 +131,29 @@ export default function SettingsPage() {
 
   const set = (key: string, value: string) => setDraft((prev) => ({ ...prev, [key]: value }));
 
-  /** 统一渲染控件本体（不含标签），保证左右两列在同一基线上对齐 */
-  const renderControl = (def: SettingDef) => {
+  /** 统一渲染控件本体（不含标签）。
+   *
+   *  说明文字刻意不用 Mantine 的 description：它会渲染在输入框【上方】，
+   *  把输入框整体下推，导致标签与输入框视觉错位。改为放在控件下方，
+   *  这样每行的输入框都紧贴行首，与标签中线自然对齐。 */
+  const renderControl = (def: SettingDef): { control: React.ReactNode; hint?: string } => {
     const value = draft[def.key] ?? '';
 
     if (def.type === 'bool') {
-      return (
-        <Switch
-          checked={value === 'true'}
-          onChange={(event) => set(def.key, String(event.currentTarget.checked))}
-          color="wg"
-          size="md"
-          label={value === 'true' ? t('settings.on') : t('settings.off')}
-          labelPosition="right"
-          styles={{ label: { fontSize: 12, color: 'var(--mantine-color-dimmed)' } }}
-        />
-      );
+      return {
+        control: (
+          <Switch
+            checked={value === 'true'}
+            onChange={(event) => set(def.key, String(event.currentTarget.checked))}
+            color="wg"
+            size="md"
+            style={{ height: CONTROL_HEIGHT }}
+            label={value === 'true' ? t('settings.on') : t('settings.off')}
+            labelPosition="right"
+            styles={{ label: { fontSize: 12, color: 'var(--mantine-color-dimmed)' } }}
+          />
+        ),
+      };
     }
 
     // 服务器出口网卡：用探测到的接口作为候选项，同时允许自由输入
@@ -162,38 +167,46 @@ export default function SettingsPage() {
         options.unshift({ value, label: `${value} (${t('wireguard.ifaceCustom')})` });
       }
 
-      return (
-        <Select
-          data={options}
-          value={value || null}
-          onChange={(next) => set(def.key, next ?? '')}
-          searchable
-          clearable
-          nothingFoundMessage={t('common.noData')}
-          description={t('wireguard.ifaceServerHint')}
-        />
-      );
+      return {
+        control: (
+          <Select
+            data={options}
+            value={value || null}
+            onChange={(next) => set(def.key, next ?? '')}
+            searchable
+            clearable
+            nothingFoundMessage={t('common.noData')}
+          />
+        ),
+        hint: t('wireguard.ifaceServerHint'),
+      };
     }
 
     if (def.type === 'int') {
-      return (
-        <NumberInput
-          value={Number(value) || 0}
-          onChange={(next) => set(def.key, String(next ?? 0))}
-          min={def.min}
-          max={def.max}
-        />
-      );
+      return {
+        control: (
+          <NumberInput
+            value={Number(value) || 0}
+            onChange={(next) => set(def.key, String(next ?? 0))}
+            min={def.min}
+            max={def.max}
+          />
+        ),
+      };
     }
 
-    return (
-      <TextInput
-        value={value}
-        onChange={(event) => set(def.key, event.currentTarget.value)}
-        className="wm-mono"
-        placeholder={def.key === 'network.client_allowed_ips' ? t('settings.allowedIpsPlaceholder') : undefined}
-      />
-    );
+    return {
+      control: (
+        <TextInput
+          value={value}
+          onChange={(event) => set(def.key, event.currentTarget.value)}
+          className="wm-mono"
+          placeholder={
+            def.key === 'network.client_allowed_ips' ? t('settings.allowedIpsPlaceholder') : undefined
+          }
+        />
+      ),
+    };
   };
 
   if (loading || !data) {
@@ -249,48 +262,57 @@ export default function SettingsPage() {
             key={group}
             className="wm-rise"
             style={{ '--wm-delay': `${index * 40}ms` } as React.CSSProperties}
-            padding="sm"
+            padding="md"
+            /* 极简：不用描边，靠 --wm-surface 与页面背景的色差区分分组 */
+            withBorder={false}
+            bg="var(--wm-surface)"
           >
-            <Group gap={8} mb={6}>
-              <IconAdjustments size={15} stroke={1.7} />
-              <Text fw={650} fz={13.5}>
-                {t(`settings.group.${group}`)}
-              </Text>
-            </Group>
-            <Divider mb="xs" variant="dashed" />
+            <Text fw={650} fz={13} mb={group === 'liveness' ? 2 : 'sm'}>
+              {t(`settings.group.${group}`)}
+            </Text>
 
             {/* 在线判定只有一项：补一行说明，讲清其余参数为何无需配置 */}
             {group === 'liveness' ? (
-              <Text fz={11.5} c="dimmed" mb={6}>
+              <Text fz={11.5} c="dimmed" mb="sm">
                 {t('settings.livenessNote')}
               </Text>
             ) : null}
 
-            {/* 统一的行结构：左侧标签固定列宽，右侧控件，逐行对齐 */}
-            <Stack gap={2}>
+            {/* 用 flex 而非 Grid：Group 默认 align="center"，垂直居中更可靠；
+                行与行之间只靠间距分隔，不加任何分隔线 */}
+            <Stack gap={10}>
               {defs.map((def) => {
                 const labelKey = LABEL_KEY[def.key];
+                const { control, hint } = renderControl(def);
                 return (
-                  <Grid
-                    key={def.key}
-                    gutter="sm"
-                    align="center"
-                    /* 固定行高：开关行的控件比输入框矮，不统一会让各行看起来参差 */
-                    mih={ROW_HEIGHT}
-                    style={{ borderBottom: '1px solid var(--mantine-color-default-border)' }}
-                  >
-                    <Grid.Col span={LABEL_COL}>
-                      <Box>
-                        <Text fz={13} fw={550} lh={1.3}>
-                          {labelKey ? t(`settings.${labelKey}`) : def.key}
+                  <Group key={def.key} wrap="nowrap" align="flex-start" gap="md">
+                    {/* 标签块按控件基准高度居中：带说明文字的字段，说明只在
+                        输入框下方延伸，不会把标签顶偏 */}
+                    <Box
+                      w={LABEL_WIDTH}
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'center',
+                        minHeight: CONTROL_HEIGHT,
+                      }}
+                    >
+                      <Text fz={13} fw={550} lh={1.25}>
+                        {labelKey ? t(`settings.${labelKey}`) : def.key}
+                      </Text>
+                      <Text fz={10} c="dimmed" className="wm-mono" lh={1.25}>
+                        {def.key}
+                      </Text>
+                    </Box>
+                    <Box style={{ flex: 1, minWidth: 0 }}>
+                      {control}
+                      {hint ? (
+                        <Text fz={10.5} c="dimmed" mt={3}>
+                          {hint}
                         </Text>
-                        <Text fz={10} c="dimmed" className="wm-mono" lh={1.3}>
-                          {def.key}
-                        </Text>
-                      </Box>
-                    </Grid.Col>
-                    <Grid.Col span={FIELD_COL}>{renderControl(def)}</Grid.Col>
-                  </Grid>
+                      ) : null}
+                    </Box>
+                  </Group>
                 );
               })}
             </Stack>
