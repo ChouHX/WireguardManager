@@ -45,6 +45,12 @@ func (s *MonitoringService) Start(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
+			// 采样间隔支持运行时调整：每轮检查一次，变化时重建 ticker
+			if interval := runtimeMonitoringInterval(s.interval); interval != s.interval {
+				s.interval = interval
+				ticker.Reset(interval)
+				log.Printf("Monitoring service interval updated to %v", interval)
+			}
 			s.collectAndSave()
 		case <-ctx.Done():
 			log.Println("Monitoring service stopped")
@@ -81,7 +87,7 @@ func (s *MonitoringService) RunCleanupLoop(ctx context.Context, interval, retent
 			log.Println("Monitoring cleanup loop stopped")
 			return
 		case <-ticker.C:
-			if err := s.CleanupOldRecords(retention); err != nil {
+			if err := s.CleanupOldRecords(runtimeMonitoringRetention(retention)); err != nil {
 				log.Printf("Failed to clean up old monitoring records: %v", err)
 			}
 		}
@@ -126,6 +132,24 @@ func (s *MonitoringService) collectAndSave() {
 
 	log.Printf("Monitoring record saved: CPU=%.2f%%, Memory=%.2f%%, Disk=%.2f%%",
 		record.CPUUsagePercent, record.MemoryUsedPercent, record.DiskUsedPercent)
+}
+
+// runtimeMonitoringInterval 取运行时配置中的采样间隔。
+func runtimeMonitoringInterval(fallback time.Duration) time.Duration {
+	seconds := GetSettings().Int(SettingMonitoringInterval, int(fallback/time.Second))
+	if seconds < 1 {
+		seconds = 10
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+// runtimeMonitoringRetention 取运行时配置中的记录保留时长。
+func runtimeMonitoringRetention(fallback time.Duration) time.Duration {
+	hours := GetSettings().Int(SettingMonitoringRetention, int(fallback/time.Hour))
+	if hours < 1 {
+		hours = 168
+	}
+	return time.Duration(hours) * time.Hour
 }
 
 // GetRecentRecords retrieves recent monitoring records
