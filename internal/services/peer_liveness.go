@@ -85,6 +85,12 @@ func (m *LivenessMonitor) Start(parent context.Context) {
 		for {
 			select {
 			case <-ticker.C:
+				// 判定参数支持运行时调整：每轮复核前重新读取
+				if interval := m.currentInterval(); interval != m.interval {
+					m.interval = interval
+					ticker.Reset(interval)
+					log.Printf("Liveness monitor interval updated to %v", interval)
+				}
 				m.checkAll()
 			case <-m.ctx.Done():
 				return
@@ -107,6 +113,33 @@ func (m *LivenessMonitor) Stop() {
 // ProbeEnabled 判定功能是否处于运行状态。
 func (m *LivenessMonitor) ProbeEnabled() bool {
 	return m.ctx != nil
+}
+
+// currentInterval 取运行时配置中的复核间隔（未配置时用启动时的值）。
+func (m *LivenessMonitor) currentInterval() time.Duration {
+	seconds := GetSettings().Int(SettingLivenessInterval, int(m.interval/time.Second))
+	if seconds < 1 {
+		seconds = 3
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+// handshakeWindow 取运行时配置中的握手时效阈值。
+func (m *LivenessMonitor) handshakeWindow() time.Duration {
+	seconds := GetSettings().Int(SettingLivenessHandshakeTimeout, int(m.handshakeTimeout/time.Second))
+	if seconds < 1 {
+		seconds = 180
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+// offlineConfirmations 取运行时配置中的离线确认次数。
+func (m *LivenessMonitor) offlineConfirmations() int {
+	count := GetSettings().Int(SettingLivenessOfflineThreshold, m.offlineAfter)
+	if count < 1 {
+		count = 2
+	}
+	return count
 }
 
 // checkAll 遍历所有账号，读取握手状态并更新判定结果。
@@ -181,7 +214,7 @@ func (m *LivenessMonitor) evaluate(key string, handshake time.Time, statsOK bool
 		return
 	}
 
-	if !handshake.IsZero() && now.Sub(handshake) <= m.handshakeTimeout {
+	if !handshake.IsZero() && now.Sub(handshake) <= m.handshakeWindow() {
 		result.State = LivenessOnline
 		result.Failures = 0
 		result.LastOnlineAt = &now
@@ -196,7 +229,7 @@ func (m *LivenessMonitor) evaluate(key string, handshake time.Time, statsOK bool
 	}
 
 	result.Failures++
-	if result.Failures >= m.offlineAfter {
+	if result.Failures >= m.offlineConfirmations() {
 		result.State = LivenessOffline
 	}
 }

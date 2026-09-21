@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"cloud-platform/internal/auth"
-	"cloud-platform/internal/config"
 	"cloud-platform/internal/database"
 	"cloud-platform/internal/middleware"
 	"cloud-platform/internal/models"
@@ -66,12 +65,7 @@ func Register(c *gin.Context) {
 	database.DB.First(&user, user.ID)
 
 	// 为用户配置网络环境（命名空间 + WireGuard）
-	networkService := services.NewUserNetworkService(
-		config.AppConfig.Network.ConfigDir,
-		config.AppConfig.Network.BaseSubnet,
-		config.AppConfig.Network.BasePort,
-		config.AppConfig.Network.OutInterface,
-	)
+	networkService := services.NewUserNetworkServiceFromRuntime()
 
 	wgServer, err := networkService.ProvisionUserNetwork(&user)
 	if err != nil {

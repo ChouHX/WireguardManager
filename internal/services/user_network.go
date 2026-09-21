@@ -1,6 +1,7 @@
 package services
 
 import (
+	"cloud-platform/internal/config"
 	"cloud-platform/internal/models"
 	"fmt"
 	"hash/fnv"
@@ -17,6 +18,18 @@ type UserNetworkService struct {
 }
 
 // NewUserNetworkService 创建用户网络配置服务
+// NewUserNetworkServiceFromRuntime 用运行时配置构造（config.yaml 仅作初始默认值）。
+func NewUserNetworkServiceFromRuntime() *UserNetworkService {
+	cfg := config.AppConfig
+	settings := GetSettings()
+
+	baseSubnet := settings.String(SettingNetworkBaseSubnet, cfg.Network.BaseSubnet)
+	basePort := settings.Int(SettingNetworkBasePort, cfg.Network.BasePort)
+	outInterface := settings.String(SettingNetworkOutInterface, cfg.Network.OutInterface)
+
+	return NewUserNetworkService(cfg.Network.ConfigDir, baseSubnet, basePort, outInterface)
+}
+
 func NewUserNetworkService(configDir, baseSubnet string, basePort int, outInterface string) *UserNetworkService {
 	return &UserNetworkService{
 		netnsService:     NewNetnsService(),
@@ -33,22 +46,22 @@ func (s *UserNetworkService) ProvisionUserNetwork(user *models.User) (*models.Wi
 	// 1. 生成配置参数（基于UserUID）
 	nsName := s.generateNamespaceName(user.UserUID)
 	wgInterface := "wg0"
-	
+
 	// 使用UserUID的哈希值生成端口和子网ID（避免冲突）
 	userHash := s.hashUserUID(user.UserUID)
 	wgPort := s.basePort + (userHash % 10000) // 限制在10000个端口范围内
 	vethHost := fmt.Sprintf("veth-h-%s", user.UserUID[:6])
 	vethNs := fmt.Sprintf("veth-ns-%s", user.UserUID[:6])
-	
+
 	// IP地址分配
 	// 为每个用户分配独立的网段（使用哈希值的低8位作为子网ID）
 	userSubnetID := (userHash % 254) + 1 // 1-254，避免0和255
-	
+
 	// veth 对使用 /30 子网（只需要2个IP：.1给主机，.2给命名空间）
 	vethSubnet := fmt.Sprintf("%s.%d.0/30", s.baseSubnet, userSubnetID)
 	hostIP := fmt.Sprintf("%s.%d.1/30", s.baseSubnet, userSubnetID)
 	nsIP := fmt.Sprintf("%s.%d.2/30", s.baseSubnet, userSubnetID)
-	
+
 	// WireGuard 使用独立的子网（10.100.X.0/24），避免与 veth 冲突
 	wgIP := fmt.Sprintf("10.100.%d.1/24", userSubnetID)
 
@@ -164,4 +177,3 @@ func (s *UserNetworkService) hashUserUID(userUID string) int {
 	h.Write([]byte(userUID))
 	return int(h.Sum32())
 }
-

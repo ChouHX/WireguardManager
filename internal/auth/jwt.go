@@ -3,6 +3,7 @@ package auth
 import (
 	"cloud-platform/internal/config"
 	"cloud-platform/internal/models"
+	"cloud-platform/internal/services"
 	"errors"
 	"time"
 
@@ -16,7 +17,11 @@ type Claims struct {
 }
 
 func GenerateToken(user *models.User) (string, error) {
-	expirationTime := time.Now().Add(time.Duration(config.AppConfig.JWT.ExpireHours) * time.Hour)
+	expireHours := services.GetSettings().Int(services.SettingJWTExpireHours, config.AppConfig.JWT.ExpireHours)
+	if expireHours < 1 {
+		expireHours = 24
+	}
+	expirationTime := time.Now().Add(time.Duration(expireHours) * time.Hour)
 
 	claims := &Claims{
 		UserID: user.ID,

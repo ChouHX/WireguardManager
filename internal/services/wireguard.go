@@ -159,13 +159,55 @@ func (s *WireguardService) GetWireguardStatus(nsName, interfaceName string) (str
 	return string(output), nil
 }
 
+// GeneratePresharedKey 生成预共享密钥（对称加密，服务端与客户端共用同一个值）。
+func (s *WireguardService) GeneratePresharedKey() (string, error) {
+	cmd := exec.Command("wg", "genpsk")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate preshared key: %v", err)
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+// SetPeerPresharedKey 为已存在的 peer 设置预共享密钥。
+// wg 要求从文件读取密钥，这里写入临时文件（0600）后立即删除。
+func (s *WireguardService) SetPeerPresharedKey(nsName, interfaceName, peerPublicKey, presharedKey string) error {
+	if strings.TrimSpace(presharedKey) == "" {
+		return fmt.Errorf("preshared key must not be empty")
+	}
+
+	file, err := os.CreateTemp("", "wg-psk-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file for preshared key: %v", err)
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+
+	if _, err := file.WriteString(presharedKey + "\n"); err != nil {
+		return fmt.Errorf("failed to write preshared key: %v", err)
+	}
+	if err := file.Chmod(0o600); err != nil {
+		return fmt.Errorf("failed to secure preshared key file: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("failed to flush preshared key: %v", err)
+	}
+
+	cmd := exec.Command("ip", "netns", "exec", nsName,
+		"wg", "set", interfaceName, "peer", peerPublicKey, "preshared-key", file.Name())
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to set preshared key: %v, output: %s", err, string(output))
+	}
+	return nil
+}
+
 // AddPeer 添加WireGuard peer
 func (s *WireguardService) AddPeer(nsName, interfaceName, peerPublicKey, allowedIPs, endpoint string) error {
 	args := []string{"netns", "exec", nsName, "wg", "set", interfaceName, "peer", peerPublicKey, "allowed-ips", allowedIPs}
 	if endpoint != "" {
 		args = append(args, "endpoint", endpoint)
 	}
-	
+
 	cmd := exec.Command("ip", args...)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to add peer: %v, output: %s", err, string(output))

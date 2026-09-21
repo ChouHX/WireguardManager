@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"cloud-platform/internal/config"
 	"cloud-platform/internal/database"
 	"cloud-platform/internal/middleware"
 	"cloud-platform/internal/models"
@@ -70,12 +69,7 @@ func DeleteUser(c *gin.Context) {
 	// 清理用户的网络资源
 	var wgServer models.WireguardServer
 	if err := database.DB.Where("user_id = ?", targetUser.ID).First(&wgServer).Error; err == nil {
-		networkService := services.NewUserNetworkService(
-			config.AppConfig.Network.ConfigDir,
-			config.AppConfig.Network.BaseSubnet,
-			config.AppConfig.Network.BasePort,
-			config.AppConfig.Network.OutInterface,
-		)
+		networkService := services.NewUserNetworkServiceFromRuntime()
 
 		// 删除所有peers
 		database.DB.Where("server_id = ?", wgServer.ID).Delete(&models.WireguardPeer{})

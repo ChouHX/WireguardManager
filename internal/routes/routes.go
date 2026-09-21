@@ -60,6 +60,10 @@ func SetupRoutes(r *gin.Engine) {
 		admin.PATCH("/wireguard/servers/:id/toggle", handlers.AdminToggleWireguardServer) // 启用/禁用服务器
 		admin.PATCH("/wireguard/servers/:id/ratelimit", handlers.AdminSetRateLimit) // 设置速率限制
 		
+		// 运行时配置（管理界面可调）
+		admin.GET("/settings", handlers.GetRuntimeSettings)
+		admin.PATCH("/settings", handlers.UpdateRuntimeSettings)
+
 		// 系统监控
 		admin.GET("/monitoring/system", handlers.GetSystemStats)        // 获取系统整体统计
 		admin.GET("/monitoring/cpu", handlers.GetCPUStats)              // 获取CPU统计

@@ -40,7 +40,7 @@ func (s *NetnsService) NamespaceExists(name string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("failed to list namespaces: %v", err)
 	}
-	
+
 	namespaces := strings.Split(string(output), "\n")
 	for _, ns := range namespaces {
 		// 命名空间列表格式为 "name (id: X)" 或 "name"
@@ -202,13 +202,13 @@ func (s *NetnsService) ExecInNamespace(nsName string, command []string) (string,
 func (s *NetnsService) AddRouteForPeer(nsName, wgInterface, allowedIPs string) error {
 	// allowedIPs 可能包含多个网段，用逗号分隔
 	ipRanges := strings.Split(allowedIPs, ",")
-	
+
 	for _, ipRange := range ipRanges {
 		ipRange = strings.TrimSpace(ipRange)
 		if ipRange == "" {
 			continue
 		}
-		
+
 		// 添加路由：目标网段通过WireGuard接口
 		cmd := exec.Command("ip", "netns", "exec", nsName, "ip", "route", "add", ipRange, "dev", wgInterface)
 		if output, err := cmd.CombinedOutput(); err != nil {
@@ -218,20 +218,20 @@ func (s *NetnsService) AddRouteForPeer(nsName, wgInterface, allowedIPs string) e
 			}
 		}
 	}
-	
+
 	return nil
 }
 
 // DeleteRouteForPeer 删除peer的allowedIPs路由规则
 func (s *NetnsService) DeleteRouteForPeer(nsName, wgInterface, allowedIPs string) error {
 	ipRanges := strings.Split(allowedIPs, ",")
-	
+
 	for _, ipRange := range ipRanges {
 		ipRange = strings.TrimSpace(ipRange)
 		if ipRange == "" {
 			continue
 		}
-		
+
 		// 删除路由
 		cmd := exec.Command("ip", "netns", "exec", nsName, "ip", "route", "del", ipRange, "dev", wgInterface)
 		if output, err := cmd.CombinedOutput(); err != nil {
@@ -241,53 +241,53 @@ func (s *NetnsService) DeleteRouteForPeer(nsName, wgInterface, allowedIPs string
 			}
 		}
 	}
-	
+
 	return nil
 }
 
 // AddIptablesRuleForPeer 为peer添加iptables规则（如果需要NAT或转发控制）
 func (s *NetnsService) AddIptablesRuleForPeer(nsName, allowedIPs string) error {
 	ipRanges := strings.Split(allowedIPs, ",")
-	
+
 	for _, ipRange := range ipRanges {
 		ipRange = strings.TrimSpace(ipRange)
 		if ipRange == "" {
 			continue
 		}
-		
+
 		// 允许转发到该网段
 		cmd := exec.Command("ip", "netns", "exec", nsName, "iptables", "-A", "FORWARD", "-d", ipRange, "-j", "ACCEPT")
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to add iptables forward rule for %s: %v, output: %s", ipRange, err, string(output))
 		}
-		
+
 		// 允许从该网段转发回来
 		cmd = exec.Command("ip", "netns", "exec", nsName, "iptables", "-A", "FORWARD", "-s", ipRange, "-j", "ACCEPT")
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to add iptables forward rule for %s: %v, output: %s", ipRange, err, string(output))
 		}
 	}
-	
+
 	return nil
 }
 
 // DeleteIptablesRuleForPeer 删除peer的iptables规则
 func (s *NetnsService) DeleteIptablesRuleForPeer(nsName, allowedIPs string) error {
 	ipRanges := strings.Split(allowedIPs, ",")
-	
+
 	for _, ipRange := range ipRanges {
 		ipRange = strings.TrimSpace(ipRange)
 		if ipRange == "" {
 			continue
 		}
-		
+
 		// 删除转发规则（忽略错误）
 		cmd := exec.Command("ip", "netns", "exec", nsName, "iptables", "-D", "FORWARD", "-d", ipRange, "-j", "ACCEPT")
 		cmd.CombinedOutput()
-		
+
 		cmd = exec.Command("ip", "netns", "exec", nsName, "iptables", "-D", "FORWARD", "-s", ipRange, "-j", "ACCEPT")
 		cmd.CombinedOutput()
 	}
-	
+
 	return nil
 }

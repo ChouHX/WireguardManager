@@ -61,6 +61,7 @@ func InitDB() error {
 		&models.WireguardServer{},
 		&models.WireguardPeer{},
 		&models.MonitoringRecord{},
+		&models.Setting{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to migrate database: %w", err)
@@ -106,12 +107,7 @@ func createDefaultPlatformAdmin() error {
 	}
 
 	// 为管理员配置网络环境
-	networkService := services.NewUserNetworkService(
-		config.AppConfig.Network.ConfigDir,
-		config.AppConfig.Network.BaseSubnet,
-		config.AppConfig.Network.BasePort,
-		config.AppConfig.Network.OutInterface,
-	)
+	networkService := services.NewUserNetworkServiceFromRuntime()
 
 	wgServer, err := networkService.ProvisionUserNetwork(&defaultAdmin)
 	if err != nil {

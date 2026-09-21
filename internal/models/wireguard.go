@@ -84,7 +84,9 @@ type WireguardPeerResponse struct {
 	Comment             string    `json:"comment,omitempty"`
 	EnableForwarding    bool      `json:"enable_forwarding"`
 	ForwardInterface    string    `json:"forward_interface,omitempty"`
-	CreatedAt           time.Time `json:"created_at"`
+	// UsePresharedKey 仅表示是否启用，密钥本身不下发到管理端
+	UsePresharedKey bool      `json:"use_preshared_key"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // WireguardPeerStats Peer实时统计信息
@@ -166,6 +168,7 @@ func (p *WireguardPeer) ToResponse() WireguardPeerResponse {
 		Comment:             p.Comment,
 		EnableForwarding:    p.EnableForwarding,
 		ForwardInterface:    p.ForwardInterface,
+		UsePresharedKey:     p.PresharedKey != "",
 		CreatedAt:           p.CreatedAt,
 	}
 }

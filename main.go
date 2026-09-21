@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -38,6 +39,11 @@ func main() {
 	// Initialize database
 	if err := database.InitDB(); err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
+	}
+
+	// 运行时配置：config.yaml 只作为初始默认值，之后以管理界面中的设置为准
+	if _, err := services.InitSettings(database.DB, settingsDefaults()); err != nil {
+		log.Fatalf("Failed to initialize settings: %v", err)
 	}
 
 	// SIGINT/SIGTERM 触发优雅关闭
@@ -217,5 +223,32 @@ func corsMiddleware(origins []string) gin.HandlerFunc {
 		}
 
 		c.Next()
+	}
+}
+
+// settingsDefaults 把 config.yaml 中的可管理项整理成初始默认值。
+// 仅在首次启动（数据库中尚无该键）时写入，之后管理界面的修改优先生效。
+func settingsDefaults() map[string]string {
+	cfg := config.AppConfig
+
+	return map[string]string{
+		services.SettingNetworkServerIP:         cfg.Network.ServerIP,
+		services.SettingNetworkOutInterface:     cfg.Network.OutInterface,
+		services.SettingNetworkBaseSubnet:       cfg.Network.BaseSubnet,
+		services.SettingNetworkBasePort:         strconv.Itoa(cfg.Network.BasePort),
+		services.SettingNetworkDNS:              cfg.Network.DNS,
+		services.SettingNetworkClientAllowedIPs: cfg.Network.ClientAllowedIPs,
+
+		services.SettingMonitoringInterval:  strconv.Itoa(cfg.Monitoring.IntervalSeconds),
+		services.SettingMonitoringRetention: strconv.Itoa(cfg.Monitoring.RetentionHours),
+
+		services.SettingLivenessEnabled:          strconv.FormatBool(cfg.Liveness.Enabled),
+		services.SettingLivenessInterval:         strconv.Itoa(cfg.Liveness.IntervalSeconds),
+		services.SettingLivenessHandshakeTimeout: strconv.Itoa(cfg.Liveness.HandshakeTimeoutSeconds),
+		services.SettingLivenessOfflineThreshold: strconv.Itoa(cfg.Liveness.OfflineThreshold),
+
+		services.SettingJWTExpireHours: strconv.Itoa(cfg.JWT.ExpireHours),
+
+		services.SettingPeerDefaultPSK: "false",
 	}
 }

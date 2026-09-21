@@ -372,6 +372,8 @@ type AddPeerRequest struct {
 	Comment             string `json:"comment"`
 	EnableForwarding    bool   `json:"enable_forwarding"` // 是否启用转发（作为网关）
 	ForwardInterface    string `json:"forward_interface"` // 转发接口名称（如 eth0）
+	// UsePresharedKey 是否启用预共享密钥；留空则取运行时配置中的默认值
+	UsePresharedKey *bool `json:"use_preshared_key"`
 }
 
 // AddPeer 添加新的peer
@@ -424,6 +426,18 @@ const peerRecordCreateAttempts = 3
 // createPeerRecord 生成密钥、分配 IP 并写入 peer 记录。
 // 命中唯一约束冲突时会重新生成密钥并重新分配 IP，最多重试 peerRecordCreateAttempts 次。
 // 返回的错误文案面向客户端，故保留原有 "Failed to xxx: cause" 形式。
+// usePresharedKeyForNewPeer 决定新设备是否启用预共享密钥：
+// 请求显式指定优先，否则取运行时配置中的默认值。
+func usePresharedKeyForNewPeer(explicit *bool) bool {
+	if explicit != nil {
+		return *explicit
+	}
+	if settings := services.GetSettings(); settings != nil {
+		return settings.Bool(services.SettingPeerDefaultPSK, false)
+	}
+	return false
+}
+
 func createPeerRecord(wgService *services.WireguardService, wgServer *models.WireguardServer, req AddPeerRequest) (*models.WireguardPeer, error) {
 	var lastErr error
 
@@ -446,11 +460,21 @@ func createPeerRecord(wgService *services.WireguardService, wgServer *models.Wir
 			allowedIPs = peerIP + "/32"
 		}
 
-		// 4. 创建peer记录
+		// 4. 预共享密钥：请求未显式指定时取运行时默认值
+		presharedKey := ""
+		if usePresharedKeyForNewPeer(req.UsePresharedKey) {
+			presharedKey, err = wgService.GeneratePresharedKey()
+			if err != nil {
+				return nil, fmt.Errorf("Failed to generate preshared key: %w", err)
+			}
+		}
+
+		// 5. 创建peer记录
 		peer := models.WireguardPeer{
 			ServerID:            wgServer.ID,
 			PublicKey:           publicKey,
 			PrivateKey:          privateKey,
+			PresharedKey:        presharedKey,
 			PeerAddress:         peerIP,
 			AllowedIPs:          allowedIPs,
 			PersistentKeepalive: req.PersistentKeepalive,
@@ -486,6 +510,14 @@ func provisionPeerResources(wgService *services.WireguardService, netnsService *
 	// 5. 添加到WireGuard配置（使用peer的IP地址作为allowed-ips）
 	if err := wgService.AddPeer(namespace, wgInterface, peer.PublicKey, peerAllowedIPs, ""); err != nil {
 		return fmt.Errorf("Failed to add peer to WireGuard: %w", err)
+	}
+
+	// 5.1 若该设备启用了预共享密钥，紧接着下发
+	if peer.PresharedKey != "" {
+		if err := wgService.SetPeerPresharedKey(namespace, wgInterface, peer.PublicKey, peer.PresharedKey); err != nil {
+			wgService.RemovePeer(namespace, wgInterface, peer.PublicKey)
+			return fmt.Errorf("Failed to apply preshared key: %w", err)
+		}
 	}
 
 	// 6. 同步路由规则：确保命名空间知道如何访问peer指定的网段
@@ -634,6 +666,8 @@ type UpdatePeerRequest struct {
 	Comment             string `json:"comment"`
 	EnableForwarding    *bool  `json:"enable_forwarding"`
 	ForwardInterface    string `json:"forward_interface"`
+	// UsePresharedKey 切换预共享密钥（启用时自动生成并下发，关闭时重新建立已无密钥的 peer）
+	UsePresharedKey *bool `json:"use_preshared_key"`
 }
 
 // UpdatePeer 更新peer信息
@@ -698,6 +732,39 @@ func UpdatePeer(c *gin.Context) {
 
 	if req.ForwardInterface != "" {
 		updates["forward_interface"] = req.ForwardInterface
+	}
+
+	// 预共享密钥切换：开启时生成并下发；关闭时重建 peer（wg 无法就地清空 PSK）
+	if req.UsePresharedKey != nil {
+		wantPSK := *req.UsePresharedKey
+		hasPSK := peer.PresharedKey != ""
+		wgService := services.NewWireguardService(config.AppConfig.Network.ConfigDir)
+		peerAllowedIPs := peer.PeerAddress + "/32"
+
+		switch {
+		case wantPSK && !hasPSK:
+			generated, err := wgService.GeneratePresharedKey()
+			if err != nil {
+				response.InternalError(c, "Failed to generate preshared key: "+err.Error())
+				return
+			}
+			if err := wgService.SetPeerPresharedKey(wgServer.Namespace, wgServer.WgInterface, peer.PublicKey, generated); err != nil {
+				response.InternalError(c, "Failed to apply preshared key: "+err.Error())
+				return
+			}
+			updates["preshared_key"] = generated
+
+		case !wantPSK && hasPSK:
+			if err := wgService.RemovePeer(wgServer.Namespace, wgServer.WgInterface, peer.PublicKey); err != nil {
+				response.InternalError(c, "Failed to reset peer before disabling preshared key: "+err.Error())
+				return
+			}
+			if err := wgService.AddPeer(wgServer.Namespace, wgServer.WgInterface, peer.PublicKey, peerAllowedIPs, ""); err != nil {
+				response.InternalError(c, "Failed to re-add peer without preshared key: "+err.Error())
+				return
+			}
+			updates["preshared_key"] = ""
+		}
 	}
 
 	if len(updates) == 0 {
@@ -939,7 +1006,10 @@ func GetNetworkInterfaces(c *gin.Context) {
 //     例如服务端 10.100.0.1/24、该 peer 分配到 10.100.0.2 → 10.100.0.0/24；
 //  3. 推导失败时回退为 peer 自身地址（/32 或 /128），始终避免下发全流量。
 func clientAllowedIPs(serverAddress, peerAddress string) string {
-	if configured := strings.TrimSpace(config.AppConfig.Network.ClientAllowedIPs); configured != "" {
+	configured := strings.TrimSpace(
+		services.GetSettings().String(services.SettingNetworkClientAllowedIPs, config.AppConfig.Network.ClientAllowedIPs),
+	)
+	if configured != "" {
 		return configured
 	}
 
@@ -1017,16 +1087,18 @@ func GetPeerConfig(c *gin.Context) {
 		return
 	}
 
-	// 客户端 DNS 取自配置（默认 "1.1.1.1, 8.8.8.8"）
-	dns := strings.TrimSpace(config.AppConfig.Network.DNS)
+	// 客户端 DNS 与服务器地址取自运行时设置（config.yaml 仅作为初始默认值）
+	runtimeSettings := services.GetSettings()
+	dns := strings.TrimSpace(runtimeSettings.String(services.SettingNetworkDNS, config.AppConfig.Network.DNS))
 	if dns == "" {
 		dns = "1.1.1.1, 8.8.8.8"
 	}
 
-	// 生成服务器端点地址：优先使用服务器记录的 endpoint，缺失时回退到 配置的 ServerIP:端口
+	// 生成服务器端点地址：优先使用服务器记录的 endpoint，缺失时回退到运行时设置的 ServerIP:端口
 	serverEndpoint := strings.TrimSpace(wgServer.ServerEndpoint)
 	if serverEndpoint == "" {
-		serverEndpoint = fmt.Sprintf("%s:%d", config.AppConfig.Network.ServerIP, wgServer.WgPort)
+		serverIP := runtimeSettings.String(services.SettingNetworkServerIP, config.AppConfig.Network.ServerIP)
+		serverEndpoint = fmt.Sprintf("%s:%d", serverIP, wgServer.WgPort)
 	}
 
 	// 客户端 AllowedIPs：优先取 network.client_allowed_ips 配置，
@@ -1055,15 +1127,21 @@ PreDown = iptables -t nat -D POSTROUTING -o %s -j MASQUERADE; iptables -D FORWAR
 		configContent += postUp
 	}
 
-	// 添加 Peer 配置
+	// 添加 Peer 配置；启用预共享密钥时写入 [Peer] 段内
+	presharedLine := ""
+	if peer.PresharedKey != "" {
+		presharedLine = fmt.Sprintf("PresharedKey = %s\n", peer.PresharedKey)
+	}
+
 	configContent += fmt.Sprintf(`
 [Peer]
 PublicKey = %s
-Endpoint = %s
+%sEndpoint = %s
 AllowedIPs = %s
 PersistentKeepalive = %d
 `,
 		wgServer.WgPublicKey,
+		presharedLine,
 		serverEndpoint,
 		allowedIPs,
 		peer.PersistentKeepalive,
@@ -1104,12 +1182,7 @@ func AdminDeleteWireguardServer(c *gin.Context) {
 
 		// 3. 清理网络资源（命名空间、veth、iptables规则等）
 		// 使用 UserNetworkService 清理网络环境
-		networkService := services.NewUserNetworkService(
-			config.AppConfig.Network.ConfigDir,
-			config.AppConfig.Network.BaseSubnet,
-			config.AppConfig.Network.BasePort,
-			config.AppConfig.Network.OutInterface,
-		)
+		networkService := services.NewUserNetworkServiceFromRuntime()
 
 		// 清理网络环境（即使失败也继续，因为数据库记录已删除）
 		if err := networkService.DestroyUserNetwork(&server, server.User.UserUID); err != nil {
