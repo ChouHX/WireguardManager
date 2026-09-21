@@ -1,18 +1,21 @@
 # WireGuard Manager —— 默认部署：拉取 GHCR 上由 CI 构建的镜像
 #
-#   docker compose up -d                 （自动识别本文件）
+#   docker compose up -d                          启动
 #   docker compose pull && docker compose up -d   更新到最新镜像
+#   docker compose -f docker-compose.build.yml up -d --build   本地源码构建
 #
-# 需要本地从源码构建时改用 docker-compose.build.yml：
-#   docker compose -f docker-compose.build.yml up -d --build
+# 无需任何配置文件：端口默认 3000，数据库写入 ./data，
+# JWT 密钥首次启动自动生成并保存到 ./data/jwt.secret，
+# 网络、监控、在线判定等参数在管理界面「系统设置」中调整。
 #
-# 单容器：一个进程同时提供控制台与 API，只占一个端口。
-# 零配置即可启动：端口默认 3000，数据写入 ./data，JWT 密钥首次启动自动生成
-# 并保存到 ./data/jwt.secret。需要覆盖默认值时再复制 .env.example 为 .env；
-# 网络、监控、在线判定等运行参数在管理界面「系统设置」中调整。
+# 常用调整（直接改本文件即可）：
+#   换宿主机端口    给 app 加上  environment: ["WM_SERVER_PORT=8080"]
+#   换数据目录      改下面的 ./data:/root/data 冒号左侧
+#   换配置目录      改下面的 ./wg_config:/etc/wg_config 冒号左侧
+#   回滚镜像版本    把 image 里的 latest 换成具体标签，如 sha-2648b94
 services:
   app:
-    image: ghcr.io/chouhx/wireguardmanager:${WM_IMAGE_TAG:-latest}
+    image: ghcr.io/chouhx/wireguardmanager:latest
     container_name: cloud-app
     restart: unless-stopped
     # 需要管理宿主机的 netns / iptables / WireGuard 接口，必须使用宿主网络与特权
@@ -22,17 +25,10 @@ services:
       - NET_ADMIN
       - SYS_MODULE
     volumes:
+      # 账号的 WireGuard 配置（映射到后端默认的 network.config_dir）
       - ./wg_config:/etc/wg_config
-      # SQLite 数据目录（数据库文件由后端自动创建）
-      - ${DATA_DIR:-./data}:/root/data
+      # 数据目录：SQLite 数据库与自动生成的 jwt.secret
+      # （相对路径 ./data 由后端的 WORKDIR /root 解析为 /root/data）
+      - ./data:/root/data
       - /lib/modules:/lib/modules:ro
       - /var/run/netns:/var/run/netns:shared
-    environment:
-      # 端口与数据目录可用 .env 覆盖；其余运行参数在管理界面「系统设置」中调整
-      - WM_SERVER_PORT=${WM_SERVER_PORT:-3000}
-      - WM_DB_PATH=/root/data/cloud_platform.db
-      - WM_NETWORK_CONFIG_DIR=/etc/wg_config
-      - WM_DEFAULT_ADMIN_EMAIL=${WM_DEFAULT_ADMIN_EMAIL:-admin@platform.com}
-      - WM_DEFAULT_ADMIN_PASSWORD=${WM_DEFAULT_ADMIN_PASSWORD:-password}
-      - WM_DEFAULT_ADMIN_NAME=${WM_DEFAULT_ADMIN_NAME:-admin}
-      - TZ=${TZ:-Asia/Shanghai}

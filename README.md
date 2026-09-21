@@ -97,23 +97,14 @@ flowchart LR
 git clone https://github.com/ChouHX/WireguardManager.git
 cd WireguardManager
 
-# 零配置即可启动：端口 3000、数据写入 ./data、JWT 密钥首次启动自动生成
-# 需要覆盖默认值时再执行 cp .env.example .env
-```
-
-启动服务（单容器：一个进程同时提供控制台与 API，只占一个端口）：
-
-```bash
-docker compose up -d                          # 默认：拉取 GHCR 预构建镜像（自动识别 docker-compose.yml）
-docker compose pull && docker compose up -d   # 更新到最新镜像
-
-# 本地从源码构建（使用 docker-compose.build.yml）
-docker compose -f docker-compose.docker-compose.build.yml up -d --build
-
-# 或使用带环境检查与部署自检的脚本（等价于上面两种，默认拉取镜像）
+docker compose up -d          # 无需任何配置
+# 或使用带环境检查与部署自检的脚本
 ./deploy.sh
-./deploy.sh --build
+# 本地从源码构建
+docker compose -f docker-compose.build.yml up -d --build
 ```
+
+启动后使用内置默认值：端口 `3000`，数据写入 `./data`，JWT 密钥首次启动自动生成并保存到 `./data/jwt.secret`。
 
 访问 `http://<SERVER_IP>:3000`，默认账号 `admin@platform.com` / `password`（**首次登录后请立即修改**）。
 
@@ -127,23 +118,19 @@ WM_IMAGE_TAG=sha-2df1b06 docker compose up -d
 
 ### 配置项
 
-配置分两层：**启动参数**通过 `.env` 或环境变量传入（全部可选，见 [`.env.example`](.env.example)）；**运行时可调项**在管理界面「系统设置」中维护并持久化到数据库。非容器部署时也仍支持 `config.yaml`，文件不存在时自动降级为环境变量与内置默认值。
+全部参数都有内置默认值，**开箱即用、无需配置文件**。需要调整时：**部署相关**直接改 `docker-compose.yml`（或设环境变量），**运行相关**在管理界面「系统设置」中修改；非容器部署仍可选用 `config.yaml`。
 
-**启动参数**（通过 `.env` / 环境变量传入，改动需重启）：
+**部署参数**（内置默认值，需要时再覆盖）：
 
-| 变量 | 默认值 | 说明 |
+| 变量 | 默认值 | 覆盖方式 |
 | --- | --- | --- |
-| `WM_JWT_SECRET` | 自动生成 | 留空时首次启动自动生成并保存到 `data/jwt.secret`（0600），无需手工配置 |
-| `WM_SERVER_PORT` | `3000` | 控制台与 API 共用端口 |
-| `WM_SERVER_MODE` | `release` | Gin 运行模式：`debug` / `release` / `test` |
-| `WM_SERVER_CORS_ORIGINS` | `*` | 允许的跨域来源，逗号分隔 |
-| `WM_DB_PATH` | `./data/cloud_platform.db` | SQLite 文件路径（容器内为 `/root/data/...`） |
-| `WM_DB_MAX_OPEN_CONNS` | `1` | 连接数，1 表示串行访问，规避 `database is locked` |
-| `WM_DB_BUSY_TIMEOUT_MS` | `5000` | 写锁等待超时 |
-| `WM_DB_WAL` | `true` | 是否启用 WAL 日志模式 |
-| `WM_NETWORK_CONFIG_DIR` | `/etc/wg_config` | WireGuard 配置存放目录 |
-| `WM_DEFAULT_ADMIN_EMAIL` / `_PASSWORD` / `_NAME` | 见示例 | 首次启动创建的管理员 |
-| `DATA_DIR` | `./data` | 宿主机数据目录（容器挂载用） |
+| 端口 | `3000` | 给 `app` 服务加 `environment: ["WM_SERVER_PORT=8080"]` |
+| 数据目录 | `./data` | 改 `docker-compose.yml` 中 `./data:/root/data` 的左侧 |
+| 配置目录 | `./wg_config` | 改 `docker-compose.yml` 中 `./wg_config:/etc/wg_config` 的左侧 |
+| JWT 密钥 | 自动生成 | 首次启动写入 `data/jwt.secret`；也可用 `WM_JWT_SECRET` 显式指定 |
+| 数据库路径 | `/root/data/cloud_platform.db` | 后端默认值，随数据目录挂载自动生效 |
+| 管理员账号 | `admin@platform.com` / `password` | 首次启动创建，可用 `WM_DEFAULT_ADMIN_*` 覆盖 |
+| 镜像版本 | `latest` | 改 `docker-compose.yml` 中 `image` 的标签，如 `sha-2648b94` |
 
 **管理界面可调项**（「系统设置」页面，存库即时生效）：
 
@@ -167,18 +154,13 @@ WM_IMAGE_TAG=sha-2df1b06 docker compose up -d
 
 ### 环境变量
 
-所有配置项都可用 `WM_*` 环境变量覆盖，优先级高于 YAML，便于容器化与密钥注入。常用项：
+所有参数都可选用 `WM_*` 环境变量覆盖（优先级高于配置文件与内置默认值）。容器部署时最常用的是端口：
 
 ```bash
-WM_JWT_SECRET=...                    # 签名密钥
-WM_SERVER_PORT=8080                  # 监听端口
-WM_NETWORK_SERVER_IP=1.2.3.4         # 公网 IP
-WM_NETWORK_OUT_INTERFACE=eth0        # 出口网卡
-WM_DB_PATH=/root/data/cloud_platform.db
-WM_LIVENESS_ENABLED=false            # 关闭在线判定
+WM_SERVER_PORT=8080 docker compose up -d
 ```
 
-完整清单见 [`.env.example`](.env.example)。
+其余变量与其内置默认值可在 [`internal/config/config.go`](internal/config/config.go) 的 `defaultConfig()` 中查到；管理界面「系统设置」里的各项也都能用同名环境变量设定初始值（首次启动写入数据库后即以界面配置为准）。
 
 ### 客户端配置
 
@@ -231,7 +213,6 @@ network:
 │   ├── routes/                 # 路由注册
 │   └── services/               # netns / WireGuard / 监控采样 / 存活探测
 ├── frontend/                   # React + Vite + MantineUI 源码
-├── .env.example                # 部署变量样例（只有 JWT 密钥必填）
 ├── Dockerfile                  # 单容器镜像：Go 后端 + 前端产物 + wg 工具链
 ├── docker-compose.yml          # 默认编排：拉取 GHCR 镜像
 ├── docker-compose.build.yml    # 本地源码构建编排

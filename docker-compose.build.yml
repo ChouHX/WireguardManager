@@ -1,9 +1,11 @@
 # WireGuard Manager —— 本地源码构建（不依赖 GHCR）
 #
-#   docker compose -f build.yml up -d --build
+#   docker compose -f docker-compose.build.yml up -d --build
 #
-# 日常部署请使用默认的 compose.yml（拉取预构建镜像）。
+# 日常部署请使用默认的 docker-compose.yml（拉取预构建镜像）。
 # 两个文件的服务名与容器名一致，切换前先执行 docker compose down。
+#
+# 其余说明与默认编排一致：无需配置文件，端口 3000，数据写入 ./data。
 services:
   app:
     build:
@@ -24,16 +26,6 @@ services:
       - SYS_MODULE
     volumes:
       - ./wg_config:/etc/wg_config
-      # SQLite 数据目录（数据库文件由后端自动创建）
-      - ${DATA_DIR:-./data}:/root/data
+      - ./data:/root/data
       - /lib/modules:/lib/modules:ro
       - /var/run/netns:/var/run/netns:shared
-    environment:
-      # 端口与数据目录可用 .env 覆盖；其余运行参数在管理界面「系统设置」中调整
-      - WM_SERVER_PORT=${WM_SERVER_PORT:-3000}
-      - WM_DB_PATH=/root/data/cloud_platform.db
-      - WM_NETWORK_CONFIG_DIR=/etc/wg_config
-      - WM_DEFAULT_ADMIN_EMAIL=${WM_DEFAULT_ADMIN_EMAIL:-admin@platform.com}
-      - WM_DEFAULT_ADMIN_PASSWORD=${WM_DEFAULT_ADMIN_PASSWORD:-password}
-      - WM_DEFAULT_ADMIN_NAME=${WM_DEFAULT_ADMIN_NAME:-admin}
-      - TZ=${TZ:-Asia/Shanghai}

@@ -40,7 +40,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # 检查 Docker 是否安装
-echo -e "${YELLOW}[1/8] 检查 Docker...${NC}"
+echo -e "${YELLOW}[1/7] 检查 Docker...${NC}"
 if ! command -v docker &> /dev/null; then
     echo -e "${RED}错误: Docker 未安装${NC}"
     echo "请先安装 Docker: https://docs.docker.com/get-docker/"
@@ -49,7 +49,7 @@ fi
 echo -e "${GREEN}✓ Docker 已安装${NC}"
 
 # 检查 Docker Compose 是否安装
-echo -e "${YELLOW}[2/8] 检查 Docker Compose...${NC}"
+echo -e "${YELLOW}[2/7] 检查 Docker Compose...${NC}"
 if ! docker compose version &> /dev/null; then
     echo -e "${RED}错误: Docker Compose 未安装${NC}"
     echo "请先安装 Docker Compose"
@@ -58,7 +58,7 @@ fi
 echo -e "${GREEN}✓ Docker Compose 已安装${NC}"
 
 # 配置 Docker 镜像加速器（国内用户）
-echo -e "${YELLOW}[3/8] 配置 Docker 镜像加速器...${NC}"
+echo -e "${YELLOW}[3/7] 配置 Docker 镜像加速器...${NC}"
 if [ -f "daemon.json" ]; then
     read -p "是否配置 Docker 镜像加速器（国内推荐）? [Y/n] " -n 1 -r
     echo
@@ -75,7 +75,7 @@ else
 fi
 
 # 检查 WireGuard 内核模块
-echo -e "${YELLOW}[4/8] 检查 WireGuard 内核模块...${NC}"
+echo -e "${YELLOW}[4/7] 检查 WireGuard 内核模块...${NC}"
 if ! lsmod | grep -q wireguard; then
     echo -e "${YELLOW}WireGuard 模块未加载，尝试加载...${NC}"
     if sudo modprobe wireguard 2>/dev/null; then
@@ -89,50 +89,37 @@ else
 fi
 # 说明：宿主无需安装 wireguard-tools，wg / ip / iptables 都在后端容器内，
 # 容器以特权 + host 网络运行并共享 /var/run/netns，因此能直接管理宿主的网络环境。
-echo -e "  ${GREEN}提示:${NC} 宿主机无需安装 wg 命令，工具链由后端容器提供（第 8 步会自检）"
+echo -e "  ${GREEN}提示:${NC} 宿主机无需安装 wg 命令，工具链由后端容器提供（第 7 步会自检）"
 
-# 检查部署变量（可选）
-echo -e "${YELLOW}[5/8] 检查部署变量...${NC}"
+# 准备数据与配置目录
+echo -e "${YELLOW}[5/7] 准备目录...${NC}"
 
-if [ -f ".env" ]; then
-    echo -e "${GREEN}✓ 使用现有的 .env${NC}"
-    # 兼容旧版：.env 里若是空的 WM_JWT_SECRET，补一个随机值
-    if grep -qE '^WM_JWT_SECRET=$' .env; then
-        secret=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
-        sed -i "s|^WM_JWT_SECRET=.*|WM_JWT_SECRET=${secret}|" .env
-        echo -e "${GREEN}✓ 已为旧版 .env 补全 WM_JWT_SECRET${NC}"
-    fi
-else
-    echo -e "${GREEN}✓ 未提供 .env，使用内置默认值${NC}"
-    echo "    端口 3000 · 数据 ./data · JWT 密钥首次启动自动生成"
-fi
-
-echo -e "  ${GREEN}提示:${NC} 网络、监控、在线判定等参数已移至管理界面「系统设置」，无需在此配置"
-
-# 创建必要的目录
-echo -e "${YELLOW}[6/8] 创建必要的目录...${NC}"
+# WireGuard 配置目录（映射到容器内 /etc/wg_config）
 sudo mkdir -p /etc/wg_config
 sudo chmod 755 /etc/wg_config
-echo -e "${GREEN}✓ 已创建 /etc/wg_config 目录${NC}"
 
-# 创建网络命名空间目录（关键！）
+# 网络命名空间目录（关键！）
 sudo mkdir -p /var/run/netns
 sudo chmod 755 /var/run/netns
 echo -e "${GREEN}✓ 已创建 /var/run/netns 目录${NC}"
 
-# 创建 SQLite 数据目录（数据库为嵌入式 SQLite，无需独立数据库容器）
+# 数据目录：SQLite 数据库与自动生成的 jwt.secret
 mkdir -p data
-echo -e "${GREEN}✓ 已创建 data 目录（存放 SQLite 数据库文件）${NC}"
+echo -e "${GREEN}✓ 已创建 data 目录（数据库与 JWT 密钥）${NC}"
+
+# 与被挂载的宿主目录保持一致
+mkdir -p wg_config
+echo -e "${GREEN}✓ 已创建 wg_config 目录（账号 WireGuard 配置）${NC}"
 
 # 获取并启动服务
 if [ "$BUILD_LOCAL" = true ]; then
-    echo -e "${YELLOW}[7/8] 本地构建镜像并启动服务...${NC}"
+    echo -e "${YELLOW}[6/7] 本地构建镜像并启动服务...${NC}"
     echo "使用 docker-compose.build.yml 从源码编译，可能需要几分钟..."
     echo ""
 
     UP_CMD="docker compose -f docker-compose.build.yml up -d --build"
 else
-    echo -e "${YELLOW}[7/8] 拉取 GHCR 镜像并启动服务...${NC}"
+    echo -e "${YELLOW}[6/7] 拉取 GHCR 镜像并启动服务...${NC}"
     echo "使用默认 docker-compose.yml（预构建镜像）..."
     echo ""
 
@@ -168,7 +155,7 @@ else
 fi
 
 # ---------- 部署自检 ----------
-echo -e "${YELLOW}[8/8] 运行部署自检...${NC}"
+echo -e "${YELLOW}[7/7] 运行部署自检...${NC}"
 
 SELF_CHECK_FAILED=0
 if [ "$BUILD_LOCAL" = true ]; then
