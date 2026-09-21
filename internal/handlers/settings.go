@@ -49,8 +49,9 @@ func UpdateRuntimeSettings(c *gin.Context) {
 	for key, value := range req.Values {
 		def, ok := services.SettingDefByKey(key)
 		if !ok {
-			response.BadRequest(c, "Unknown setting key: "+key, nil)
-			return
+			// 客户端可能回传整份配置，其中夹带已下线的历史键：
+			// 忽略即可，不因此让整次保存失败。
+			continue
 		}
 
 		clean, err := normalizeSettingValue(def, value)

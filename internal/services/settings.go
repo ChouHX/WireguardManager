@@ -47,6 +47,13 @@ type SettingDef struct {
 	Max   int    `json:"max,omitempty"`
 }
 
+// deprecatedSettings 已从管理界面移除的配置键。
+// 它们可能残留在旧数据库中，初始化时会被清理，否则前端提交整份配置时
+// 会因白名单校验而报 "Unknown setting key"。
+var deprecatedSettings = []string{
+	"liveness.handshake_timeout_seconds",
+}
+
 // SettingDefs 全部可运行时调整的配置项定义。
 var SettingDefs = []SettingDef{
 	{Key: SettingNetworkServerIP, Type: "string", Group: "network"},
@@ -112,6 +119,16 @@ func InitSettings(db *gorm.DB, defaults map[string]string) (*Settings, error) {
 	if len(missing) > 0 {
 		if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&missing).Error; err != nil {
 			log.Printf("Warning: failed to persist initial settings: %v", err)
+		}
+	}
+
+	// 清理已废弃的历史键
+	if len(deprecatedSettings) > 0 {
+		if err := db.Where("key IN ?", deprecatedSettings).Delete(&models.Setting{}).Error; err != nil {
+			log.Printf("Warning: failed to clean up deprecated settings: %v", err)
+		}
+		for _, key := range deprecatedSettings {
+			delete(store.values, key)
 		}
 	}
 
@@ -191,9 +208,16 @@ func (s *Settings) Update(values map[string]string) error {
 	rows := make([]models.Setting, 0, len(values))
 	for key, value := range values {
 		if !IsManagedSetting(key) {
-			return fmt.Errorf("unknown setting key: %s", key)
+			// 客户端可能回传整份配置，其中夹带已下线的历史键。
+			// 这类键直接忽略（它们已不再生效），不因此中断保存。
+			log.Printf("Warning: ignoring unknown setting key %q", key)
+			continue
 		}
 		rows = append(rows, models.Setting{Key: key, Value: value})
+	}
+
+	if len(rows) == 0 {
+		return nil
 	}
 
 	if err := s.db.Clauses(clause.OnConflict{

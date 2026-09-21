@@ -4,10 +4,10 @@ import {
   Button,
   Card,
   Divider,
+  Grid,
   Group,
   NumberInput,
   Select,
-  SimpleGrid,
   Stack,
   Switch,
   Text,
@@ -43,9 +43,17 @@ const LABEL_KEY: Record<string, string> = {
   'liveness.probe_timeout_ms': 'livenessProbeTimeout',
   'liveness.probe_port': 'livenessProbePort',
   'liveness.offline_threshold': 'livenessOfflineThreshold',
+  'liveness.traffic_stale_seconds': 'livenessTrafficStale',
   'jwt.expire_hours': 'jwtExpireHours',
   'wireguard.default_preshared_key': 'defaultPresharedKey',
 };
+
+/** 标签列宽：固定后左右两侧的行都能对齐 */
+const LABEL_COL = { base: 12, sm: 5 } as const;
+const FIELD_COL = { base: 12, sm: 7 } as const;
+
+/** 统一行高：让开关行与输入行在视觉上完全齐平 */
+const ROW_HEIGHT = 49;
 
 export default function SettingsPage() {
   const { t } = useTranslation();
@@ -95,7 +103,15 @@ export default function SettingsPage() {
     setSaving(true);
     setError(null);
     try {
-      const response = await settingsService.update(draft);
+      // 只提交当前仍生效的配置项：values 中可能残留已下线的历史键，
+      // 整份回传会触发后端的白名单校验失败。
+      const managed = new Set((data?.defs ?? []).map((def) => def.key));
+      const payload: Record<string, string> = {};
+      for (const [key, value] of Object.entries(draft)) {
+        if (managed.has(key)) payload[key] = value;
+      }
+
+      const response = await settingsService.update(payload);
       if (response.success) {
         notifications.show({ color: 'teal', message: t('settings.saved') });
         if (response.data?.values) {
@@ -109,56 +125,33 @@ export default function SettingsPage() {
     }
   };
 
-  const dirty = useMemo(
-    () => Boolean(data) && JSON.stringify(draft) !== JSON.stringify(data?.values ?? {}),
-    [data, draft],
-  );
+  const dirty = useMemo(() => {
+    if (!data) return false;
+    const managed = (data.defs ?? []).map((def) => def.key);
+    return managed.some((key) => (draft[key] ?? '') !== (data.values[key] ?? ''));
+  }, [data, draft]);
 
   const crumbs = useMemo(
-    () => [
-      { label: t('breadcrumb.home'), to: '/dashboard' },
-      { label: t('settings.title') },
-    ],
+    () => [{ label: t('breadcrumb.home'), to: '/dashboard' }, { label: t('settings.title') }],
     [t],
   );
 
-  const renderField = (def: SettingDef) => {
-    const labelKey = LABEL_KEY[def.key];
-    const label = labelKey ? t(`settings.${labelKey}`) : def.key;
+  const set = (key: string, value: string) => setDraft((prev) => ({ ...prev, [key]: value }));
+
+  /** 统一渲染控件本体（不含标签），保证左右两列在同一基线上对齐 */
+  const renderControl = (def: SettingDef) => {
     const value = draft[def.key] ?? '';
 
     if (def.type === 'bool') {
       return (
-        <Group key={def.key} justify="space-between" wrap="nowrap" align="flex-start">
-          <Box>
-            <Text size="sm" fw={600}>
-              {label}
-            </Text>
-            <Text fz={11} c="dimmed" className="wm-mono">
-              {def.key}
-            </Text>
-          </Box>
-          <Switch
-            checked={value === 'true'}
-            onChange={(event) =>
-              setDraft((prev) => ({ ...prev, [def.key]: String(event.currentTarget.checked) }))
-            }
-            color="wg"
-          />
-        </Group>
-      );
-    }
-
-    if (def.type === 'int') {
-      return (
-        <NumberInput
-          key={def.key}
-          label={label}
-          description={def.key}
-          value={Number(value) || 0}
-          onChange={(next) => setDraft((prev) => ({ ...prev, [def.key]: String(next ?? 0) }))}
-          min={def.min}
-          max={def.max}
+        <Switch
+          checked={value === 'true'}
+          onChange={(event) => set(def.key, String(event.currentTarget.checked))}
+          color="wg"
+          size="md"
+          label={value === 'true' ? t('settings.on') : t('settings.off')}
+          labelPosition="right"
+          styles={{ label: { fontSize: 12, color: 'var(--mantine-color-dimmed)' } }}
         />
       );
     }
@@ -176,34 +169,41 @@ export default function SettingsPage() {
 
       return (
         <Select
-          key={def.key}
-          label={label}
-          description={t('wireguard.ifaceServerHint')}
           data={options}
           value={value || null}
-          onChange={(next) => setDraft((prev) => ({ ...prev, [def.key]: next ?? '' }))}
+          onChange={(next) => set(def.key, next ?? '')}
           searchable
           clearable
           nothingFoundMessage={t('common.noData')}
+          description={t('wireguard.ifaceServerHint')}
+        />
+      );
+    }
+
+    if (def.type === 'int') {
+      return (
+        <NumberInput
+          value={Number(value) || 0}
+          onChange={(next) => set(def.key, String(next ?? 0))}
+          min={def.min}
+          max={def.max}
         />
       );
     }
 
     return (
       <TextInput
-        key={def.key}
-        label={label}
-        description={def.key}
         value={value}
-        onChange={(event) => setDraft((prev) => ({ ...prev, [def.key]: event.currentTarget.value }))}
+        onChange={(event) => set(def.key, event.currentTarget.value)}
         className="wm-mono"
+        placeholder={def.key === 'network.client_allowed_ips' ? t('settings.allowedIpsPlaceholder') : undefined}
       />
     );
   };
 
   if (loading || !data) {
     return (
-      <Stack gap="md">
+      <Stack gap="sm">
         <PageHeader title={t('settings.title')} subtitle={t('settings.subtitle')} crumbs={crumbs} />
         <Card>
           <InlineLoader label={t('common.loading')} />
@@ -213,7 +213,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <Stack gap="md">
+    <Stack gap="sm">
       <PageHeader
         title={t('settings.title')}
         subtitle={t('settings.subtitle')}
@@ -254,20 +254,49 @@ export default function SettingsPage() {
             key={group}
             className="wm-rise"
             style={{ '--wm-delay': `${index * 40}ms` } as React.CSSProperties}
+            padding="sm"
           >
-            <Group gap={8} mb="sm">
-              <IconAdjustments size={16} stroke={1.7} />
-              <Text fw={650}>{t(`settings.group.${group}`)}</Text>
+            <Group gap={8} mb={6}>
+              <IconAdjustments size={15} stroke={1.7} />
+              <Text fw={650} fz={13.5}>
+                {t(`settings.group.${group}`)}
+              </Text>
             </Group>
-            <Divider mb="md" variant="dashed" />
-            <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
-              {defs.map(renderField)}
-            </SimpleGrid>
+            <Divider mb="xs" variant="dashed" />
+
+            {/* 统一的行结构：左侧标签固定列宽，右侧控件，逐行对齐 */}
+            <Stack gap={2}>
+              {defs.map((def) => {
+                const labelKey = LABEL_KEY[def.key];
+                return (
+                  <Grid
+                    key={def.key}
+                    gutter="sm"
+                    align="center"
+                    /* 固定行高：开关行的控件比输入框矮，不统一会让各行看起来参差 */
+                    mih={ROW_HEIGHT}
+                    style={{ borderBottom: '1px solid var(--mantine-color-default-border)' }}
+                  >
+                    <Grid.Col span={LABEL_COL}>
+                      <Box>
+                        <Text fz={13} fw={550} lh={1.3}>
+                          {labelKey ? t(`settings.${labelKey}`) : def.key}
+                        </Text>
+                        <Text fz={10} c="dimmed" className="wm-mono" lh={1.3}>
+                          {def.key}
+                        </Text>
+                      </Box>
+                    </Grid.Col>
+                    <Grid.Col span={FIELD_COL}>{renderControl(def)}</Grid.Col>
+                  </Grid>
+                );
+              })}
+            </Stack>
           </Card>
         );
       })}
 
-      <Text fz={11.5} c="dimmed">
+      <Text fz={11} c="dimmed">
         {t('settings.footerHint')}
       </Text>
     </Stack>

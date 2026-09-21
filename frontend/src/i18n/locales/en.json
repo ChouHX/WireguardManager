@@ -359,6 +359,9 @@
     "defaultPresharedKey": "Use preshared key for new devices",
     "livenessProbePort": "Probe port",
     "livenessTrafficStale": "Traffic hold window (s)",
-    "livenessProbeTimeout": "Probe timeout (ms)"
+    "livenessProbeTimeout": "Probe timeout (ms)",
+    "on": "Enabled",
+    "off": "Disabled",
+    "allowedIpsPlaceholder": "Empty = derive from device subnet"
   }
 }
