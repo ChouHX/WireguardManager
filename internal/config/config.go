@@ -89,12 +89,18 @@ type MonitoringConfig struct {
 // 对端，导致设备明明在线却被判离线。
 type LivenessConfig struct {
 	Enabled bool `yaml:"enabled"` // 是否启用在线判定
-	// IntervalSeconds 刷新间隔：读取各账号的 wg 统计并重新计算状态
+	// IntervalSeconds 判定间隔：每轮在各账号命名空间内主动探测一次
 	IntervalSeconds int `yaml:"interval_seconds"`
-	// HandshakeTimeoutSeconds 握手多久未更新即视为离线
-	HandshakeTimeoutSeconds int `yaml:"handshake_timeout_seconds"`
-	// OfflineThreshold 连续多少次判定为超时后才置为离线（防止边界抖动）
+	// ProbeTimeoutMS 单次 ICMP 探测超时
+	ProbeTimeoutMS int `yaml:"probe_timeout_ms"`
+	// OfflineThreshold 连续多少次「无响应且无流量」后才置为离线
 	OfflineThreshold int `yaml:"offline_threshold"`
+	// HandshakeTimeoutSeconds 握手时效：超过则不再作为在线依据
+	HandshakeTimeoutSeconds int `yaml:"handshake_timeout_seconds"`
+	// TrafficStaleSeconds 流量保护窗口：最近这段时间内有流量则仍视为在线
+	TrafficStaleSeconds int `yaml:"traffic_stale_seconds"`
+	// MaxConcurrency 并发探测上限
+	MaxConcurrency int `yaml:"max_concurrency"`
 }
 
 // DefaultConfig 平台默认管理员账号
@@ -143,9 +149,12 @@ func defaultConfig() *Config {
 		},
 		Liveness: LivenessConfig{
 			Enabled:                 true,
-			IntervalSeconds:         3,   // 每 3 秒复核一次握手状态
-			HandshakeTimeoutSeconds: 180, // WireGuard 默认 120s 重协商，留出余量
-			OfflineThreshold:        2,   // 连续两次超时才判离线，规避边界抖动
+			IntervalSeconds:         2,    // 每 2 秒探测一轮
+			ProbeTimeoutMS:          1000, // 单次探测超时 1 秒
+			OfflineThreshold:        2,    // 连续两次无响应即判离线（约 4 秒）
+			HandshakeTimeoutSeconds: 180,  // 握手时效，作为最后的弱信号
+			TrafficStaleSeconds:     40,   // 保护窗口需大于保活间隔（默认 25s）
+			MaxConcurrency:          16,
 		},
 		// Default 段留空，由 normalize 依次完成 legacy 字段兼容与内置默认值填充
 		Default: DefaultConfig{},
@@ -237,13 +246,22 @@ func (c *Config) normalize() {
 	// 探测参数兜底。Enabled 不在此处兜底：默认值已在 defaultConfig 注入，
 	// 强制置 true 会覆盖用户在配置中显式关闭探测的意图。
 	if c.Liveness.IntervalSeconds <= 0 {
-		c.Liveness.IntervalSeconds = 3
+		c.Liveness.IntervalSeconds = 2
+	}
+	if c.Liveness.ProbeTimeoutMS <= 0 {
+		c.Liveness.ProbeTimeoutMS = 1000
 	}
 	if c.Liveness.HandshakeTimeoutSeconds <= 0 {
 		c.Liveness.HandshakeTimeoutSeconds = 180
 	}
+	if c.Liveness.TrafficStaleSeconds <= 0 {
+		c.Liveness.TrafficStaleSeconds = 40
+	}
 	if c.Liveness.OfflineThreshold <= 0 {
 		c.Liveness.OfflineThreshold = 2
+	}
+	if c.Liveness.MaxConcurrency <= 0 {
+		c.Liveness.MaxConcurrency = 16
 	}
 
 	if c.JWT.ExpireHours <= 0 {
@@ -289,8 +307,11 @@ func applyEnvOverrides(c *Config) {
 
 	setBool(&c.Liveness.Enabled, "WM_LIVENESS_ENABLED")
 	setInt(&c.Liveness.IntervalSeconds, "WM_LIVENESS_INTERVAL_SECONDS")
+	setInt(&c.Liveness.ProbeTimeoutMS, "WM_LIVENESS_PROBE_TIMEOUT_MS")
 	setInt(&c.Liveness.HandshakeTimeoutSeconds, "WM_LIVENESS_HANDSHAKE_TIMEOUT_SECONDS")
+	setInt(&c.Liveness.TrafficStaleSeconds, "WM_LIVENESS_TRAFFIC_STALE_SECONDS")
 	setInt(&c.Liveness.OfflineThreshold, "WM_LIVENESS_OFFLINE_THRESHOLD")
+	setInt(&c.Liveness.MaxConcurrency, "WM_LIVENESS_MAX_CONCURRENCY")
 
 	setString(&c.Default.AdminEmail, "WM_DEFAULT_ADMIN_EMAIL")
 	setString(&c.Default.AdminPassword, "WM_DEFAULT_ADMIN_PASSWORD")
@@ -400,6 +421,9 @@ func (c *Config) Validate() error {
 	if c.Liveness.HandshakeTimeoutSeconds < 1 {
 		problems = append(problems, fmt.Sprintf("liveness.handshake_timeout_seconds must be >= 1, got %d", c.Liveness.HandshakeTimeoutSeconds))
 	}
+	if c.Liveness.MaxConcurrency < 1 {
+		problems = append(problems, fmt.Sprintf("liveness.max_concurrency must be >= 1, got %d", c.Liveness.MaxConcurrency))
+	}
 
 	if len(problems) > 0 {
 		return errors.New(strings.Join(problems, "; "))
@@ -445,9 +469,19 @@ func (l LivenessConfig) Interval() time.Duration {
 	return time.Duration(l.IntervalSeconds) * time.Second
 }
 
-// HandshakeTimeout 握手超过该时长未更新即判定离线
+// HandshakeTimeout 握手超过该时长未更新即不再作为在线依据
 func (l LivenessConfig) HandshakeTimeout() time.Duration {
 	return time.Duration(l.HandshakeTimeoutSeconds) * time.Second
+}
+
+// ProbeTimeout 单次主动探测超时
+func (l LivenessConfig) ProbeTimeout() time.Duration {
+	return time.Duration(l.ProbeTimeoutMS) * time.Millisecond
+}
+
+// TrafficStale 流量保护窗口
+func (l LivenessConfig) TrafficStale() time.Duration {
+	return time.Duration(l.TrafficStaleSeconds) * time.Second
 }
 
 // GetDSN 返回 SQLite 连接串（glebarez/sqlite 支持 _pragma= 形式的内联参数）。

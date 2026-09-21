@@ -127,7 +127,15 @@ export interface LivenessResult {
   handshake_age_seconds: number;
   last_online_at?: string;
   checked_at: string;
-  /** 当前连续判定为握手过期的次数 */
+  /** 最近一次主动探测的往返耗时（毫秒） */
+  latency_ms: number;
+  /** 最近一次主动探测是否有响应 */
+  reachable: boolean;
+  /** 最近一轮隧道内是否有流量 */
+  traffic_active: boolean;
+  /** 判定依据：probe / traffic / recent / handshake / timeout / no_stats */
+  reason?: string;
+  /** 当前连续判为无响应的次数 */
   failures: number;
   checks: number;
 }

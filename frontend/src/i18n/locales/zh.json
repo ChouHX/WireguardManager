@@ -268,7 +268,7 @@
     "detecting": "检测中",
     "onlineDevices": "在线设备",
     "onlineHint": "{online} / {total} 台在线",
-    "livenessHint": "依据 WireGuard 握手状态判定：握手时间在 {seconds} 秒内视为在线。",
+    "livenessHint": "每 {interval} 秒在设备所在的网络命名空间内主动探测一次：有响应立即在线，连续无响应即判离线。",
     "usePresharedKey": "启用预共享密钥",
     "usePresharedKeyHelp": "在服务端与设备之间再加一层对称密钥，提升抗中间人与抗量子能力。开启或关闭后需要重新下载客户端配置。"
   },

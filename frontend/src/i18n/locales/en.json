@@ -268,7 +268,7 @@
     "detecting": "Detecting",
     "onlineDevices": "Online devices",
     "onlineHint": "{online} / {total} online",
-    "livenessHint": "Liveness is derived from WireGuard handshakes: a handshake within {seconds}s counts as online.",
+    "livenessHint": "Probes each device inside its own namespace every {interval}s: a response marks it online immediately, consecutive failures mark it offline.",
     "usePresharedKey": "Preshared key",
     "usePresharedKeyHelp": "Adds a symmetric key between server and device for extra protection. Re-download the client config after toggling."
   },

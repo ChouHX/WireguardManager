@@ -49,7 +49,6 @@ import { PageHeader } from '@/components/common/PageHeader';
 import { useInterval } from '@/hooks/use-interval';
 import { useTranslation } from '@/i18n';
 import {
-  formatAgeSeconds,
   formatBytes,
   formatRelativeTime,
   formatTime,
@@ -153,8 +152,8 @@ function LivenessIndicator({
       </Text>
       {state === 'online' && result ? (
         <Text fz={11} c="dimmed" className="wm-mono">
-          {/* 展示距最近一次握手的时长，直接反映隧道活跃程度 */}
-          {formatAgeSeconds(result.handshake_age_seconds)}
+          {/* 主动探测的往返耗时，秒级刷新 */}
+          {result.latency_ms > 0 ? `${result.latency_ms}ms` : '<1ms'}
         </Text>
       ) : null}
     </Group>
@@ -680,7 +679,7 @@ export default function WireguardPage() {
           <Box>
             <Text fw={650}>{t('wireguard.myPeers')}</Text>
             <Text size="xs" c="dimmed" mt={3}>
-              {t('wireguard.livenessHint', { seconds: liveness?.handshake_timeout_seconds ?? 180 })}
+              {t('wireguard.livenessHint', { interval: 2 })}
             </Text>
           </Box>
           <Badge variant="light" color="gray" size="sm">

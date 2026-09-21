@@ -48,9 +48,12 @@ monitoring:
 
 liveness:
   enabled: true
-  interval_seconds: 3            # 复核间隔
-  handshake_timeout_seconds: 180 # 握手超过该时长未更新即判离线
-  offline_threshold: 2           # 连续多少次超时才置为离线
+  interval_seconds: 2            # 探测间隔（秒级感知）
+  probe_timeout_ms: 1000         # 单次 ICMP 探测超时
+  offline_threshold: 2           # 连续多少次无响应即判离线（约 4 秒）
+  handshake_timeout_seconds: 180 # 握手时效，作为最后的弱信号
+  traffic_stale_seconds: 40      # 流量保护窗口，需大于保活间隔（默认 25 秒）
+  max_concurrency: 16            # 并发探测上限
 
 # 首次启动时创建的管理员账号，仅在数据库中还没有管理员时生效
 default:

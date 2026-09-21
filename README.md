@@ -32,7 +32,7 @@
 - **账号级隔离** —— 每个账号独享一个 network namespace、独立的 WireGuard 接口与监听端口，互不可见、互不干扰。
 - **自动化编排** —— 注册即自动创建命名空间、veth 对、wg 接口、路由与 iptables 规则；任一步失败自动回滚，不留半成品。
 - **设备即开即用** —— 一键生成客户端配置，支持 `.conf` 下载与二维码扫码导入，转发出口自动探测。
-- **秒级在线感知** —— 依据 WireGuard 自身的握手状态判定，客户端零 Agent：握手新鲜即刻在线，握手过期需连续确认才判离线，不受客户端防火墙与路由差异影响。
+- **秒级在线感知** —— 每 2 秒在设备所在的网络命名空间内主动探测一次，客户端零 Agent：有响应立即在线，连续无响应即判离线（约 4 秒），不再受 WireGuard 握手周期（最长 120 秒）拖累。
 - **流量与资源监控** —— 设备握手状态、收发流量、系统 CPU / 内存 / 磁盘 / 网络趋势一屏掌握。
 - **精细管控** —— 设备粒度限速、启用禁用、网关转发模式、AllowedIPs 网段自定义，支持为单个设备启用预共享密钥（PSK）以增强抗中间人与抗量子能力。
 - **配置即改即生效** —— 网段、出口网卡、公网 IP、DNS、监控与在线判定参数都在管理界面「系统设置」中调整并持久化到数据库；`config.yaml` 只保留监听端口、数据库路径、JWT 密钥等启动必需项。
@@ -159,7 +159,10 @@ WM_IMAGE_TAG=sha-2df1b06 docker compose up -d
 | | `network.client_allowed_ips` | 客户端 AllowedIPs，留空按设备所在网段推导 |
 | 监控 | `monitoring.interval_seconds` / `retention_hours` | 采样间隔与记录保留时长 |
 | 在线判定 | `liveness.enabled` | 是否启用在线判定 |
-| | `liveness.interval_seconds` / `handshake_timeout_seconds` / `offline_threshold` | 复核间隔、握手时效阈值、离线确认次数 |
+| | `liveness.interval_seconds` / `probe_timeout_ms` | 探测间隔与单次探测超时 |
+| | `liveness.offline_threshold` | 连续多少次无响应判离线 |
+| | `liveness.traffic_stale_seconds` | 流量保护窗口（需大于保活间隔） |
+| | `liveness.handshake_timeout_seconds` | 握手时效（弱信号，应对 ICMP 被拦截的设备） |
 | 鉴权 | `jwt.expire_hours` | 登录有效期 |
 | 设备默认值 | `wireguard.default_preshared_key` | 新建设备是否默认启用预共享密钥 |
 
@@ -281,10 +284,13 @@ docker compose down                           # 停止服务
 注册需要创建命名空间、veth 对、wg 接口并拉起路由与 NAT 规则，通常需要数秒；任一步失败会整体回滚，不会留下残留资源。
 
 **在线状态是怎么判定的？**
-读取 WireGuard 自身的 `last handshake`：距最近一次握手在 `liveness.handshake_timeout_seconds`（默认 180 秒）内即为在线，超过则连续确认 `offline_threshold` 次后转为离线。整个过程不向客户端发送任何探测包，客户端也无需安装 Agent。
+每 `liveness.interval_seconds`（默认 2 秒）在设备所属的网络命名空间里向它的隧道地址发一次 ICMP 探测：有响应即在线，并显示往返耗时；连续 `offline_threshold` 次无响应即离线，所以设备断开后约 4 秒内就能看到状态变化。探测必须有响应才判在线，同时用隧道流量与握手状态做保护，避免因客户端屏蔽 ICMP 而误判。
+
+**为什么之前的判定很慢？**
+早期版本只看 WireGuard 的 `last handshake`，而握手只在密钥重协商时更新（默认 120 秒），设备断开后这个时间戳只是停住不动，因此离线的发现必然滞后。现在改为主动探测，握手与流量只作为辅助信号。
 
 **设备明明连着，为什么显示离线？**
-先看设备列表里的「最后握手」时间：若它也在持续更新，说明隧道正常，此时在线状态会在下一次复核（默认 3 秒）内转为在线；若握手时间停滞，则是隧道本身已中断。需要更宽松的判定时，把 `handshake_timeout_seconds` 调大即可。
+先看设备列表里的「最后握手」时间与探测时延：若时延能正常显示就是在线。持续显示离线通常是隧道本身已中断（客户端已关闭、网络切换、NAT 映射失效），也可能是客户端防火墙拦截了隧道内的 ICMP——后者可把 `traffic_stale_seconds` 调大让保活流量继续维持在线状态。
 
 **忘记管理员密码？**
 停掉服务，删除 `data/cloud_platform.db` 后重启，会重新创建默认管理员（同时也会清空所有数据）；或在数据库中直接更新 `password_hash`。

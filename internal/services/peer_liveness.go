@@ -3,6 +3,10 @@ package services
 import (
 	"context"
 	"log"
+	"os/exec"
+	"regexp"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,35 +26,97 @@ const (
 	LivenessOffline LivenessState = "offline"
 )
 
+// 判定依据，便于排查与前端展示
+const (
+	ReasonProbe     = "probe"     // 主动探测有响应
+	ReasonTraffic   = "traffic"   // 隧道内有流量
+	ReasonRecent    = "recent"    // 近期有流量（保护窗口内）
+	ReasonHandshake = "handshake" // 握手仍在时效内
+	ReasonTimeout   = "timeout"   // 探测无响应且无流量
+	ReasonNoStats   = "no_stats"  // 无法读取接口统计
+)
+
 // LivenessResult 单个设备的在线判定结论
 type LivenessResult struct {
 	State LivenessState `json:"state"`
-	// LastHandshakeAt 最近一次握手时间，直接取自 WireGuard 自身状态
+	// LastHandshakeAt 最近一次握手时间
 	LastHandshakeAt *time.Time `json:"last_handshake_at,omitempty"`
 	// HandshakeAgeSeconds 距最近一次握手的秒数；从未握手为 -1
 	HandshakeAgeSeconds int64      `json:"handshake_age_seconds"`
 	LastOnlineAt        *time.Time `json:"last_online_at,omitempty"`
 	CheckedAt           time.Time  `json:"checked_at"`
-	// Failures 当前连续判定为「握手过期」的次数
+	// LatencyMS 最近一次主动探测的往返耗时
+	LatencyMS int64 `json:"latency_ms"`
+	// Reachable 最近一次主动探测是否有响应
+	Reachable bool `json:"reachable"`
+	// TrafficActive 最近一轮隧道内是否有流量
+	TrafficActive bool `json:"traffic_active"`
+	// Reason 本次状态的判定依据
+	Reason string `json:"reason,omitempty"`
+	// Failures 当前连续判为「无响应且无流量」的次数
 	Failures int   `json:"failures"`
 	Checks   int64 `json:"checks"`
 }
 
-// LivenessMonitor 周期性读取各账号的 WireGuard 握手状态，判定设备是否在线。
+// ping 输出中的往返时间，例如 "time=1.23 ms" 或 "time<1 ms"
+var pingRTTPattern = regexp.MustCompile(`time[=<]([0-9.]+)\s*ms`)
+
+// ProbePeerReachable 在指定网络命名空间内向目标地址发送一次 ICMP 探测。
 //
-// 判据说明：peer 的 last handshake 由 WireGuard 自身维护，只要隧道活跃就会
-// 持续更新（默认约 120 秒重协商，配合 keepalive 更频繁）。相比主动发包探测，
-// 它不受客户端防火墙影响，也不依赖后端进程能路由到隧道网段。
+// 必须在 peer 所属命名空间内执行：隧道网段只在该命名空间内可达，
+// 从宿主机命名空间发包会落到默认路由上，永远收不到响应。
+func ProbePeerReachable(ctx context.Context, nsName, target string, timeout time.Duration) (bool, time.Duration) {
+	if strings.TrimSpace(nsName) == "" || strings.TrimSpace(target) == "" {
+		return false, 0
+	}
+
+	seconds := int(timeout.Round(time.Second) / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+
+	start := time.Now()
+	cmd := exec.CommandContext(ctx, "ip", "netns", "exec", nsName,
+		"ping", "-c", "1", "-W", strconv.Itoa(seconds), target)
+	output, err := cmd.CombinedOutput()
+	rtt := time.Since(start)
+
+	if err != nil {
+		return false, rtt
+	}
+
+	if match := pingRTTPattern.FindSubmatch(output); len(match) > 1 {
+		if ms, parseErr := strconv.ParseFloat(string(match[1]), 64); parseErr == nil {
+			rtt = time.Duration(ms * float64(time.Millisecond))
+		}
+	}
+
+	return true, rtt
+}
+
+// trafficSample 上一次采样到的累计流量，用于判断隧道是否仍有数据往来
+type trafficSample struct {
+	rx int64
+	tx int64
+}
+
+// LivenessMonitor 周期性地探测各设备：主动 ICMP 探测为主，
+// 隧道流量与握手状态为辅，实现秒级的在线/离线感知。
 type LivenessMonitor struct {
 	db *gorm.DB
 	wg *WireguardService
 
-	interval         time.Duration
-	handshakeTimeout time.Duration
-	offlineAfter     int
+	interval        time.Duration
+	probeTimeout    time.Duration
+	offlineAfter    int
+	handshakeWindow time.Duration
+	trafficStale    time.Duration
+	maxConcurrency  int
 
-	mu      sync.RWMutex
-	results map[string]*LivenessResult
+	mu              sync.RWMutex
+	results         map[string]*LivenessResult
+	traffic         map[string]trafficSample
+	lastTrafficSeen map[string]time.Time
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -60,12 +126,17 @@ type LivenessMonitor struct {
 // NewLivenessMonitor 创建在线判定监控器。
 func NewLivenessMonitor(db *gorm.DB, cfg config.LivenessConfig) *LivenessMonitor {
 	return &LivenessMonitor{
-		db:               db,
-		wg:               NewWireguardService(config.AppConfig.Network.ConfigDir),
-		interval:         cfg.Interval(),
-		handshakeTimeout: cfg.HandshakeTimeout(),
-		offlineAfter:     cfg.OfflineThreshold,
-		results:          make(map[string]*LivenessResult),
+		db:              db,
+		wg:              NewWireguardService(config.AppConfig.Network.ConfigDir),
+		interval:        cfg.Interval(),
+		probeTimeout:    cfg.ProbeTimeout(),
+		offlineAfter:    cfg.OfflineThreshold,
+		handshakeWindow: cfg.HandshakeTimeout(),
+		trafficStale:    cfg.TrafficStale(),
+		maxConcurrency:  cfg.MaxConcurrency,
+		results:         make(map[string]*LivenessResult),
+		traffic:         make(map[string]trafficSample),
+		lastTrafficSeen: make(map[string]time.Time),
 	}
 }
 
@@ -77,7 +148,7 @@ func (m *LivenessMonitor) Start(parent context.Context) {
 	go func() {
 		defer m.done.Done()
 
-		ticker := time.NewTicker(m.interval)
+		ticker := time.NewTicker(m.currentInterval())
 		defer ticker.Stop()
 
 		m.checkAll()
@@ -85,7 +156,6 @@ func (m *LivenessMonitor) Start(parent context.Context) {
 		for {
 			select {
 			case <-ticker.C:
-				// 判定参数支持运行时调整：每轮复核前重新读取
 				if interval := m.currentInterval(); interval != m.interval {
 					m.interval = interval
 					ticker.Reset(interval)
@@ -98,8 +168,8 @@ func (m *LivenessMonitor) Start(parent context.Context) {
 		}
 	}()
 
-	log.Printf("Liveness monitor started: interval=%v handshake_timeout=%v offline_after=%d",
-		m.interval, m.handshakeTimeout, m.offlineAfter)
+	log.Printf("Liveness monitor started: interval=%v probe_timeout=%v offline_after=%d traffic_stale=%v",
+		m.interval, m.probeTimeout, m.offlineAfter, m.trafficStale)
 }
 
 // Stop 停止判定循环。
@@ -115,25 +185,40 @@ func (m *LivenessMonitor) ProbeEnabled() bool {
 	return m.ctx != nil
 }
 
-// currentInterval 取运行时配置中的复核间隔（未配置时用启动时的值）。
+// ---- 运行时参数（支持在管理界面调整） ----
+
 func (m *LivenessMonitor) currentInterval() time.Duration {
 	seconds := GetSettings().Int(SettingLivenessInterval, int(m.interval/time.Second))
 	if seconds < 1 {
-		seconds = 3
+		seconds = 2
 	}
 	return time.Duration(seconds) * time.Second
 }
 
-// handshakeWindow 取运行时配置中的握手时效阈值。
-func (m *LivenessMonitor) handshakeWindow() time.Duration {
-	seconds := GetSettings().Int(SettingLivenessHandshakeTimeout, int(m.handshakeTimeout/time.Second))
+func (m *LivenessMonitor) currentProbeTimeout() time.Duration {
+	ms := GetSettings().Int(SettingLivenessProbeTimeout, int(m.probeTimeout/time.Millisecond))
+	if ms < 100 {
+		ms = 1000
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+func (m *LivenessMonitor) currentHandshakeWindow() time.Duration {
+	seconds := GetSettings().Int(SettingLivenessHandshakeTimeout, int(m.handshakeWindow/time.Second))
 	if seconds < 1 {
 		seconds = 180
 	}
 	return time.Duration(seconds) * time.Second
 }
 
-// offlineConfirmations 取运行时配置中的离线确认次数。
+func (m *LivenessMonitor) currentTrafficStale() time.Duration {
+	seconds := GetSettings().Int(SettingLivenessTrafficStale, int(m.trafficStale/time.Second))
+	if seconds < 1 {
+		seconds = 40
+	}
+	return time.Duration(seconds) * time.Second
+}
+
 func (m *LivenessMonitor) offlineConfirmations() int {
 	count := GetSettings().Int(SettingLivenessOfflineThreshold, m.offlineAfter)
 	if count < 1 {
@@ -142,7 +227,7 @@ func (m *LivenessMonitor) offlineConfirmations() int {
 	return count
 }
 
-// checkAll 遍历所有账号，读取握手状态并更新判定结果。
+// checkAll 遍历所有账号，探测设备并更新状态。
 func (m *LivenessMonitor) checkAll() {
 	var servers []models.WireguardServer
 	if err := m.db.Find(&servers).Error; err != nil {
@@ -151,10 +236,13 @@ func (m *LivenessMonitor) checkAll() {
 	}
 
 	now := time.Now()
+	timeout := m.currentProbeTimeout()
+	sem := make(chan struct{}, m.maxConcurrency)
+	var wg sync.WaitGroup
 
 	for _, server := range servers {
 		var peers []models.WireguardPeer
-		if err := m.db.Select("public_key").
+		if err := m.db.Select("public_key", "peer_address").
 			Where("server_id = ?", server.ID).Find(&peers).Error; err != nil {
 			log.Printf("liveness: failed to list peers of server %d: %v", server.ID, err)
 			continue
@@ -164,30 +252,80 @@ func (m *LivenessMonitor) checkAll() {
 		}
 
 		handshakes := make(map[string]time.Time, len(peers))
+		transfers := make(map[string]trafficSample, len(peers))
 		statsOK := false
 
 		stats, err := m.wg.GetDetailedStats(server.Namespace, server.WgInterface)
 		if err != nil {
-			// 接口不可用（账号被禁用、网络未就绪）：本轮不出结论，保留上一状态
+			// 接口不可用（账号被禁用、网络未就绪）：本轮不出结论
 			log.Printf("liveness: stats unavailable for %s/%s: %v", server.Namespace, server.WgInterface, err)
 		} else {
 			statsOK = true
 			for _, peerStats := range stats.Peers {
 				handshakes[peerStats.PublicKey] = peerStats.LatestHandshake
+				transfers[peerStats.PublicKey] = trafficSample{rx: peerStats.TransferRx, tx: peerStats.TransferTx}
 			}
 		}
 
 		for _, peer := range peers {
-			m.evaluate(peer.PublicKey, handshakes[peer.PublicKey], statsOK, now)
+			peerCopy := peer
+			sample := transfers[peerCopy.PublicKey]
+
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				// 主动探测：在该账号的命名空间内 ping 设备隧道地址
+				reachable, rtt := false, time.Duration(0)
+				if statsOK {
+					reachable, rtt = ProbePeerReachable(m.ctx, server.Namespace, peerCopy.PeerAddress, timeout)
+				}
+
+				trafficActive := m.recordTraffic(peerCopy.PublicKey, sample, now)
+				m.evaluate(peerCopy.PublicKey, handshakes[peerCopy.PublicKey],
+					reachable, rtt, trafficActive, statsOK, now)
+			}()
 		}
 	}
+
+	wg.Wait()
 }
 
-// evaluate 依据握手时间更新单个设备的状态。
+// recordTraffic 记录累计流量并判断本轮是否有增长。
+func (m *LivenessMonitor) recordTraffic(key string, sample trafficSample, now time.Time) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	previous, seen := m.traffic[key]
+	m.traffic[key] = sample
+
+	if !seen {
+		return false
+	}
+	if sample.rx > previous.rx || sample.tx > previous.tx {
+		m.lastTrafficSeen[key] = now
+		return true
+	}
+	return false
+}
+
+// evaluate 综合主动探测、隧道流量与握手状态得出在线结论。
 //
-// 上线：握手时间在阈值内，立即置为在线（秒级）。
-// 离线：从未握手直接判离线；握手过期则需连续多次确认，规避临界抖动。
-func (m *LivenessMonitor) evaluate(key string, handshake time.Time, statsOK bool, now time.Time) {
+// 在线（立即）：探测有响应，或本轮隧道有流量；
+// 保持在线：保护窗口内仍有流量，或握手仍在时效内（应对 ICMP 被拦截的设备）；
+// 离线：以上都不满足并连续确认若干次，通常在数秒内完成。
+func (m *LivenessMonitor) evaluate(
+	key string,
+	handshake time.Time,
+	reachable bool,
+	rtt time.Duration,
+	trafficActive bool,
+	statsOK bool,
+	now time.Time,
+) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -199,6 +337,11 @@ func (m *LivenessMonitor) evaluate(key string, handshake time.Time, statsOK bool
 
 	result.CheckedAt = now
 	result.Checks++
+	result.Reachable = reachable
+	result.TrafficActive = trafficActive
+	if reachable {
+		result.LatencyMS = rtt.Milliseconds()
+	}
 
 	if handshake.IsZero() {
 		result.LastHandshakeAt = nil
@@ -209,29 +352,37 @@ func (m *LivenessMonitor) evaluate(key string, handshake time.Time, statsOK bool
 		result.HandshakeAgeSeconds = int64(now.Sub(handshake).Seconds())
 	}
 
-	// 接口读取失败时不改变既有结论，避免账号禁用期间状态跳变
 	if !statsOK {
+		result.Reason = ReasonNoStats
 		return
 	}
 
-	if !handshake.IsZero() && now.Sub(handshake) <= m.handshakeWindow() {
-		result.State = LivenessOnline
-		result.Failures = 0
-		result.LastOnlineAt = &now
-		return
+	switch {
+	case reachable:
+		result.Reason = ReasonProbe
+
+	case trafficActive:
+		result.Reason = ReasonTraffic
+
+	default:
+		// 保护窗口：最近仍有流量，或握手仍在时效内
+		if lastSeen, ok := m.lastTrafficSeen[key]; ok && now.Sub(lastSeen) <= m.currentTrafficStale() {
+			result.Reason = ReasonRecent
+		} else if !handshake.IsZero() && now.Sub(handshake) <= m.currentHandshakeWindow() {
+			result.Reason = ReasonHandshake
+		} else {
+			result.Failures++
+			result.Reason = ReasonTimeout
+			if result.Failures >= m.offlineConfirmations() {
+				result.State = LivenessOffline
+			}
+			return
+		}
 	}
 
-	// 从未握手：设备从未接入，直接判离线
-	if handshake.IsZero() {
-		result.State = LivenessOffline
-		result.Failures++
-		return
-	}
-
-	result.Failures++
-	if result.Failures >= m.offlineConfirmations() {
-		result.State = LivenessOffline
-	}
+	result.State = LivenessOnline
+	result.Failures = 0
+	result.LastOnlineAt = &now
 }
 
 // Snapshot 返回全部设备的判定结果副本。
