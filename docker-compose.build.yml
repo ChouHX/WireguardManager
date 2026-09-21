@@ -23,12 +23,19 @@ services:
       - NET_ADMIN
       - SYS_MODULE
     volumes:
-      - ./config.yaml:/root/config.yaml:ro
       - ./wg_config:/etc/wg_config
       # SQLite 数据目录（数据库文件由后端自动创建）
       - ${DATA_DIR:-./data}:/root/data
       - /lib/modules:/lib/modules:ro
       - /var/run/netns:/var/run/netns:shared
     environment:
+      # 必填：JWT 签名密钥（未设置时 compose 会直接报错提示）
+      - WM_JWT_SECRET=${WM_JWT_SECRET:?请在 .env 中设置 WM_JWT_SECRET，可用 openssl rand -hex 32 生成}
       - WM_SERVER_PORT=${WM_SERVER_PORT:-3000}
-      - TZ=Asia/Shanghai
+      - WM_SERVER_MODE=${WM_SERVER_MODE:-release}
+      - WM_DB_PATH=${WM_DB_PATH:-./data/cloud_platform.db}
+      - WM_NETWORK_CONFIG_DIR=/etc/wg_config
+      - WM_DEFAULT_ADMIN_EMAIL=${WM_DEFAULT_ADMIN_EMAIL:-admin@platform.com}
+      - WM_DEFAULT_ADMIN_PASSWORD=${WM_DEFAULT_ADMIN_PASSWORD:-password}
+      - WM_DEFAULT_ADMIN_NAME=${WM_DEFAULT_ADMIN_NAME:-admin}
+      - TZ=${TZ:-Asia/Shanghai}

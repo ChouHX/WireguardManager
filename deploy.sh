@@ -91,13 +91,13 @@ fi
 # 容器以特权 + host 网络运行并共享 /var/run/netns，因此能直接管理宿主的网络环境。
 echo -e "  ${GREEN}提示:${NC} 宿主机无需安装 wg 命令，工具链由后端容器提供（第 8 步会自检）"
 
-# 准备配置文件
-echo -e "${YELLOW}[5/8] 准备配置文件...${NC}"
+# 准备环境变量文件
+echo -e "${YELLOW}[5/8] 准备环境变量文件...${NC}"
 
 if [ ! -f ".env" ]; then
     if [ -f ".env.example" ]; then
         cp .env.example .env
-        echo -e "${GREEN}✓ 已创建 .env 文件${NC}"
+        echo -e "${GREEN}✓ 已从 .env.example 创建 .env${NC}"
     else
         echo -e "${RED}错误: 未找到 .env.example${NC}"
         exit 1
@@ -106,26 +106,19 @@ else
     echo -e "${GREEN}✓ .env 文件已存在${NC}"
 fi
 
-if [ ! -f "config.yaml" ]; then
-    if [ -f "config.yaml.example" ]; then
-        cp config.yaml.example config.yaml
-        echo -e "${YELLOW}✓ 已创建 config.yaml 文件${NC}"
-        echo -e "${RED}重要: 请编辑 config.yaml 文件，修改以下配置:${NC}"
-        echo "  - network.server_ip: 修改为服务器公网 IP"
-        echo "  - network.out_interface: 修改为网络接口名称（如 eth0）"
-        echo ""
-        read -p "是否现在编辑配置文件? [Y/n] " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
-            ${EDITOR:-nano} config.yaml
-        fi
-    else
-        echo -e "${RED}错误: 未找到 config.yaml.example${NC}"
-        exit 1
-    fi
+# JWT 密钥：为空时自动生成，避免部署后因缺少密钥而无法启动
+if grep -qE '^WM_JWT_SECRET=.+' .env; then
+    echo -e "${GREEN}✓ WM_JWT_SECRET 已设置${NC}"
 else
-    echo -e "${GREEN}✓ config.yaml 文件已存在${NC}"
+    secret=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    if sed -i "s|^WM_JWT_SECRET=.*|WM_JWT_SECRET=${secret}|" .env; then
+        echo -e "${GREEN}✓ 已自动生成 WM_JWT_SECRET${NC}"
+    else
+        echo -e "${YELLOW}提示: 请手动在 .env 中设置 WM_JWT_SECRET${NC}"
+    fi
 fi
+
+echo -e "  ${GREEN}提示:${NC} 网络、监控、在线判定等参数已移至管理界面「系统设置」，无需在此配置"
 
 # 创建必要的目录
 echo -e "${YELLOW}[6/8] 创建必要的目录...${NC}"

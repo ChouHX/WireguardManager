@@ -35,7 +35,7 @@
 - **秒级在线感知** —— 每 2 秒在设备所在的网络命名空间内主动探测一次，客户端零 Agent：有响应立即在线，连续无响应即判离线（约 4 秒），不再受 WireGuard 握手周期（最长 120 秒）拖累。
 - **流量与资源监控** —— 设备握手状态、收发流量、系统 CPU / 内存 / 磁盘 / 网络趋势一屏掌握。
 - **精细管控** —— 设备粒度限速、启用禁用、网关转发模式、AllowedIPs 网段自定义，支持为单个设备启用预共享密钥（PSK）以增强抗中间人与抗量子能力。
-- **配置即改即生效** —— 网段、出口网卡、公网 IP、DNS、监控与在线判定参数都在管理界面「系统设置」中调整并持久化到数据库；`config.yaml` 只保留监听端口、数据库路径、JWT 密钥等启动必需项。
+- **配置即改即生效** —— 网段、出口网卡、公网 IP、DNS、监控与在线判定参数都在管理界面「系统设置」中调整并持久化到数据库；部署侧只需一个 `.env`，填上 JWT 密钥即可。
 - **现代控制台** —— React 19 + Mantine，紧凑式布局、明暗主题、中英文双语、移动端自适应。
 - **轻量部署** —— 嵌入式 SQLite（纯 Go 驱动，无需 CGO、无需独立数据库服务）；支持单容器部署，一个进程同时提供控制台与 API。镜像由 CI 构建并推送 GHCR。
 
@@ -98,11 +98,8 @@ git clone https://github.com/ChouHX/WireguardManager.git
 cd WireguardManager
 
 cp .env.example .env
-cp config.yaml.example config.yaml
-# 至少需要修改 config.yaml 中的：
-#   jwt.secret        换成随机长字符串
-#   network.server_ip 服务器公网 IP
-#   network.out_interface 网卡名（可用 ip route show default 查看）
+# 只需填一项：JWT 签名密钥（./deploy.sh 会自动生成）
+#   WM_JWT_SECRET=...    可用 openssl rand -hex 32 生成
 ```
 
 启动服务（单容器：一个进程同时提供控制台与 API，只占一个端口）：
@@ -131,22 +128,23 @@ WM_IMAGE_TAG=sha-2df1b06 docker compose up -d
 
 ### 配置项
 
-配置分两层：**启动参数**只能写在 `config.yaml`（或 `WM_*` 环境变量），**运行时可调项**在管理界面「系统设置」中维护并持久化到数据库。完整示例见 [`config.yaml.example`](config.yaml.example)。
+配置分两层：**启动参数**通过 `.env`（容器部署）或环境变量传入，见 [`.env.example`](.env.example)；**运行时可调项**在管理界面「系统设置」中维护并持久化到数据库。非容器部署时也仍然支持 `config.yaml`，字段与环境变量同名（下划线转下划线），文件不存在时自动降级为环境变量与内置默认值。
 
-**启动参数**（改动需重启）：
+**启动参数**（通过 `.env` / 环境变量传入，改动需重启）：
 
-| 键 | 默认值 | 说明 |
+| 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `server.port` | `3000` | 控制台与 API 共用端口 |
-| `server.mode` | `release` | Gin 运行模式：`debug` / `release` / `test` |
-| `server.cors_origins` | `["*"]` | 允许的跨域来源 |
-| `database.path` | `./data/cloud_platform.db` | SQLite 文件路径 |
-| `database.max_open_conns` | `1` | 连接数，1 表示串行访问，规避 `database is locked` |
-| `database.busy_timeout_ms` | `5000` | 写锁等待超时 |
-| `database.wal` | `true` | 是否启用 WAL 日志模式 |
-| `jwt.secret` | 无 | **必填**，少于 8 字符会拒绝启动 |
-| `network.config_dir` | `/etc/wg_config` | WireGuard 配置存放目录 |
-| `default.admin_email` / `admin_password` / `admin_name` | 见示例 | 首次启动创建的管理员 |
+| `WM_JWT_SECRET` | 无 | **必填**，少于 8 字符会拒绝启动（`deploy.sh` 会自动生成） |
+| `WM_SERVER_PORT` | `3000` | 控制台与 API 共用端口 |
+| `WM_SERVER_MODE` | `release` | Gin 运行模式：`debug` / `release` / `test` |
+| `WM_SERVER_CORS_ORIGINS` | `*` | 允许的跨域来源，逗号分隔 |
+| `WM_DB_PATH` | `./data/cloud_platform.db` | SQLite 文件路径 |
+| `WM_DB_MAX_OPEN_CONNS` | `1` | 连接数，1 表示串行访问，规避 `database is locked` |
+| `WM_DB_BUSY_TIMEOUT_MS` | `5000` | 写锁等待超时 |
+| `WM_DB_WAL` | `true` | 是否启用 WAL 日志模式 |
+| `WM_NETWORK_CONFIG_DIR` | `/etc/wg_config` | WireGuard 配置存放目录 |
+| `WM_DEFAULT_ADMIN_EMAIL` / `_PASSWORD` / `_NAME` | 见示例 | 首次启动创建的管理员 |
+| `DATA_DIR` | `./data` | 宿主机数据目录（容器挂载用） |
 
 **管理界面可调项**（「系统设置」页面，存库即时生效）：
 
@@ -225,7 +223,6 @@ network:
 ```
 .
 ├── main.go                     # 入口：启动、路由装配、优雅关闭
-├── config.yaml.example         # 配置样例
 ├── internal/
 │   ├── config/                 # 配置加载、校验、环境变量覆盖
 │   ├── database/               # SQLite 初始化与默认管理员
@@ -235,7 +232,7 @@ network:
 │   ├── routes/                 # 路由注册
 │   └── services/               # netns / WireGuard / 监控采样 / 存活探测
 ├── frontend/                   # React + Vite + MantineUI 源码
-├── internal/routes/frontend.go # 由后端托管前端产物（WEB_ROOT 模式）
+├── .env.example                # 部署变量样例（只有 JWT 密钥必填）
 ├── Dockerfile                  # 单容器镜像：Go 后端 + 前端产物 + wg 工具链
 ├── docker-compose.yml          # 默认编排：拉取 GHCR 镜像
 ├── docker-compose.build.yml    # 本地源码构建编排
