@@ -91,6 +91,62 @@ func TestLivenessKeepsOnlineWithinTrafficWindow(t *testing.T) {
 	}
 }
 
+// 关键回归：本机主动探测会抬高 tx，不能因此把离线对端判成在线。
+// 只有 rx（本机从对端收到的字节）增长才证明对端真的在发包。
+func TestTrafficIgnoresOutboundOnly(t *testing.T) {
+	monitor := newTestMonitor()
+	now := time.Now()
+	const key = "peer-tx"
+
+	// 建立基线
+	monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 2000}, now)
+
+	// 对端离线：本机不停发探测包，tx 持续增长，rx 不变
+	if active := monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 9000}, now.Add(2*time.Second)); active {
+		t.Fatal("仅 tx 增长不得判定为活跃（那是本机探测包自身造成的）")
+	}
+
+	// 连续多轮 tx 增长同样不得累积成在线
+	for i := 0; i < 5; i++ {
+		if active := monitor.recordTraffic(key, trafficSample{rx: 1000, tx: int64(9000 + i*1000)}, now.Add(time.Duration(i+3)*time.Second)); active {
+			t.Fatalf("第 %d 轮仅 tx 增长仍被误判为活跃", i+1)
+		}
+	}
+
+	// 端到端：探测无响应 + 只有 tx 增长 → 应判离线
+	expired := now.Add(31 * time.Second)
+	for i := 0; i < 2; i++ {
+		active := monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 50000}, expired)
+		monitor.evaluate(key, expired.Add(-10*time.Minute), false, 0, active, true, expired)
+	}
+	if got := stateOf(t, monitor, key); got != LivenessOffline {
+		t.Fatalf("对端离线（仅本机发包）时应判离线，实际 %q", got)
+	}
+}
+
+// 对端在发包（rx 增长）时仍应维持在线——保活流量是有效的在线证据。
+func TestTrafficCountsInboundOnly(t *testing.T) {
+	monitor := newTestMonitor()
+	now := time.Now()
+	const key = "peer-rx"
+
+	monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 2000}, now)
+
+	// 对端发来保活包：rx 增长
+	if active := monitor.recordTraffic(key, trafficSample{rx: 1200, tx: 2000}, now.Add(25*time.Second)); !active {
+		t.Fatal("rx 增长应判定为活跃")
+	}
+
+	// 探测可能被对端防火墙拦截，但保活流量足以维持在线
+	monitor.evaluate(key, now.Add(-10*time.Minute), false, 0, true, true, now.Add(25*time.Second))
+	if got := stateOf(t, monitor, key); got != LivenessOnline {
+		t.Fatalf("有对端来向流量时应维持在线，实际 %q", got)
+	}
+	if got := reasonOf(t, monitor, key); got != ReasonTraffic {
+		t.Fatalf("判定依据应为 %s，实际 %q", ReasonTraffic, got)
+	}
+}
+
 // 核心场景：客户端断开后不得被"残留的握手时间"拖住。
 // 握手时间戳在断开后只是停住，若拿它当依据会滞后一个重协商周期。
 func TestLivenessOfflineDespiteFreshHandshake(t *testing.T) {

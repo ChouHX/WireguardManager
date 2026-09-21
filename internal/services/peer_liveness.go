@@ -19,7 +19,8 @@ import (
 //   - 单次超时 1s：小于探测间隔，保证一轮探测不会拖到下一轮；
 //   - 离线确认 2 次：约 4 秒完成判定，规避单次丢包造成的误报；
 //   - 流量窗口 30s：略大于客户端默认保活间隔（PersistentKeepalive=25s），
-//     用于在探测被对端防火墙拦截时，靠保活流量继续维持在线；
+//     用于在探测被对端防火墙拦截时，靠对端发来的保活流量继续维持在线
+//     （只统计接收方向的流量，避免本机探测包自身造成的误判）；
 //   - 并发上限 16：限制同一时刻 fork 的探测数量。
 const (
 	livenessInterval      = 2 * time.Second
@@ -73,7 +74,11 @@ type LivenessResult struct {
 	Checks  int64 `json:"checks"`
 }
 
-// trafficSample 上一次采样到的累计流量，用于判断隧道是否仍有数据往来
+// trafficSample 上一次采样到的累计流量。
+//
+// 只使用 rx（本机从该 peer 收到的字节数）判断对端是否活跃：
+// tx 是本机发给对端的字节数，会被主动探测本身抬高——每轮探测都会发出
+// TCP SYN，tx 因此持续增长，若一并采信则对端离线也会被判为"有流量"。
 type trafficSample struct {
 	rx int64
 	tx int64
@@ -237,7 +242,10 @@ func (m *LivenessMonitor) recordTraffic(key string, sample trafficSample, now ti
 	if !seen {
 		return false
 	}
-	if sample.rx > previous.rx || sample.tx > previous.tx {
+
+	// 仅以 rx 增长作为对端活跃的判据（见 trafficSample 的说明）。
+	// tx 增长可能只是本机主动探测所致，不能证明对端在线。
+	if sample.rx > previous.rx {
 		m.lastTrafficSeen[key] = now
 		return true
 	}
