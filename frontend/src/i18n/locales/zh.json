@@ -336,7 +336,6 @@
     "subtitle": "以下配置保存在数据库中，修改后立即生效或在下一次刷新时生效",
     "saveFailed": "保存失败",
     "saved": "设置已保存",
-    "footerHint": "config.yaml 只保留监听端口、数据库路径与 JWT 密钥等启动参数，其余项均在此处调整。",
     "group": {
       "network": "网络",
       "monitoring": "监控采集",
@@ -358,6 +357,6 @@
     "on": "已启用",
     "off": "已关闭",
     "allowedIpsPlaceholder": "留空按设备所在网段推导",
-    "livenessNote": "其余节奏参数（探测间隔、超时、离线确认次数、流量窗口）由服务端内部决定，无需配置。"
+    "livenessNote": "探测间隔、超时与离线确认次数由服务端内部决定，无需配置。"
   }
 }

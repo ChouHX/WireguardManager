@@ -336,7 +336,6 @@
     "subtitle": "Stored in the database; changes apply immediately or on the next refresh",
     "saveFailed": "Failed to save settings",
     "saved": "Settings saved",
-    "footerHint": "config.yaml keeps only startup parameters (listen port, database path, JWT secret); everything else is configured here.",
     "group": {
       "network": "Network",
       "monitoring": "Monitoring",
@@ -358,6 +357,6 @@
     "on": "Enabled",
     "off": "Disabled",
     "allowedIpsPlaceholder": "Empty = derive from device subnet",
-    "livenessNote": "Other timing parameters (interval, timeout, offline confirmations, traffic window) are decided internally by the server."
+    "livenessNote": "Probe interval, timeout and offline confirmations are decided internally by the server."
   }
 }

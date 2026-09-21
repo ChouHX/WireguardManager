@@ -319,10 +319,6 @@ export default function SettingsPage() {
           </Card>
         );
       })}
-
-      <Text fz={11} c="dimmed">
-        {t('settings.footerHint')}
-      </Text>
     </Stack>
   );
 }
