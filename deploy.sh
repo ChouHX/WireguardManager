@@ -3,7 +3,7 @@
 # WireGuard Manager 部署脚本
 #
 #   ./deploy.sh           从 GHCR 拉取预构建镜像并启动（默认，无需本地编译）
-#   ./deploy.sh --build   使用 build.yml 从源码构建后启动
+#   ./deploy.sh --build   使用 docker-compose.build.yml 从源码构建后启动
 #
 # 颜色定义
 RED='\033[0;31m'
@@ -145,13 +145,13 @@ echo -e "${GREEN}✓ 已创建 data 目录（存放 SQLite 数据库文件）${N
 # 获取并启动服务
 if [ "$BUILD_LOCAL" = true ]; then
     echo -e "${YELLOW}[7/8] 本地构建镜像并启动服务...${NC}"
-    echo "使用 build.yml 从源码编译，可能需要几分钟..."
+    echo "使用 docker-compose.build.yml 从源码编译，可能需要几分钟..."
     echo ""
 
-    UP_CMD="docker compose -f build.yml up -d --build"
+    UP_CMD="docker compose -f docker-compose.build.yml up -d --build"
 else
     echo -e "${YELLOW}[7/8] 拉取 GHCR 镜像并启动服务...${NC}"
-    echo "使用默认 compose.yml（预构建镜像）..."
+    echo "使用默认 docker-compose.yml（预构建镜像）..."
     echo ""
 
     if ! docker compose pull; then
@@ -190,9 +190,9 @@ echo -e "${YELLOW}[8/8] 运行部署自检...${NC}"
 
 SELF_CHECK_FAILED=0
 if [ "$BUILD_LOCAL" = true ]; then
-    COMPOSE_FILE="build.yml"
+    COMPOSE_FILE="docker-compose.build.yml"
 else
-    COMPOSE_FILE="compose.yml"
+    COMPOSE_FILE="docker-compose.yml"
 fi
 
 # 优先 curl，其次 wget；返回 2 表示宿主机两者都没有
