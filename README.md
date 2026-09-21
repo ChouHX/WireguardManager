@@ -107,9 +107,12 @@ cp config.yaml.example config.yaml
 启动服务（单容器：一个进程同时提供控制台与 API，只占一个端口）：
 
 ```bash
-docker compose up -d                 # 使用 GHCR 预构建镜像
-# 或本地从源码构建
-docker compose up -d --build
+docker compose up -d                          # 默认：拉取 GHCR 预构建镜像（自动识别 compose.yml）
+docker compose pull && docker compose up -d   # 更新到最新镜像
+
+# 本地从源码构建（使用 build.yml）
+docker compose -f build.yml up -d --build
+
 # 或使用带环境检查与部署自检的脚本（等价于上面两种，默认拉取镜像）
 ./deploy.sh
 ./deploy.sh --build
@@ -226,7 +229,8 @@ network:
 ├── frontend/                   # React + Vite + MantineUI 源码
 ├── internal/routes/frontend.go # 由后端托管前端产物（WEB_ROOT 模式）
 ├── Dockerfile                  # 单容器镜像：Go 后端 + 前端产物 + wg 工具链
-├── docker-compose.yml          # 单容器编排（host 网络、一个端口）
+├── compose.yml                 # 默认编排：拉取 GHCR 镜像
+├── build.yml                   # 本地源码构建编排
 ├── wg_config/                  # 挂载至 /etc/wg_config
 └── data/                       # SQLite 数据目录（容器内 /root/data）
 ```

@@ -3,7 +3,7 @@
 # WireGuard Manager 部署脚本
 #
 #   ./deploy.sh           从 GHCR 拉取预构建镜像并启动（默认，无需本地编译）
-#   ./deploy.sh --build   从源码构建镜像后启动
+#   ./deploy.sh --build   使用 build.yml 从源码构建后启动
 #
 # 颜色定义
 RED='\033[0;31m'
@@ -145,13 +145,13 @@ echo -e "${GREEN}✓ 已创建 data 目录（存放 SQLite 数据库文件）${N
 # 获取并启动服务
 if [ "$BUILD_LOCAL" = true ]; then
     echo -e "${YELLOW}[7/8] 本地构建镜像并启动服务...${NC}"
-    echo "从源码编译前后端，可能需要几分钟..."
+    echo "使用 build.yml 从源码编译，可能需要几分钟..."
     echo ""
 
-    UP_CMD="docker compose up -d --build"
+    UP_CMD="docker compose -f build.yml up -d --build"
 else
     echo -e "${YELLOW}[7/8] 拉取 GHCR 镜像并启动服务...${NC}"
-    echo "使用默认 docker-compose.yml（预构建镜像）..."
+    echo "使用默认 compose.yml（预构建镜像）..."
     echo ""
 
     if ! docker compose pull; then
@@ -189,6 +189,11 @@ fi
 echo -e "${YELLOW}[8/8] 运行部署自检...${NC}"
 
 SELF_CHECK_FAILED=0
+if [ "$BUILD_LOCAL" = true ]; then
+    COMPOSE_FILE="build.yml"
+else
+    COMPOSE_FILE="compose.yml"
+fi
 
 # 优先 curl，其次 wget；返回 2 表示宿主机两者都没有
 http_ok() {
@@ -203,7 +208,7 @@ http_ok() {
 }
 
 # 1) 容器内工具链：宿主无需安装 wireguard-tools
-if docker compose exec -T app sh -c \
+if docker compose -f "$COMPOSE_FILE" exec -T app sh -c \
     'command -v wg >/dev/null 2>&1 && command -v ip >/dev/null 2>&1 && command -v iptables >/dev/null 2>&1' 2>/dev/null; then
     echo -e "  ${GREEN}✓${NC} 容器内 wg / ip / iptables 可用（宿主无需安装 wireguard-tools）"
 else
@@ -212,7 +217,7 @@ else
 fi
 
 # 2) 命名空间共享：容器里应能直接列出宿主的 netns
-if docker compose exec -T app ip netns list >/dev/null 2>&1; then
+if docker compose -f "$COMPOSE_FILE" exec -T app ip netns list >/dev/null 2>&1; then
     echo -e "  ${GREEN}✓${NC} 容器可访问宿主网络命名空间（/var/run/netns 已共享）"
 else
     echo -e "  ${RED}✗${NC} 容器无法访问 /var/run/netns，请确认该挂载为 shared"
@@ -220,7 +225,7 @@ else
 fi
 
 # 3) 控制台与 API 可访问（单容器下由同一个进程、同一个端口提供）
-CONSOLE_PORT=$(docker compose exec -T app printenv WM_SERVER_PORT 2>/dev/null | tr -d '\r\n')
+CONSOLE_PORT=$(docker compose -f "$COMPOSE_FILE" exec -T app printenv WM_SERVER_PORT 2>/dev/null | tr -d '\r\n')
 CONSOLE_PORT=${CONSOLE_PORT:-3000}
 
 http_ok "http://127.0.0.1:${CONSOLE_PORT}/health"
@@ -231,7 +236,7 @@ case $health_status in
     *)
         echo -e "  ${RED}✗${NC} 服务不可访问（127.0.0.1:${CONSOLE_PORT}）"
         echo "     端口取自容器的 WM_SERVER_PORT，可用 ss -ltn 复核"
-        echo "     查看日志: docker compose logs --tail=50 app"
+        echo "     查看日志: docker compose -f ${COMPOSE_FILE} logs --tail=50 app"
         SELF_CHECK_FAILED=1
         ;;
 esac

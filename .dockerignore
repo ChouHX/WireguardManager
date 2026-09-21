@@ -22,6 +22,8 @@ LICENSE
 # Docker
 Dockerfile*
 docker-compose*.yml
+compose.yml
+build.yml
 .dockerignore
 
 # Config
