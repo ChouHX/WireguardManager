@@ -311,7 +311,7 @@ export default function AdminWireguardPage() {
       <ErrorAlert message={error} onClose={() => setError(null)} />
 
       {/* 全局概览 */}
-      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
+      <SimpleGrid cols={{ base: 2, sm: 2, lg: 4 }} spacing={{ base: 'xs', sm: 'sm' }}>
         <MetricCard
           label={t('wireguard.totalUsers')}
           value={rows.length}
@@ -673,7 +673,7 @@ export default function AdminWireguardPage() {
                 </Text>
               </Group>
               <Divider mb="sm" variant="dashed" />
-              <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">
+              <SimpleGrid cols={{ base: 3, sm: 3 }} spacing={{ base: 'xs', sm: 'sm' }}>
                 <Stack gap={2}>
                   <Text size="xs" c="dimmed">
                     {t('wireguard.peers')}

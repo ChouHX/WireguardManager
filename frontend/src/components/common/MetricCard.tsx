@@ -48,23 +48,22 @@ export function MetricCard({
 
   return (
     <Card
-      className="wm-rise"
+      className="wm-rise wm-metric-card"
       style={{ '--wm-delay': `${delay}ms` } as React.CSSProperties}
-      padding="md"
     >
-      <Stack gap={6}>
-        <Group justify="space-between" wrap="nowrap" align="flex-start">
-          <Text fz={11} fw={600} c="dimmed" tt="uppercase" style={{ letterSpacing: '0.08em' }}>
+      <Stack gap={5}>
+        <Group justify="space-between" wrap="nowrap" align="flex-start" gap={6}>
+          <Text className="wm-metric-label" fw={600} c="dimmed" tt="uppercase">
             {label}
           </Text>
-          <ThemeIcon variant="light" color={color} size={26} radius="xs">
-            <Icon size={15} stroke={1.7} />
+          <ThemeIcon variant="light" color={color} size={24} radius="xs">
+            <Icon size={14} stroke={1.7} />
           </ThemeIcon>
         </Group>
 
         {/* 用 Box 而非 Text：value 可能是 ReactNode（如多行速率），
             避免在 <p> 内嵌 <div> 触发 HTML 嵌套告警 */}
-        <Box className="wm-mono" fz={22} fw={700} lh={1.1}>
+        <Box className="wm-mono wm-metric-value" fw={700}>
           {value}
         </Box>
 
@@ -78,7 +77,7 @@ export function MetricCard({
         ) : null}
 
         {hint ? (
-          <Text size="xs" c="dimmed">
+          <Text className="wm-metric-hint" c="dimmed">
             {hint}
           </Text>
         ) : null}

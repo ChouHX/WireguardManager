@@ -236,7 +236,7 @@ export default function DashboardPage() {
       <ErrorAlert message={error} onClose={() => setError(null)} />
 
       {/* 资源概览 */}
-      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
+      <SimpleGrid cols={{ base: 2, sm: 2, lg: 4 }} spacing={{ base: 'xs', sm: 'sm' }}>
         <MetricCard
           label={t('monitoring.cpuUsage')}
           value={stats ? formatPercent(stats.cpu.usage_percent) : '-'}

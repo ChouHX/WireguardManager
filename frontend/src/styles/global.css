@@ -77,6 +77,46 @@ body {
 }
 
 /* 数字与密钥统一等宽，避免刷新时抖动 */
+/* 指标卡：移动端收紧内边距与字号，使两列并排时内容仍能完整显示。
+   Mantine 的 padding/gap/fz 不接受响应式对象，故用媒体查询实现。 */
+.wm-metric-card {
+  padding: var(--mantine-spacing-md);
+}
+
+.wm-metric-label {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+}
+
+.wm-metric-value {
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.wm-metric-hint {
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+@media (max-width: 47.99em) {
+  .wm-metric-card {
+    padding: var(--mantine-spacing-xs);
+  }
+
+  .wm-metric-label {
+    font-size: 10px;
+  }
+
+  .wm-metric-value {
+    font-size: 17px;
+  }
+
+  .wm-metric-hint {
+    font-size: 10.5px;
+  }
+}
+
 .wm-mono {
   font-family: var(--mantine-font-family-monospace);
   font-variant-numeric: tabular-nums;

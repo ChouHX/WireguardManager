@@ -574,7 +574,7 @@ export default function WireguardPage() {
       <ErrorAlert message={error} onClose={() => setError(null)} />
 
       {/* 流量与在线概览 */}
-      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
+      <SimpleGrid cols={{ base: 2, sm: 2, lg: 4 }} spacing={{ base: 'xs', sm: 'sm' }}>
         <MetricCard
           label={t('wireguard.onlineDevices')}
           value={liveness ? liveness.online : '-'}
