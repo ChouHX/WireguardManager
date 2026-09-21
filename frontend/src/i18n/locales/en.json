@@ -268,7 +268,7 @@
     "detecting": "Detecting",
     "onlineDevices": "Online devices",
     "onlineHint": "{online} / {total} online",
-    "livenessHint": "Probes each device inside its own namespace every {interval}s: a response marks it online immediately, consecutive failures mark it offline.",
+    "livenessHint": "Every {interval}s the backend enters the device namespace and opens a TCP connection to a high port on its tunnel address: a response or RST marks it online, consecutive failures mark it offline.",
     "usePresharedKey": "Preshared key",
     "usePresharedKeyHelp": "Adds a symmetric key between server and device for extra protection. Re-download the client config after toggling."
   },
@@ -345,6 +345,8 @@
     "livenessHandshakeTimeout": "Handshake window (s)",
     "livenessOfflineThreshold": "Offline confirmations",
     "jwtExpireHours": "Token lifetime (hours)",
-    "defaultPresharedKey": "Use preshared key for new devices"
+    "defaultPresharedKey": "Use preshared key for new devices",
+    "livenessProbeTimeout": "Probe timeout (ms)",
+    "livenessProbePort": "Probe port"
   }
 }

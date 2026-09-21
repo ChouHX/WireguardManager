@@ -268,7 +268,7 @@
     "detecting": "检测中",
     "onlineDevices": "在线设备",
     "onlineHint": "{online} / {total} 台在线",
-    "livenessHint": "每 {interval} 秒在设备所在的网络命名空间内主动探测一次：有响应立即在线，连续无响应即判离线。",
+    "livenessHint": "每 {interval} 秒进入设备所属网络命名空间，向其隧道地址的探测端口发起 TCP 连接：收到响应或 RST 立即在线，连续无响应即判离线。",
     "usePresharedKey": "启用预共享密钥",
     "usePresharedKeyHelp": "在服务端与设备之间再加一层对称密钥，提升抗中间人与抗量子能力。开启或关闭后需要重新下载客户端配置。"
   },
@@ -345,6 +345,8 @@
     "livenessHandshakeTimeout": "握手时效阈值（秒）",
     "livenessOfflineThreshold": "离线确认次数",
     "jwtExpireHours": "登录有效期（小时）",
-    "defaultPresharedKey": "新设备默认启用预共享密钥"
+    "defaultPresharedKey": "新设备默认启用预共享密钥",
+    "livenessProbeTimeout": "单次探测超时（毫秒）",
+    "livenessProbePort": "探测端口"
   }
 }

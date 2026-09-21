@@ -38,6 +38,8 @@ const LABEL_KEY: Record<string, string> = {
   'monitoring.retention_hours': 'monitoringRetention',
   'liveness.enabled': 'livenessEnabled',
   'liveness.interval_seconds': 'livenessInterval',
+  'liveness.probe_timeout_ms': 'livenessProbeTimeout',
+  'liveness.probe_port': 'livenessProbePort',
   'liveness.handshake_timeout_seconds': 'livenessHandshakeTimeout',
   'liveness.offline_threshold': 'livenessOfflineThreshold',
   'jwt.expire_hours': 'jwtExpireHours',

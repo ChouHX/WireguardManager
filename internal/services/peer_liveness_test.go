@@ -1,7 +1,6 @@
 package services
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -174,26 +173,46 @@ func TestLivenessCounts(t *testing.T) {
 	}
 }
 
-// 探测函数：目标为空或命名空间不存在时应快速返回失败，不阻塞判定循环。
-func TestProbePeerReachableFailurePaths(t *testing.T) {
-	ctx := context.Background()
-
-	if ok, _ := ProbePeerReachable(ctx, "", "10.0.0.1", time.Second); ok {
+// 探测函数：参数缺失或不存在的命名空间应快速失败，不阻塞判定循环。
+func TestProbeTCPInNamespaceFailurePaths(t *testing.T) {
+	if ok, _, _ := ProbeTCPInNamespace("", "10.0.0.1:49151", time.Second); ok {
 		t.Fatal("命名空间为空时不应判定可达")
 	}
-	if ok, _ := ProbePeerReachable(ctx, "wg_missing", "", time.Second); ok {
+	if ok, _, _ := ProbeTCPInNamespace("wg_missing", "", time.Second); ok {
 		t.Fatal("目标为空时不应判定可达")
 	}
 
 	start := time.Now()
-	ok, _ := ProbePeerReachable(ctx, "wg_nonexistent_netns", "10.99.99.99", time.Second)
+	ok, _, detail := ProbeTCPInNamespace("wg_nonexistent_netns", "10.99.99.99:49151", time.Second)
 	elapsed := time.Since(start)
 
 	if ok {
 		t.Fatal("不存在的命名空间不应判定可达")
 	}
-	if elapsed > 3*time.Second {
+	if detail != probeDetailSetupFailed {
+		t.Fatalf("应标记为 %s，实际 %q", probeDetailSetupFailed, detail)
+	}
+	if elapsed > 2*time.Second {
 		t.Fatalf("失败路径不应长时间阻塞，实际耗时 %v", elapsed)
+	}
+}
+
+func TestProbeTarget(t *testing.T) {
+	cases := []struct {
+		address string
+		port    int
+		want    string
+	}{
+		{"10.100.0.2", 49151, "10.100.0.2:49151"},
+		{"10.100.0.2", 0, "10.100.0.2:49151"},     // 端口非法时回退默认值
+		{"10.100.0.2", 70000, "10.100.0.2:49151"}, // 超范围同样回退
+		{"", 49151, ""}, // 地址缺失
+	}
+
+	for _, tc := range cases {
+		if got := ProbeTarget(tc.address, tc.port); got != tc.want {
+			t.Fatalf("ProbeTarget(%q, %d) = %q, want %q", tc.address, tc.port, got, tc.want)
+		}
 	}
 }
 

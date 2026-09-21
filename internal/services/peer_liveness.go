@@ -3,10 +3,6 @@ package services
 import (
 	"context"
 	"log"
-	"os/exec"
-	"regexp"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -58,49 +54,13 @@ type LivenessResult struct {
 	Checks   int64 `json:"checks"`
 }
 
-// ping 输出中的往返时间，例如 "time=1.23 ms" 或 "time<1 ms"
-var pingRTTPattern = regexp.MustCompile(`time[=<]([0-9.]+)\s*ms`)
-
-// ProbePeerReachable 在指定网络命名空间内向目标地址发送一次 ICMP 探测。
-//
-// 必须在 peer 所属命名空间内执行：隧道网段只在该命名空间内可达，
-// 从宿主机命名空间发包会落到默认路由上，永远收不到响应。
-func ProbePeerReachable(ctx context.Context, nsName, target string, timeout time.Duration) (bool, time.Duration) {
-	if strings.TrimSpace(nsName) == "" || strings.TrimSpace(target) == "" {
-		return false, 0
-	}
-
-	seconds := int(timeout.Round(time.Second) / time.Second)
-	if seconds < 1 {
-		seconds = 1
-	}
-
-	start := time.Now()
-	cmd := exec.CommandContext(ctx, "ip", "netns", "exec", nsName,
-		"ping", "-c", "1", "-W", strconv.Itoa(seconds), target)
-	output, err := cmd.CombinedOutput()
-	rtt := time.Since(start)
-
-	if err != nil {
-		return false, rtt
-	}
-
-	if match := pingRTTPattern.FindSubmatch(output); len(match) > 1 {
-		if ms, parseErr := strconv.ParseFloat(string(match[1]), 64); parseErr == nil {
-			rtt = time.Duration(ms * float64(time.Millisecond))
-		}
-	}
-
-	return true, rtt
-}
-
 // trafficSample 上一次采样到的累计流量，用于判断隧道是否仍有数据往来
 type trafficSample struct {
 	rx int64
 	tx int64
 }
 
-// LivenessMonitor 周期性地探测各设备：主动 ICMP 探测为主，
+// LivenessMonitor 周期性地探测各设备：在设备所属命名空间内主动发起 TCP 探测为主，
 // 隧道流量与握手状态为辅，实现秒级的在线/离线感知。
 type LivenessMonitor struct {
 	db *gorm.DB
@@ -108,6 +68,7 @@ type LivenessMonitor struct {
 
 	interval        time.Duration
 	probeTimeout    time.Duration
+	probePort       int
 	offlineAfter    int
 	handshakeWindow time.Duration
 	trafficStale    time.Duration
@@ -168,8 +129,8 @@ func (m *LivenessMonitor) Start(parent context.Context) {
 		}
 	}()
 
-	log.Printf("Liveness monitor started: interval=%v probe_timeout=%v offline_after=%d traffic_stale=%v",
-		m.interval, m.probeTimeout, m.offlineAfter, m.trafficStale)
+	log.Printf("Liveness monitor started: interval=%v probe_timeout=%v probe_port=%d offline_after=%d traffic_stale=%v",
+		m.interval, m.probeTimeout, m.probePort, m.offlineAfter, m.trafficStale)
 }
 
 // Stop 停止判定循环。
@@ -201,6 +162,14 @@ func (m *LivenessMonitor) currentProbeTimeout() time.Duration {
 		ms = 1000
 	}
 	return time.Duration(ms) * time.Millisecond
+}
+
+func (m *LivenessMonitor) currentProbePort() int {
+	port := GetSettings().Int(SettingLivenessProbePort, m.probePort)
+	if port <= 0 || port > 65535 {
+		port = 49151
+	}
+	return port
 }
 
 func (m *LivenessMonitor) currentHandshakeWindow() time.Duration {
@@ -278,10 +247,11 @@ func (m *LivenessMonitor) checkAll() {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				// 主动探测：在该账号的命名空间内 ping 设备隧道地址
+				// 主动探测：进入该账号的命名空间，向设备隧道地址的高位端口发 TCP SYN
 				reachable, rtt := false, time.Duration(0)
 				if statsOK {
-					reachable, rtt = ProbePeerReachable(m.ctx, server.Namespace, peerCopy.PeerAddress, timeout)
+					target := ProbeTarget(peerCopy.PeerAddress, m.currentProbePort())
+					reachable, rtt, _ = ProbeTCPInNamespace(server.Namespace, target, timeout)
 				}
 
 				trafficActive := m.recordTraffic(peerCopy.PublicKey, sample, now)

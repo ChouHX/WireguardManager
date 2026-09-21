@@ -29,6 +29,7 @@ const (
 	SettingLivenessEnabled          = "liveness.enabled"
 	SettingLivenessInterval         = "liveness.interval_seconds"
 	SettingLivenessProbeTimeout     = "liveness.probe_timeout_ms"
+	SettingLivenessProbePort        = "liveness.probe_port"
 	SettingLivenessHandshakeTimeout = "liveness.handshake_timeout_seconds"
 	SettingLivenessTrafficStale     = "liveness.traffic_stale_seconds"
 	SettingLivenessOfflineThreshold = "liveness.offline_threshold"
@@ -62,6 +63,7 @@ var SettingDefs = []SettingDef{
 	{Key: SettingLivenessEnabled, Type: "bool", Group: "liveness"},
 	{Key: SettingLivenessInterval, Type: "int", Group: "liveness", Min: 1, Max: 300},
 	{Key: SettingLivenessProbeTimeout, Type: "int", Group: "liveness", Min: 100, Max: 10000},
+	{Key: SettingLivenessProbePort, Type: "int", Group: "liveness", Min: 1, Max: 65535},
 	{Key: SettingLivenessHandshakeTimeout, Type: "int", Group: "liveness", Min: 1, Max: 86400},
 	{Key: SettingLivenessTrafficStale, Type: "int", Group: "liveness", Min: 1, Max: 3600},
 	{Key: SettingLivenessOfflineThreshold, Type: "int", Group: "liveness", Min: 1, Max: 60},

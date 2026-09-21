@@ -91,8 +91,10 @@ type LivenessConfig struct {
 	Enabled bool `yaml:"enabled"` // 是否启用在线判定
 	// IntervalSeconds 判定间隔：每轮在各账号命名空间内主动探测一次
 	IntervalSeconds int `yaml:"interval_seconds"`
-	// ProbeTimeoutMS 单次 ICMP 探测超时
+	// ProbeTimeoutMS 单次 TCP 探测超时
 	ProbeTimeoutMS int `yaml:"probe_timeout_ms"`
+	// ProbePort 探测端口：选高位空闲端口，避免与对端真实服务冲突或误判
+	ProbePort int `yaml:"probe_port"`
 	// OfflineThreshold 连续多少次「无响应且无流量」后才置为离线
 	OfflineThreshold int `yaml:"offline_threshold"`
 	// HandshakeTimeoutSeconds 握手时效：超过则不再作为在线依据
@@ -151,6 +153,7 @@ func defaultConfig() *Config {
 			Enabled:                 true,
 			IntervalSeconds:         2,    // 每 2 秒探测一轮
 			ProbeTimeoutMS:          1000, // 单次探测超时 1 秒
+			ProbePort:               49151, // 高位端口，多数情况下未监听，内核必回 RST
 			OfflineThreshold:        2,    // 连续两次无响应即判离线（约 4 秒）
 			HandshakeTimeoutSeconds: 180,  // 握手时效，作为最后的弱信号
 			TrafficStaleSeconds:     40,   // 保护窗口需大于保活间隔（默认 25s）
@@ -251,6 +254,9 @@ func (c *Config) normalize() {
 	if c.Liveness.ProbeTimeoutMS <= 0 {
 		c.Liveness.ProbeTimeoutMS = 1000
 	}
+	if c.Liveness.ProbePort <= 0 || c.Liveness.ProbePort > 65535 {
+		c.Liveness.ProbePort = 49151
+	}
 	if c.Liveness.HandshakeTimeoutSeconds <= 0 {
 		c.Liveness.HandshakeTimeoutSeconds = 180
 	}
@@ -308,6 +314,7 @@ func applyEnvOverrides(c *Config) {
 	setBool(&c.Liveness.Enabled, "WM_LIVENESS_ENABLED")
 	setInt(&c.Liveness.IntervalSeconds, "WM_LIVENESS_INTERVAL_SECONDS")
 	setInt(&c.Liveness.ProbeTimeoutMS, "WM_LIVENESS_PROBE_TIMEOUT_MS")
+	setInt(&c.Liveness.ProbePort, "WM_LIVENESS_PROBE_PORT")
 	setInt(&c.Liveness.HandshakeTimeoutSeconds, "WM_LIVENESS_HANDSHAKE_TIMEOUT_SECONDS")
 	setInt(&c.Liveness.TrafficStaleSeconds, "WM_LIVENESS_TRAFFIC_STALE_SECONDS")
 	setInt(&c.Liveness.OfflineThreshold, "WM_LIVENESS_OFFLINE_THRESHOLD")
