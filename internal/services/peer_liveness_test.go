@@ -14,9 +14,10 @@ import (
 // 判定参数已是内部常量，夹具只需初始化容器字段。
 func newTestMonitor() *LivenessMonitor {
 	return &LivenessMonitor{
-		probePort: 49151,
-		results:   make(map[string]*LivenessResult),
-		traffic:   make(map[string]trafficSample),
+		probePort:       49151,
+		results:         make(map[string]*LivenessResult),
+		traffic:         make(map[string]trafficSample),
+		lastTrafficSeen: make(map[string]time.Time),
 	}
 }
 
@@ -113,28 +114,83 @@ func TestLivenessOfflineDespiteFreshHandshake(t *testing.T) {
 	}
 }
 
-// 关键回归：本机主动探测会抬高 tx，不能因此把离线对端判成在线。
-func TestTrafficIgnoresOutboundOnly(t *testing.T) {
+// 关键回归：stats 有 1 秒缓存、探测间隔 1 秒，相邻两轮常拿到同一份快照。
+// 重复快照不得被当成"对端停止发包"而翻转状态——这正是状态抖动的来源。
+func TestTrafficRepeatedSnapshotsDoNotFlip(t *testing.T) {
 	monitor := newTestMonitor()
-	const key = "peer-tx"
+	now := time.Now()
+	const key = "peer-jitter"
 
-	monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 2000})
+	// 首个样本只建立基线；随后出现一次真实增长（保活包）
+	monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 2000}, now)
+	monitor.recordTraffic(key, trafficSample{rx: 1500, tx: 2000}, now)
 
-	// 对端离线：本机不停发探测包，tx 持续增长，rx 不变
-	if active := monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 9000}); active {
-		t.Fatal("仅 tx 增长不得判定为活跃（那是本机探测包自身造成的）")
-	}
+	// 连续多轮拿到完全相同的快照（缓存命中），应始终视为活跃
 	for i := 1; i <= 5; i++ {
-		if active := monitor.recordTraffic(key, trafficSample{rx: 1000, tx: int64(9000 + i*1000)}); active {
-			t.Fatalf("第 %d 轮仅 tx 增长仍被误判为活跃", i)
+		at := now.Add(time.Duration(i) * time.Second)
+		if active := monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 2000}, at); !active {
+			t.Fatalf("第 %d 轮重复快照被误判为不活跃", i)
 		}
 	}
 
-	// 端到端：仅 tx 增长 + 探测无响应 → 应判离线
+	// 端到端：探测成功 + 重复快照 → 稳定在线，不出现震荡
+	for i := 0; i <= 6; i++ {
+		at := now.Add(time.Duration(i) * time.Second)
+		active := monitor.recordTraffic(key, trafficSample{rx: 1500, tx: 2000}, at)
+		monitor.evaluate(key, at, true, 300*time.Microsecond, active, true, at)
+		if got := stateOf(t, monitor, key); got != LivenessOnline {
+			t.Fatalf("第 %d 轮出现状态抖动：%q", i, got)
+		}
+	}
+}
+
+// 超出新鲜度窗口后，重复快照才被认定为不再活跃。
+func TestTrafficStaleAfterWindow(t *testing.T) {
+	monitor := newTestMonitor()
 	now := time.Now()
+	const key = "peer-stale"
+
+	// 建立基线，并在窗口内出现一次真实增长
+	monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 2000}, now)
+	within := now.Add(time.Second)
+	monitor.recordTraffic(key, trafficSample{rx: 1500, tx: 2000}, within)
+
+	// 窗口内的重复快照：仍视为活跃
+	if active := monitor.recordTraffic(key, trafficSample{rx: 1500, tx: 2000}, within.Add(time.Second)); !active {
+		t.Fatal("新鲜度窗口内的重复快照应视为活跃")
+	}
+
+	// 超出窗口后再无增长：判定为不活跃
+	after := within.Add(livenessTrafficFresh + time.Second)
+	if active := monitor.recordTraffic(key, trafficSample{rx: 1500, tx: 2000}, after); active {
+		t.Fatal("超出新鲜度窗口后应判定为不活跃")
+	}
+}
+
+// 关键回归：本机主动探测会抬高 tx，不能因此把离线对端判成在线。
+//
+// 注意语义：tx 增长不刷新"最近来向流量时刻"，所以在新鲜度窗口过期后，
+// 仅靠 tx 增长的连接会被判定为不活跃。
+func TestTrafficIgnoresOutboundOnly(t *testing.T) {
+	monitor := newTestMonitor()
+	now := time.Now()
+	const key = "peer-tx"
+
+	// 建立基线，并出现一次真实的来向流量
+	monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 2000}, now)
+	monitor.recordTraffic(key, trafficSample{rx: 1500, tx: 2000}, now)
+
+	// 对端随后离线：本机不停发探测包，tx 持续增长，rx 不变。
+	// 新鲜度窗口过期后必须判定为不活跃。
+	after := now.Add(livenessTrafficFresh + time.Second)
+	if active := monitor.recordTraffic(key, trafficSample{rx: 1500, tx: 90000}, after); active {
+		t.Fatal("窗口过期后仅 tx 增长不得判定为活跃")
+	}
+
+	// 端到端：探测无响应 + 仅 tx 增长 → 应判离线
 	for i := 0; i < 2; i++ {
-		active := monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 50000})
-		monitor.evaluate(key, now.Add(-10*time.Minute), false, 0, active, true, now)
+		active := monitor.recordTraffic(key, trafficSample{rx: 1500, tx: 100000}, after)
+		monitor.evaluate(key, after.Add(-10*time.Minute), false, 0, active, true, after)
 	}
 	if got := stateOf(t, monitor, key); got != LivenessOffline {
 		t.Fatalf("对端离线（仅本机发包）时应判离线，实际 %q", got)
@@ -144,44 +200,67 @@ func TestTrafficIgnoresOutboundOnly(t *testing.T) {
 // rx 增长是对端发包的直接证据，应判定活跃并维持在线。
 func TestTrafficCountsInboundOnly(t *testing.T) {
 	monitor := newTestMonitor()
+	now := time.Now()
 	const key = "peer-rx"
 
-	monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 2000})
-	if active := monitor.recordTraffic(key, trafficSample{rx: 1200, tx: 2000}); !active {
+	monitor.recordTraffic(key, trafficSample{rx: 1000, tx: 2000}, now)
+	if active := monitor.recordTraffic(key, trafficSample{rx: 1200, tx: 2000}, now); !active {
 		t.Fatal("rx 增长应判定为活跃")
 	}
 
-	now := time.Now()
 	monitor.evaluate(key, now.Add(-10*time.Minute), false, 0, true, true, now)
 	if got := stateOf(t, monitor, key); got != LivenessOnline {
 		t.Fatalf("有对端来向流量时应维持在线，实际 %q", got)
 	}
 }
 
-// 统计短时不可用时保留既有结论；持续不可用则转为未知，避免停在过期结论上。
-func TestLivenessNoStatsBehaviour(t *testing.T) {
+// 统计读取失败（wg show 偶发失败、账号禁用等）绝不能改动状态：
+// 一旦把失败翻译成 unknown，间歇性失败会让界面在在线/非在线之间反复跳变。
+func TestLivenessNoStatsKeepsState(t *testing.T) {
 	monitor := newTestMonitor()
 	now := time.Now()
 	const key = "peer-f"
 
+	// 先建立"在线"结论
 	monitor.evaluate(key, now, true, time.Millisecond, false, true, now)
 	if got := stateOf(t, monitor, key); got != LivenessOnline {
 		t.Fatalf("前置条件：应为在线，实际 %q", got)
 	}
 
-	monitor.evaluate(key, time.Time{}, false, 0, false, false, now)
-	if got := stateOf(t, monitor, key); got != LivenessOnline {
-		t.Fatalf("短时统计不可用时应保持在线，实际 %q", got)
+	// 无论统计失败多少次，状态都必须保持不变
+	for i := 0; i < 20; i++ {
+		monitor.evaluate(key, time.Time{}, false, 0, false, false, now)
+		if got := stateOf(t, monitor, key); got != LivenessOnline {
+			t.Fatalf("第 %d 次统计失败后状态被改动为 %q", i+1, got)
+		}
 	}
 
+	result, _ := monitor.Result(key)
+	if result.Reason != ReasonNoStats {
+		t.Fatalf("判定依据应标记为 %s，实际 %q", ReasonNoStats, result.Reason)
+	}
+	if result.NoStats < 20 {
+		t.Fatalf("应累计统计失败次数，实际 %d", result.NoStats)
+	}
+
+	// 离线状态同样不应因统计失败而改变
+	const offKey = "peer-off"
+	monitor.evaluate(offKey, now, false, 0, false, true, now)
+	monitor.evaluate(offKey, now, false, 0, false, true, now)
+	if got := stateOf(t, monitor, offKey); got != LivenessOffline {
+		t.Fatalf("前置条件：应为离线，实际 %q", got)
+	}
 	for i := 0; i < 10; i++ {
-		monitor.evaluate(key, time.Time{}, false, 0, false, false, now)
+		monitor.evaluate(offKey, time.Time{}, false, 0, false, false, now)
 	}
-	if got := stateOf(t, monitor, key); got != LivenessUnknown {
-		t.Fatalf("统计持续不可用时应转为 unknown，实际 %q", got)
+	if got := stateOf(t, monitor, offKey); got != LivenessOffline {
+		t.Fatalf("离线状态在统计失败后被改动为 %q", got)
 	}
-	if got := reasonOf(t, monitor, key); got != ReasonNoStats {
-		t.Fatalf("判定依据应标记为 %s，实际 %q", ReasonNoStats, got)
+
+	// 统计恢复后，正常判定继续生效
+	monitor.evaluate(key, now, true, time.Millisecond, false, true, now)
+	if got := stateOf(t, monitor, key); got != LivenessOnline {
+		t.Fatalf("统计恢复后应正常判定，实际 %q", got)
 	}
 }
 

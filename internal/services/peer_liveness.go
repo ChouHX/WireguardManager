@@ -31,6 +31,11 @@ const (
 	livenessProbeTimeout  = 600 * time.Millisecond
 	livenessOfflineAfter  = 2
 	livenessMaxConcurrent = 16
+	// livenessTrafficFresh 流量新鲜度窗口。
+	// 必须大于 stats 缓存 TTL（1 秒）与探测间隔，确保"缓存导致的重复快照"
+	// 不会被误判为对端停止发包；同时要足够小，使真的断开能被及时反映。
+	// 判定最终仍由主动探测主导，这里只作为探测失败时的辅助证据。
+	livenessTrafficFresh = 6 * time.Second
 )
 
 // LivenessState 设备在线状态
@@ -94,9 +99,10 @@ type LivenessMonitor struct {
 
 	probePort int
 
-	mu      sync.RWMutex
-	results map[string]*LivenessResult
-	traffic map[string]trafficSample
+	mu              sync.RWMutex
+	results         map[string]*LivenessResult
+	traffic         map[string]trafficSample
+	lastTrafficSeen map[string]time.Time
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -110,11 +116,12 @@ type LivenessMonitor struct {
 // NewLivenessMonitor 创建在线判定监控器。
 func NewLivenessMonitor(db *gorm.DB, cfg config.LivenessConfig) *LivenessMonitor {
 	return &LivenessMonitor{
-		db:        db,
-		wg:        NewWireguardService(config.AppConfig.Network.ConfigDir),
-		probePort: cfg.ProbePort,
-		results:   make(map[string]*LivenessResult),
-		traffic:   make(map[string]trafficSample),
+		db:              db,
+		wg:              NewWireguardService(config.AppConfig.Network.ConfigDir),
+		probePort:       cfg.ProbePort,
+		results:         make(map[string]*LivenessResult),
+		traffic:         make(map[string]trafficSample),
+		lastTrafficSeen: make(map[string]time.Time),
 	}
 }
 
@@ -225,7 +232,7 @@ func (m *LivenessMonitor) checkAll() {
 					reachable, rtt, _ = ProbeTCPInNamespace(server.Namespace, target, timeout)
 				}
 
-				trafficActive := m.recordTraffic(peerCopy.PublicKey, sample)
+				trafficActive := m.recordTraffic(peerCopy.PublicKey, sample, now)
 				m.evaluate(peerCopy.PublicKey, handshakes[peerCopy.PublicKey],
 					reachable, rtt, trafficActive, statsOK, now)
 			}()
@@ -235,10 +242,16 @@ func (m *LivenessMonitor) checkAll() {
 	wg.Wait()
 }
 
-// recordTraffic 记录累计流量并判断本轮是否有增长。
-// 仅以 rx 增长作为对端活跃的判据（见 trafficSample 的说明）：
-// tx 增长可能只是本机主动探测所致，不能证明对端在线。
-func (m *LivenessMonitor) recordTraffic(key string, sample trafficSample) bool {
+// recordTraffic 记录累计流量并判断"自上次采样以来"是否有增长。
+//
+// 仅以 rx 增长作为对端活跃的判据（见 trafficSample 的说明）：tx 增长可能只是
+// 本机主动探测所致，不能证明对端在线。
+//
+// 关键细节：stats 读取有 1 秒缓存，而探测间隔也是 1 秒，因此相邻两轮很可能拿到
+// 完全相同的快照。此时不能把"没变化"当作"对端不活跃"——那会让判定在
+// 在线/离线之间反复跳变（用户可见的状态抖动）。这里用「最近一次流量增长的时间」
+// 配合判定窗口，使重复快照只影响新鲜度、不直接翻转状态。
+func (m *LivenessMonitor) recordTraffic(key string, sample trafficSample, now time.Time) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -246,9 +259,24 @@ func (m *LivenessMonitor) recordTraffic(key string, sample trafficSample) bool {
 	m.traffic[key] = sample
 
 	if !seen {
+		// 首个样本只建立基线。不标记为活跃：否则刚启动时离线设备会在
+		// 新鲜度窗口内被误判为在线。
 		return false
 	}
-	return sample.rx > previous.rx
+
+	if sample.rx > previous.rx {
+		m.lastTrafficSeen[key] = now
+		return true
+	}
+
+	// 快照未变化：可能是 stats 缓存导致的重复快照，也可能是对端真的安静了。
+	// 只有在此前确实观察到过增长的前提下，才用新鲜度窗口维持"活跃"，
+	// 否则（从未有过来向流量）直接判为不活跃。
+	last, everSeen := m.lastTrafficSeen[key]
+	if !everSeen {
+		return false
+	}
+	return now.Sub(last) <= livenessTrafficFresh
 }
 
 // evaluate 综合主动探测、隧道流量与握手状态得出在线结论。
@@ -292,13 +320,14 @@ func (m *LivenessMonitor) evaluate(
 	}
 
 	if !statsOK {
+		// 统计读取失败（wg show 在命名空间上偶发失败、账号禁用、网络未就绪）
+		// 时完全保留既有结论：只记录计数与依据，绝不改动 State。
+		//
+		// 这里曾把连续失败翻译成 unknown，但 wg show 的失败是间歇性的：
+		// 几次失败转 unknown、一次成功又回到 online，界面表现为状态反复跳变。
+		// 判定应由探测结果驱动，而不是由"本轮能否读到统计"决定。
 		result.Reason = ReasonNoStats
-		// 统计持续读取失败（账号禁用、网络未就绪）达阈值后标记为未知，
-		// 避免界面长期停留在过期结论上。
 		result.NoStats++
-		if result.NoStats >= livenessOfflineAfter*3 {
-			result.State = LivenessUnknown
-		}
 		return
 	}
 	result.NoStats = 0
