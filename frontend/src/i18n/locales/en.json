@@ -282,7 +282,8 @@
       "timeout": "no probe reply",
       "no_stats": "stats unavailable"
     },
-    "lastProbe": "Signal"
+    "lastProbe": "Signal",
+    "latencyUnavailable": "n/a"
   },
   "monitoring": {
     "title": "System Monitoring",

@@ -27,8 +27,17 @@ import (
 // 而保活本就不可靠（见 wireguard.go 中 serverKeepaliveSeconds 的说明）。
 // 现在以主动探测为唯一主判据，接收方向的流量只作为辅助证据。
 const (
-	livenessInterval      = time.Second
-	livenessProbeTimeout  = 600 * time.Millisecond
+	livenessInterval = time.Second
+	// livenessProbeTimeout 单次探测超时。
+	//
+	// 必须能容忍质量较差的链路：移动网络下设备往返常达数百毫秒，个别情况
+	// 超过 1 秒。超时若小于链路 RTT，在线设备会被误判为无响应。
+	// 这里取 3 秒（约 3 倍最坏 RTT），同时配合"连续 2 次确认"与并发探测，
+	// 使真正断开的设备仍能在数秒内被判离线。
+	livenessProbeTimeout = 3 * time.Second
+	// livenessOfflineAfter 连续多少次无响应判离线。
+	// 慢链路下单次探测本身可能耗时接近超时，因此保持 2 次即可，
+	// 不靠增加次数来过滤抖动（那会显著拖慢判定）。
 	livenessOfflineAfter  = 2
 	livenessMaxConcurrent = 16
 	// livenessTrafficFresh 流量新鲜度窗口。
@@ -66,8 +75,10 @@ type LivenessResult struct {
 	HandshakeAgeSeconds int64      `json:"handshake_age_seconds"`
 	LastOnlineAt        *time.Time `json:"last_online_at,omitempty"`
 	CheckedAt           time.Time  `json:"checked_at"`
-	// LatencyMS 最近一次主动探测的往返耗时
+	// LatencyMS 最近一次主动探测的往返耗时（毫秒，亚毫秒会截断为 0）
 	LatencyMS int64 `json:"latency_ms"`
+	// LatencyUS 同一耗时的微秒表示，保留亚毫秒精度
+	LatencyUS int64 `json:"latency_us"`
 	// Reachable 最近一次主动探测是否有响应
 	Reachable bool `json:"reachable"`
 	// TrafficActive 最近一轮隧道内是否有流量
@@ -108,8 +119,9 @@ type LivenessMonitor struct {
 	cancel context.CancelFunc
 	done   sync.WaitGroup
 
-	// checking 防止上一轮探测尚未结束就启动下一轮（间隔与超时相当，
-	// 对端不可达时单轮耗时接近超时，不加保护会让 goroutine 逐轮堆积）。
+	// checking 防止上一轮尚未结束就启动下一轮。
+	// 超时已放宽到 3 秒以容忍慢链路，若不加保护，1 秒的触发间隔会让
+	// 轮次不断重叠、goroutine 持续堆积。
 	checking atomic.Bool
 }
 
@@ -141,7 +153,11 @@ func (m *LivenessMonitor) Start(parent context.Context) {
 		for {
 			select {
 			case <-ticker.C:
+				if !m.checking.CompareAndSwap(false, true) {
+					continue // 上一轮尚未结束（有慢设备仍在探测），跳过本轮
+				}
 				m.checkAll()
+				m.checking.Store(false)
 			case <-m.ctx.Done():
 				return
 			}
@@ -307,6 +323,10 @@ func (m *LivenessMonitor) evaluate(
 	result.Reachable = reachable
 	result.TrafficActive = trafficActive
 	if reachable {
+		// 保留亚毫秒精度：Milliseconds() 会把 100~900µs 截断为 0，
+		// 前端只能显示成"<1ms"，无法反映真实往返。这里以微秒精度记录，
+		// 供前端按需格式化为 µs 或 ms。
+		result.LatencyUS = rtt.Microseconds()
 		result.LatencyMS = rtt.Milliseconds()
 	}
 

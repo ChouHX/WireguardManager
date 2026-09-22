@@ -99,6 +99,14 @@ function isNoServerError(err: unknown): boolean {
 }
 
 /** 设备在线状态指示灯 */
+/** 探测耗时格式化：优先微秒精度，避免亚毫秒被截断成 0 而显示失真。
+ *  保留一位小数以便观察抖动；单位在数值较大时切换到毫秒。 */
+function formatProbeLatency(latencyUS: number | undefined, t: (key: string) => string): string {
+  if (!latencyUS || latencyUS <= 0) return t('wireguard.latencyUnavailable');
+  if (latencyUS < 1000) return `${latencyUS}µs`;
+  return `${(latencyUS / 1000).toFixed(1)}ms`;
+}
+
 function LivenessIndicator({
   result,
   t,
@@ -127,8 +135,8 @@ function LivenessIndicator({
       </Text>
       {state === 'online' && result ? (
         <Text fz={11} c="dimmed" className="wm-mono">
-          {/* 主动探测的往返耗时，秒级刷新 */}
-          {result.latency_ms > 0 ? `${result.latency_ms}ms` : '<1ms'}
+          {/* 探测往返耗时：保留亚毫秒精度，真实反映链路质量 */}
+          {formatProbeLatency(result.latency_us, t)}
         </Text>
       ) : null}
       {result?.reason ? (

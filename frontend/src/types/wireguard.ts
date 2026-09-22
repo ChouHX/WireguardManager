@@ -127,8 +127,10 @@ export interface LivenessResult {
   handshake_age_seconds: number;
   last_online_at?: string;
   checked_at: string;
-  /** 最近一次主动探测的往返耗时（毫秒） */
+  /** 最近一次主动探测的往返耗时（毫秒，亚毫秒会被截断为 0） */
   latency_ms: number;
+  /** 同一耗时的微秒表示，保留亚毫秒精度 */
+  latency_us: number;
   /** 最近一次主动探测是否有响应 */
   reachable: boolean;
   /** 最近一轮隧道内是否有流量 */
