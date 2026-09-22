@@ -133,6 +133,8 @@ export interface LivenessResult {
   latency_us: number;
   /** 最近一次主动探测是否有响应 */
   reachable: boolean;
+  /** 探测细节：handshake / refused / timeout / unreachable / setup_failed */
+  probe_detail?: string;
   /** 最近一轮隧道内是否有流量 */
   traffic_active: boolean;
   /** 判定依据：probe / traffic / recent / handshake / timeout / no_stats */

@@ -107,6 +107,13 @@ function formatProbeLatency(latencyUS: number): string {
   return `${Math.round(latencyUS / 1000)}ms`;
 }
 
+/** 探测细节文案：失败原因对排查很关键（如 timeout 表示探测包被丢弃） */
+function probeDetailLabel(detail: string, t: (key: string) => string): string {
+  const key = `wireguard.probeDetail.${detail}`;
+  const label = t(key);
+  return label === key ? detail : label;
+}
+
 /** 判定依据文案：语言包缺失时回退为原始键名，便于排查 */
 function reasonLabel(reason: string, t: (key: string) => string): string {
   const key = `wireguard.reason.${reason}`;
@@ -145,11 +152,21 @@ function LivenessIndicator({
           {/* 探测往返耗时：保留亚毫秒精度，真实反映链路质量。
               若本轮判定走的是流量判据（探测未响应），则没有耗时数据，
               此时不显示占位文案，避免与"未测到"混淆。 */}
-          {result.latency_us > 0 ? formatProbeLatency(result.latency_us) : null}
+          {result.latency_us > 0
+            ? formatProbeLatency(result.latency_us)
+            : state === 'online'
+              ? t('wireguard.probeUnreachable')
+              : null}
         </Text>
       ) : null}
       {result?.reason ? (
-        <Tooltip label={t('wireguard.lastProbe')}>
+        <Tooltip
+          label={
+            result.probe_detail
+              ? `${t('wireguard.lastProbe')}：${probeDetailLabel(result.probe_detail, t)}`
+              : t('wireguard.lastProbe')
+          }
+        >
           <Text fz={11} c="dimmed">
             {reasonLabel(result.reason, t)}
           </Text>

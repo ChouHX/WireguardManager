@@ -41,7 +41,7 @@ func TestLivenessOnlineOnProbe(t *testing.T) {
 	monitor := newTestMonitor()
 	now := time.Now()
 
-	monitor.evaluate("peer-a", now.Add(-10*time.Minute), true, 3*time.Millisecond, false, true, now)
+	monitor.evaluate("peer-a", now.Add(-10*time.Minute), true, 3*time.Millisecond, "", false, true, now)
 
 	if got := stateOf(t, monitor, "peer-a"); got != LivenessOnline {
 		t.Fatalf("探测有响应应判定在线，实际 %q", got)
@@ -60,7 +60,7 @@ func TestLivenessOnlineOnInboundTraffic(t *testing.T) {
 	monitor := newTestMonitor()
 	now := time.Now()
 
-	monitor.evaluate("peer-b", now.Add(-10*time.Minute), false, 0, true, true, now)
+	monitor.evaluate("peer-b", now.Add(-10*time.Minute), false, 0, "", true, true, now)
 
 	if got := stateOf(t, monitor, "peer-b"); got != LivenessOnline {
 		t.Fatalf("有来向流量应判定在线，实际 %q", got)
@@ -77,13 +77,13 @@ func TestLivenessOfflineWithinTwoFailures(t *testing.T) {
 	const key = "peer-c"
 
 	// 首次失败：尚未达阈值，维持原状态
-	monitor.evaluate(key, now, false, 0, false, true, now)
+	monitor.evaluate(key, now, false, 0, "", false, true, now)
 	if got := stateOf(t, monitor, key); got == LivenessOffline {
 		t.Fatal("单次失败不应立即判离线（防止丢包误报）")
 	}
 
 	// 第二次失败：判离线
-	monitor.evaluate(key, now.Add(2*time.Second), false, 0, false, true, now.Add(2*time.Second))
+	monitor.evaluate(key, now.Add(2*time.Second), false, 0, "", false, true, now.Add(2*time.Second))
 	if got := stateOf(t, monitor, key); got != LivenessOffline {
 		t.Fatalf("连续两次无响应应判离线，实际 %q", got)
 	}
@@ -92,7 +92,7 @@ func TestLivenessOfflineWithinTwoFailures(t *testing.T) {
 	}
 
 	// 探测恢复：立即回到在线
-	monitor.evaluate(key, now.Add(4*time.Second), true, 2*time.Millisecond, false, true, now.Add(4*time.Second))
+	monitor.evaluate(key, now.Add(4*time.Second), true, 2*time.Millisecond, "", false, true, now.Add(4*time.Second))
 	if got := stateOf(t, monitor, key); got != LivenessOnline {
 		t.Fatalf("探测恢复后应立即在线，实际 %q", got)
 	}
@@ -106,7 +106,7 @@ func TestLivenessOfflineDespiteFreshHandshake(t *testing.T) {
 
 	freshHandshake := now.Add(-30 * time.Second)
 	for i := 0; i < 2; i++ {
-		monitor.evaluate(key, freshHandshake, false, 0, false, true, now)
+		monitor.evaluate(key, freshHandshake, false, 0, "", false, true, now)
 	}
 
 	if got := stateOf(t, monitor, key); got != LivenessOffline {
@@ -137,7 +137,7 @@ func TestTrafficRepeatedSnapshotsDoNotFlip(t *testing.T) {
 	for i := 0; i <= 6; i++ {
 		at := now.Add(time.Duration(i) * time.Second)
 		active := monitor.recordTraffic(key, trafficSample{rx: 1500, tx: 2000}, at)
-		monitor.evaluate(key, at, true, 300*time.Microsecond, active, true, at)
+		monitor.evaluate(key, at, true, 300*time.Microsecond, "", active, true, at)
 		if got := stateOf(t, monitor, key); got != LivenessOnline {
 			t.Fatalf("第 %d 轮出现状态抖动：%q", i, got)
 		}
@@ -190,7 +190,7 @@ func TestTrafficIgnoresOutboundOnly(t *testing.T) {
 	// 端到端：探测无响应 + 仅 tx 增长 → 应判离线
 	for i := 0; i < 2; i++ {
 		active := monitor.recordTraffic(key, trafficSample{rx: 1500, tx: 100000}, after)
-		monitor.evaluate(key, after.Add(-10*time.Minute), false, 0, active, true, after)
+		monitor.evaluate(key, after.Add(-10*time.Minute), false, 0, "", active, true, after)
 	}
 	if got := stateOf(t, monitor, key); got != LivenessOffline {
 		t.Fatalf("对端离线（仅本机发包）时应判离线，实际 %q", got)
@@ -208,9 +208,38 @@ func TestTrafficCountsInboundOnly(t *testing.T) {
 		t.Fatal("rx 增长应判定为活跃")
 	}
 
-	monitor.evaluate(key, now.Add(-10*time.Minute), false, 0, true, true, now)
+	monitor.evaluate(key, now.Add(-10*time.Minute), false, 0, "", true, true, now)
 	if got := stateOf(t, monitor, key); got != LivenessOnline {
 		t.Fatalf("有对端来向流量时应维持在线，实际 %q", got)
+	}
+}
+
+// 探测细节必须被记录：探测失败时它是唯一的排查线索
+// （例如 timeout 说明探测包被链路或对端防火墙丢弃）。
+func TestProbeDetailRecorded(t *testing.T) {
+	monitor := newTestMonitor()
+	now := time.Now()
+	const key = "peer-detail"
+
+	// 探测成功（对端内核回 RST）
+	monitor.evaluate(key, now, true, 236*time.Microsecond, probeDetailRefused, false, true, now)
+	result, _ := monitor.Result(key)
+	if result.ProbeDetail != probeDetailRefused {
+		t.Fatalf("应记录探测细节 %s，实际 %q", probeDetailRefused, result.ProbeDetail)
+	}
+
+	// 探测失败：细节应更新为 timeout，且延迟清零
+	later := now.Add(time.Second)
+	monitor.evaluate(key, later, false, 0, probeDetailTimeout, true, true, later)
+	result, _ = monitor.Result(key)
+	if result.ProbeDetail != probeDetailTimeout {
+		t.Fatalf("失败时应记录 %s，实际 %q", probeDetailTimeout, result.ProbeDetail)
+	}
+	if result.LatencyUS != 0 {
+		t.Fatalf("失败时延迟应清零，实际 %d", result.LatencyUS)
+	}
+	if result.Reachable {
+		t.Fatal("探测失败时 reachable 应为 false")
 	}
 }
 
@@ -223,7 +252,7 @@ func TestLatencyClearedWhenProbeFails(t *testing.T) {
 	const key = "peer-lat"
 
 	// 第一轮：探测成功，记录耗时
-	monitor.evaluate(key, now, true, 236*time.Microsecond, false, true, now)
+	monitor.evaluate(key, now, true, 236*time.Microsecond, "", false, true, now)
 	result, _ := monitor.Result(key)
 	if result.LatencyUS != 236 {
 		t.Fatalf("探测成功时应记录 236µs，实际 %d", result.LatencyUS)
@@ -231,7 +260,7 @@ func TestLatencyClearedWhenProbeFails(t *testing.T) {
 
 	// 第二轮：探测失败，但靠流量维持在线
 	later := now.Add(time.Second)
-	monitor.evaluate(key, later, false, 0, true, true, later)
+	monitor.evaluate(key, later, false, 0, "", true, true, later)
 
 	result, _ = monitor.Result(key)
 	if got := stateOf(t, monitor, key); got != LivenessOnline {
@@ -246,7 +275,7 @@ func TestLatencyClearedWhenProbeFails(t *testing.T) {
 
 	// 第三轮：探测恢复，重新记录耗时
 	back := later.Add(time.Second)
-	monitor.evaluate(key, back, true, 550*time.Microsecond, false, true, back)
+	monitor.evaluate(key, back, true, 550*time.Microsecond, "", false, true, back)
 	result, _ = monitor.Result(key)
 	if result.LatencyUS != 550 {
 		t.Fatalf("探测恢复后应记录新值 550µs，实际 %d", result.LatencyUS)
@@ -261,14 +290,14 @@ func TestLivenessNoStatsKeepsState(t *testing.T) {
 	const key = "peer-f"
 
 	// 先建立"在线"结论
-	monitor.evaluate(key, now, true, time.Millisecond, false, true, now)
+	monitor.evaluate(key, now, true, time.Millisecond, "", false, true, now)
 	if got := stateOf(t, monitor, key); got != LivenessOnline {
 		t.Fatalf("前置条件：应为在线，实际 %q", got)
 	}
 
 	// 无论统计失败多少次，状态都必须保持不变
 	for i := 0; i < 20; i++ {
-		monitor.evaluate(key, time.Time{}, false, 0, false, false, now)
+		monitor.evaluate(key, time.Time{}, false, 0, "", false, false, now)
 		if got := stateOf(t, monitor, key); got != LivenessOnline {
 			t.Fatalf("第 %d 次统计失败后状态被改动为 %q", i+1, got)
 		}
@@ -284,20 +313,20 @@ func TestLivenessNoStatsKeepsState(t *testing.T) {
 
 	// 离线状态同样不应因统计失败而改变
 	const offKey = "peer-off"
-	monitor.evaluate(offKey, now, false, 0, false, true, now)
-	monitor.evaluate(offKey, now, false, 0, false, true, now)
+	monitor.evaluate(offKey, now, false, 0, "", false, true, now)
+	monitor.evaluate(offKey, now, false, 0, "", false, true, now)
 	if got := stateOf(t, monitor, offKey); got != LivenessOffline {
 		t.Fatalf("前置条件：应为离线，实际 %q", got)
 	}
 	for i := 0; i < 10; i++ {
-		monitor.evaluate(offKey, time.Time{}, false, 0, false, false, now)
+		monitor.evaluate(offKey, time.Time{}, false, 0, "", false, false, now)
 	}
 	if got := stateOf(t, monitor, offKey); got != LivenessOffline {
 		t.Fatalf("离线状态在统计失败后被改动为 %q", got)
 	}
 
 	// 统计恢复后，正常判定继续生效
-	monitor.evaluate(key, now, true, time.Millisecond, false, true, now)
+	monitor.evaluate(key, now, true, time.Millisecond, "", false, true, now)
 	if got := stateOf(t, monitor, key); got != LivenessOnline {
 		t.Fatalf("统计恢复后应正常判定，实际 %q", got)
 	}
@@ -307,9 +336,9 @@ func TestLivenessCounts(t *testing.T) {
 	monitor := newTestMonitor()
 	now := time.Now()
 
-	monitor.evaluate("online-1", now, true, 0, false, true, now)
-	monitor.evaluate("online-2", now, false, 0, true, true, now)
-	monitor.evaluate("unknown-1", now, false, 0, false, false, now)
+	monitor.evaluate("online-1", now, true, 0, "", false, true, now)
+	monitor.evaluate("online-2", now, false, 0, "", true, true, now)
+	monitor.evaluate("unknown-1", now, false, 0, "", false, false, now)
 
 	online, offline, unknown := monitor.Counts()
 	if online != 2 || offline != 0 || unknown != 1 {

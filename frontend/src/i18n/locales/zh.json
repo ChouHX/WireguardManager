@@ -282,7 +282,15 @@
       "timeout": "探测无响应",
       "no_stats": "统计不可读"
     },
-    "lastProbe": "判定依据"
+    "lastProbe": "判定依据",
+    "probeUnreachable": "探测未通",
+    "probeDetail": {
+      "handshake": "连接成功",
+      "refused": "对方内核回 RST",
+      "timeout": "探测包被丢弃或超时",
+      "unreachable": "路由不可达",
+      "setup_failed": "命名空间不可用"
+    }
   },
   "monitoring": {
     "title": "系统监控",

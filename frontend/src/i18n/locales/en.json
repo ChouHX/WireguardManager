@@ -282,7 +282,15 @@
       "timeout": "no probe reply",
       "no_stats": "stats unavailable"
     },
-    "lastProbe": "Signal"
+    "lastProbe": "Signal",
+    "probeUnreachable": "probe blocked",
+    "probeDetail": {
+      "handshake": "connected",
+      "refused": "peer kernel replied RST",
+      "timeout": "probe dropped or timed out",
+      "unreachable": "no route to peer",
+      "setup_failed": "namespace unavailable"
+    }
   },
   "monitoring": {
     "title": "System Monitoring",

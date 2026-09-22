@@ -81,6 +81,10 @@ type LivenessResult struct {
 	LatencyUS int64 `json:"latency_us"`
 	// Reachable 最近一次主动探测是否有响应
 	Reachable bool `json:"reachable"`
+	// ProbeDetail 最近一次探测的细节：handshake / refused / timeout /
+	// unreachable / setup_failed。探测失败时这是排查的关键线索
+	// （例如 timeout 说明探测包被链路或对端防火墙丢弃）。
+	ProbeDetail string `json:"probe_detail,omitempty"`
 	// TrafficActive 最近一轮隧道内是否有流量
 	TrafficActive bool `json:"traffic_active"`
 	// Reason 本次状态的判定依据
@@ -243,14 +247,15 @@ func (m *LivenessMonitor) checkAll() {
 
 				// 主动探测：进入该账号的命名空间，向设备隧道地址的高位端口发 TCP SYN
 				reachable, rtt := false, time.Duration(0)
+				detail := ""
 				if statsOK {
 					target := ProbeTarget(peerCopy.PeerAddress, m.currentProbePort())
-					reachable, rtt, _ = ProbeTCPInNamespace(server.Namespace, target, timeout)
+					reachable, rtt, detail = ProbeTCPInNamespace(server.Namespace, target, timeout)
 				}
 
 				trafficActive := m.recordTraffic(peerCopy.PublicKey, sample, now)
 				m.evaluate(peerCopy.PublicKey, handshakes[peerCopy.PublicKey],
-					reachable, rtt, trafficActive, statsOK, now)
+					reachable, rtt, detail, trafficActive, statsOK, now)
 			}()
 		}
 	}
@@ -305,6 +310,7 @@ func (m *LivenessMonitor) evaluate(
 	handshake time.Time,
 	reachable bool,
 	rtt time.Duration,
+	probeDetail string,
 	trafficActive bool,
 	statsOK bool,
 	now time.Time,
@@ -321,6 +327,7 @@ func (m *LivenessMonitor) evaluate(
 	result.CheckedAt = now
 	result.Checks++
 	result.Reachable = reachable
+	result.ProbeDetail = probeDetail
 	result.TrafficActive = trafficActive
 	if reachable {
 		// 保留亚毫秒精度：Milliseconds() 会把 100~900µs 截断为 0，
