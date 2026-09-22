@@ -328,6 +328,12 @@ func (m *LivenessMonitor) evaluate(
 		// 供前端按需格式化为 µs 或 ms。
 		result.LatencyUS = rtt.Microseconds()
 		result.LatencyMS = rtt.Milliseconds()
+	} else {
+		// 本轮探测没有得到响应：必须清零，否则会保留上一次成功探测的旧值。
+		// 那样的数据自相矛盾（reachable=false 却带着延迟），会让用户误以为
+		// 当前链路就是那个耗时。
+		result.LatencyUS = 0
+		result.LatencyMS = 0
 	}
 
 	if handshake.IsZero() {

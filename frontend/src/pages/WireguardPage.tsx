@@ -99,12 +99,19 @@ function isNoServerError(err: unknown): boolean {
 }
 
 /** 设备在线状态指示灯 */
-/** 探测耗时格式化：优先微秒精度，避免亚毫秒被截断成 0 而显示失真。
- *  保留一位小数以便观察抖动；单位在数值较大时切换到毫秒。 */
-function formatProbeLatency(latencyUS: number | undefined, t: (key: string) => string): string {
-  if (!latencyUS || latencyUS <= 0) return t('wireguard.latencyUnavailable');
+/** 探测耗时格式化：按量级选择单位，避免亚毫秒被截断成 0 而显示失真。
+ *  仅在确实测到往返时才调用（判定走流量判据时没有该数据）。 */
+function formatProbeLatency(latencyUS: number): string {
   if (latencyUS < 1000) return `${latencyUS}µs`;
-  return `${(latencyUS / 1000).toFixed(1)}ms`;
+  if (latencyUS < 10000) return `${(latencyUS / 1000).toFixed(1)}ms`;
+  return `${Math.round(latencyUS / 1000)}ms`;
+}
+
+/** 判定依据文案：语言包缺失时回退为原始键名，便于排查 */
+function reasonLabel(reason: string, t: (key: string) => string): string {
+  const key = `wireguard.reason.${reason}`;
+  const label = t(key);
+  return label === key ? reason : label;
 }
 
 function LivenessIndicator({
@@ -135,16 +142,16 @@ function LivenessIndicator({
       </Text>
       {state === 'online' && result ? (
         <Text fz={11} c="dimmed" className="wm-mono">
-          {/* 探测往返耗时：保留亚毫秒精度，真实反映链路质量 */}
-          {formatProbeLatency(result.latency_us, t)}
+          {/* 探测往返耗时：保留亚毫秒精度，真实反映链路质量。
+              若本轮判定走的是流量判据（探测未响应），则没有耗时数据，
+              此时不显示占位文案，避免与"未测到"混淆。 */}
+          {result.latency_us > 0 ? formatProbeLatency(result.latency_us) : null}
         </Text>
       ) : null}
       {result?.reason ? (
         <Tooltip label={t('wireguard.lastProbe')}>
           <Text fz={11} c="dimmed">
-            {t(`wireguard.reason.${result.reason}`) === `wireguard.reason.${result.reason}`
-              ? result.reason
-              : t(`wireguard.reason.${result.reason}`)}
+            {reasonLabel(result.reason, t)}
           </Text>
         </Tooltip>
       ) : null}

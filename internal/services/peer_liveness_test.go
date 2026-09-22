@@ -214,6 +214,45 @@ func TestTrafficCountsInboundOnly(t *testing.T) {
 	}
 }
 
+// 关键回归：探测未响应时必须清零延迟，不能保留上一轮成功时的旧值。
+// 否则会出现 reachable=false 却带着延迟的自相矛盾数据，用户看到的就是
+// 一个与当前链路无关的陈旧耗时。
+func TestLatencyClearedWhenProbeFails(t *testing.T) {
+	monitor := newTestMonitor()
+	now := time.Now()
+	const key = "peer-lat"
+
+	// 第一轮：探测成功，记录耗时
+	monitor.evaluate(key, now, true, 236*time.Microsecond, false, true, now)
+	result, _ := monitor.Result(key)
+	if result.LatencyUS != 236 {
+		t.Fatalf("探测成功时应记录 236µs，实际 %d", result.LatencyUS)
+	}
+
+	// 第二轮：探测失败，但靠流量维持在线
+	later := now.Add(time.Second)
+	monitor.evaluate(key, later, false, 0, true, true, later)
+
+	result, _ = monitor.Result(key)
+	if got := stateOf(t, monitor, key); got != LivenessOnline {
+		t.Fatalf("有流量时应维持在线，实际 %q", got)
+	}
+	if result.LatencyUS != 0 || result.LatencyMS != 0 {
+		t.Fatalf("探测失败后延迟应清零，实际 us=%d ms=%d", result.LatencyUS, result.LatencyMS)
+	}
+	if result.Reachable {
+		t.Fatal("本轮探测未响应，reachable 应为 false")
+	}
+
+	// 第三轮：探测恢复，重新记录耗时
+	back := later.Add(time.Second)
+	monitor.evaluate(key, back, true, 550*time.Microsecond, false, true, back)
+	result, _ = monitor.Result(key)
+	if result.LatencyUS != 550 {
+		t.Fatalf("探测恢复后应记录新值 550µs，实际 %d", result.LatencyUS)
+	}
+}
+
 // 统计读取失败（wg show 偶发失败、账号禁用等）绝不能改动状态：
 // 一旦把失败翻译成 unknown，间歇性失败会让界面在在线/非在线之间反复跳变。
 func TestLivenessNoStatsKeepsState(t *testing.T) {

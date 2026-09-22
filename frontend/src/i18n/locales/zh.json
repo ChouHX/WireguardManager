@@ -282,8 +282,7 @@
       "timeout": "探测无响应",
       "no_stats": "统计不可读"
     },
-    "lastProbe": "判定依据",
-    "latencyUnavailable": "未测到"
+    "lastProbe": "判定依据"
   },
   "monitoring": {
     "title": "系统监控",
