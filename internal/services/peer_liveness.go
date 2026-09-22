@@ -153,6 +153,12 @@ func (m *LivenessMonitor) Start(parent context.Context) {
 	go func() {
 		defer m.done.Done()
 
+		// 启动时补齐服务端保活。
+		// 服务端保活是后加的配置项，此前创建的 peer 从未设置过，导致服务端
+		// 不主动发包：客户端显示 "0 B received"、握手长期停留在旧时间。
+		// 这里对全部 peer 补设一次即可修正，且幂等。
+		m.ensureKeepalive()
+
 		ticker := time.NewTicker(livenessInterval)
 		defer ticker.Stop()
 
@@ -196,6 +202,38 @@ func (m *LivenessMonitor) currentProbePort() int {
 		return 49151
 	}
 	return port
+}
+
+// ensureKeepalive 为所有已存在的 peer 补设服务端保活（幂等）。
+func (m *LivenessMonitor) ensureKeepalive() {
+	var servers []models.WireguardServer
+	if err := m.db.Find(&servers).Error; err != nil {
+		log.Printf("liveness: failed to list servers for keepalive fixup: %v", err)
+		return
+	}
+
+	fixed := 0
+	for _, server := range servers {
+		stats, err := m.wg.GetDetailedStats(server.Namespace, server.WgInterface)
+		if err != nil || stats == nil || len(stats.Peers) == 0 {
+			continue
+		}
+
+		keys := make([]string, 0, len(stats.Peers))
+		for _, peer := range stats.Peers {
+			keys = append(keys, peer.PublicKey)
+		}
+		if err := m.wg.EnsurePeerKeepalive(server.Namespace, server.WgInterface, keys); err != nil {
+			log.Printf("liveness: failed to fix keepalive for %s/%s: %v",
+				server.Namespace, server.WgInterface, err)
+			continue
+		}
+		fixed += len(keys)
+	}
+
+	if fixed > 0 {
+		log.Printf("liveness: ensured server keepalive on %d peer(s)", fixed)
+	}
 }
 
 // checkAll 遍历所有账号，探测设备并更新状态。

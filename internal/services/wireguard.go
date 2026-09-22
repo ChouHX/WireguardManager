@@ -179,8 +179,13 @@ func (s *WireguardService) SetPeerAllowedIPs(nsName, interfaceName, peerPublicKe
 		return fmt.Errorf("allowed-ips must not be empty")
 	}
 
+	// 同时补设服务端保活：该函数会在修改网段、切换 PSK 等路径上被调用，
+	// 只更新 allowed-ips 会让保活停留在创建时的状态；对早期创建的 peer
+	// （服务端保活特性上线之前）来说，那就等于永不发送保活包。
 	cmd := exec.Command("ip", "netns", "exec", nsName,
-		"wg", "set", interfaceName, "peer", peerPublicKey, "allowed-ips", allowedIPs)
+		"wg", "set", interfaceName, "peer", peerPublicKey,
+		"allowed-ips", allowedIPs,
+		"persistent-keepalive", strconv.Itoa(serverKeepaliveSeconds))
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to set peer allowed-ips: %v, output: %s", err, string(output))
 	}
@@ -245,6 +250,24 @@ func (s *WireguardService) AddPeer(nsName, interfaceName, peerPublicKey, allowed
 	cmd := exec.Command("ip", args...)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to add peer: %v, output: %s", err, string(output))
+	}
+	return nil
+}
+
+// EnsurePeerKeepalive 为已存在的 peer 补设服务端保活。
+//
+// 用途：服务端保活是后加的配置项，此前创建的 peer 从未设置过它，
+// 于是服务端不会主动发包，客户端表现为"0 B received"、握手长期不更新。
+// 启动时对全部 peer 执行一次即可修正，成本极低。
+func (s *WireguardService) EnsurePeerKeepalive(nsName, interfaceName string, peers []string) error {
+	for _, publicKey := range peers {
+		cmd := exec.Command("ip", "netns", "exec", nsName,
+			"wg", "set", interfaceName, "peer", publicKey,
+			"persistent-keepalive", strconv.Itoa(serverKeepaliveSeconds))
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to ensure keepalive for %s: %v, output: %s",
+				publicKey, err, string(output))
+		}
 	}
 	return nil
 }
