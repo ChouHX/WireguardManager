@@ -48,6 +48,7 @@ import { PageHeader } from '@/components/common/PageHeader';
 import { useInterval } from '@/hooks/use-interval';
 import { useTranslation } from '@/i18n';
 import {
+  formatAgeSeconds,
   formatBytes,
   formatRelativeTime,
   formatTime,
@@ -107,6 +108,19 @@ function formatProbeLatency(latencyUS: number): string {
   return `${Math.round(latencyUS / 1000)}ms`;
 }
 
+/** 无探测耗时时的提示：说明探测未通，并给出最后成功的时间，
+ *  便于区分"偶发失败"与"长期不通"。 */
+function formatProbeGap(lastProbeAt: string | undefined, t: (key: string) => string): string {
+  const base = t('wireguard.probeUnreachable');
+  if (!lastProbeAt) return base;
+
+  const at = new Date(lastProbeAt).getTime();
+  if (Number.isNaN(at)) return base;
+
+  const seconds = Math.max(0, Math.round((Date.now() - at) / 1000));
+  return `${base} · ${t('wireguard.probeLastOk')}${formatAgeSeconds(seconds)}`;
+}
+
 /** 探测细节文案：失败原因对排查很关键（如 timeout 表示探测包被丢弃） */
 function probeDetailLabel(detail: string, t: (key: string) => string): string {
   const key = `wireguard.probeDetail.${detail}`;
@@ -155,7 +169,7 @@ function LivenessIndicator({
           {result.latency_us > 0
             ? formatProbeLatency(result.latency_us)
             : state === 'online'
-              ? t('wireguard.probeUnreachable')
+              ? formatProbeGap(result.last_probe_at, t)
               : null}
         </Text>
       ) : null}

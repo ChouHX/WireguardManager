@@ -290,7 +290,8 @@
       "timeout": "探测包被丢弃或超时",
       "unreachable": "路由不可达",
       "setup_failed": "命名空间不可用"
-    }
+    },
+    "probeLastOk": "最后成功 "
   },
   "monitoring": {
     "title": "系统监控",

@@ -135,6 +135,8 @@ export interface LivenessResult {
   reachable: boolean;
   /** 探测细节：handshake / refused / timeout / unreachable / setup_failed */
   probe_detail?: string;
+  /** 最近一次探测有响应的时间（ISO 字符串） */
+  last_probe_at?: string;
   /** 最近一轮隧道内是否有流量 */
   traffic_active: boolean;
   /** 判定依据：probe / traffic / recent / handshake / timeout / no_stats */

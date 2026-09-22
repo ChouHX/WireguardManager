@@ -79,6 +79,10 @@ type LivenessResult struct {
 	LatencyMS int64 `json:"latency_ms"`
 	// LatencyUS 同一耗时的微秒表示，保留亚毫秒精度
 	LatencyUS int64 `json:"latency_us"`
+	// LastProbeAt 最近一次探测有响应的时间。
+	// 与 LatencyUS 配合：即使当前判定走的是流量判据（探测未响应），
+	// 也能看出探测最后成功是在多久之前，便于判断探测是否长期不通。
+	LastProbeAt *time.Time `json:"last_probe_at,omitempty"`
 	// Reachable 最近一次主动探测是否有响应
 	Reachable bool `json:"reachable"`
 	// ProbeDetail 最近一次探测的细节：handshake / refused / timeout /
@@ -335,10 +339,12 @@ func (m *LivenessMonitor) evaluate(
 		// 供前端按需格式化为 µs 或 ms。
 		result.LatencyUS = rtt.Microseconds()
 		result.LatencyMS = rtt.Milliseconds()
+		probedAt := now
+		result.LastProbeAt = &probedAt
 	} else {
-		// 本轮探测没有得到响应：必须清零，否则会保留上一次成功探测的旧值。
-		// 那样的数据自相矛盾（reachable=false 却带着延迟），会让用户误以为
-		// 当前链路就是那个耗时。
+		// 本轮探测没有得到响应：清零耗时，避免展示与当前链路无关的旧值
+		// （reachable=false 却带着延迟会自相矛盾）。但保留 LastProbeAt，
+		// 让界面能看出"探测最后成功是多久之前"，据此区分偶发失败与长期不通。
 		result.LatencyUS = 0
 		result.LatencyMS = 0
 	}
