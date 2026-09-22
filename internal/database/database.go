@@ -109,11 +109,18 @@ func createDefaultPlatformAdmin() error {
 	// 为管理员配置网络环境
 	networkService := services.NewUserNetworkServiceFromRuntime()
 
-	wgServer, err := networkService.ProvisionUserNetwork(&defaultAdmin)
+	var existingServers []models.WireguardServer
+	if err := DB.Find(&existingServers).Error; err != nil {
+		log.Printf("Warning: default admin %s was created, but reading existing network allocations failed: %v",
+			adminCfg.AdminEmail, err)
+		return nil
+	}
+
+	wgServer, err := networkService.ProvisionUserNetwork(&defaultAdmin, services.AllocationsFromServers(existingServers))
 	if err != nil {
 		// 保留管理员账号：网络配置失败时管理员仍可登录并后续修复网络。
 		log.Printf("Warning: default admin %s was created, but network provisioning failed "+
-			"(namespace/veth/wireguard setup error): %v", adminCfg.AdminEmail, err)
+			"(namespace/wireguard setup error): %v", adminCfg.AdminEmail, err)
 		return nil
 	}
 

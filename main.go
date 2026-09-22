@@ -4,6 +4,7 @@ import (
 	"cloud-platform/internal/config"
 	"cloud-platform/internal/database"
 	"cloud-platform/internal/handlers"
+	"cloud-platform/internal/reconcile"
 	"cloud-platform/internal/response"
 	"cloud-platform/internal/routes"
 	"cloud-platform/internal/services"
@@ -70,6 +71,10 @@ func main() {
 	} else {
 		log.Println("Liveness probing is disabled by configuration")
 	}
+
+	// 启动期收敛：把历史账号迁移到「原生跨命名空间」形态，并修复缺失的命名空间/接口。
+	// 放后台执行以免拖慢服务就绪；沿用数据库中已记录的端口与地址，客户端无需重新导入配置。
+	go reconcile.Networks()
 
 	// Setup Gin
 	r := gin.New()

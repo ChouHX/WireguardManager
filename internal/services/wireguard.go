@@ -25,15 +25,39 @@ func NewWireguardService(configDir string) *WireguardService {
 	}
 }
 
-// WireguardConfig WireGuard配置
+// WireguardConfig 服务端接口配置。
+//
+// 不再包含 veth / 出口网卡：加密报文由宿主命名空间的 socket 直接收发，
+// 明文流量的转发与伪装已移出本层。
 type WireguardConfig struct {
 	InterfaceName string // 接口名称 (如 wg0)
 	ListenPort    int    // 监听端口
 	PrivateKey    string // 私钥
 	PublicKey     string // 公钥
 	Address       string // 接口IP地址 (CIDR格式)
-	VethInterface string // veth接口名称 (命名空间内的接口，如 veth-ns-xxx)
-	OutInterface  string // 外网接口名称 (如 eth0)，用于NAT到外网
+}
+
+// ServerAllowedIPs 计算服务端为某个 peer 声明的 allowed-ips：
+// 设备自身地址 + 它背后的网段（用于跨网段转发）。
+//
+// 全局代理（0.0.0.0/0、::/0）会被排除——那是客户端把流量送进隧道的行为，
+// 若写进服务端 allowed-ips，会导致所有流量都被转发给该设备。
+func ServerAllowedIPs(peer *models.WireguardPeer) string {
+	self := peer.PeerAddress + "/32"
+	parts := []string{self}
+
+	for _, cidr := range strings.Split(peer.AllowedIPs, ",") {
+		cidr = strings.TrimSpace(cidr)
+		if cidr == "" || cidr == self || cidr == peer.PeerAddress {
+			continue
+		}
+		if cidr == "0.0.0.0/0" || cidr == "::/0" {
+			continue
+		}
+		parts = append(parts, cidr)
+	}
+
+	return strings.Join(parts, ",")
 }
 
 // GenerateKeys 生成WireGuard密钥对
@@ -58,96 +82,79 @@ func (s *WireguardService) GenerateKeys() (privateKey, publicKey string, err err
 	return privateKey, publicKey, nil
 }
 
-// CreateConfig 创建WireGuard配置文件
-func (s *WireguardService) CreateConfig(username string, config *WireguardConfig) (string, error) {
-	// 确保配置目录存在
-	userConfigDir := filepath.Join(s.configDir, username)
+// CreateConfig 写入服务端接口的配置记录，并落一份私钥文件供 wg set 使用。
+//
+// 生成的是 WireGuard 原生格式：只有 [Interface] 段。旧版写在这里的 Address 与
+// PostUp/PostDown 属于 wg-quick 专属语法，wg 的解析器既不认识、也不再需要——
+// 接口地址由命名空间层用 ip addr 直接下发，而加密报文全程不经过任何转发或
+// NAT，那批 iptables 规则随之消失。
+//
+// 返回的配置文件仅作为可读记录（便于人工排查与审计），真正生效的配置通过
+// wg set 逐项下发。
+func (s *WireguardService) CreateConfig(userUID string, config *WireguardConfig) (string, error) {
+	userConfigDir := filepath.Join(s.configDir, userUID)
 	if err := os.MkdirAll(userConfigDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create config directory: %v", err)
 	}
 
-	// 配置文件路径
 	configPath := filepath.Join(userConfigDir, fmt.Sprintf("%s.conf", config.InterfaceName))
 
-	// 生成配置内容
-	// PostUp/PostDown 规则：
-	// 0. 启用 IP 转发（命名空间内）
-	// 1. 允许 WireGuard 流量通过 veth 接口转发
-	// 2. 允许 veth 流量通过外网接口转发（访问外网）
-	// 3. 对外网流量进行 NAT
-	configContent := fmt.Sprintf(`[Interface]
+	configContent := fmt.Sprintf(`# 账号 %s 的服务端接口配置记录（由平台自动生成，请勿手工修改）。
+#
+# 加密报文由宿主命名空间的 UDP socket 直接收发，因此这里没有
+# Address 与 PostUp/PostDown：地址由命名空间层下发，转发与 NAT 均不需要。
+[Interface]
 PrivateKey = %s
-Address = %s
 ListenPort = %d
-SaveConfig = false
+`, userUID, config.PrivateKey, config.ListenPort)
 
-# PostUp 规则：
-# 0. 启用 IP 转发（关键：必须在命名空间内启用）
-PostUp = sysctl -w net.ipv4.ip_forward=1
-# 1. WireGuard <-> veth 转发
-PostUp = iptables -A FORWARD -i %%i -o %s -j ACCEPT
-PostUp = iptables -A FORWARD -i %s -o %%i -j ACCEPT
-# 1.1 发夹转发：允许隧道内部互转（设备 A 经本机访问设备 B 背后的网段）
-PostUp = iptables -A FORWARD -i %%i -o %%i -j ACCEPT
-# 2. veth <-> 外网接口转发（关键：允许访问外网）
-PostUp = iptables -A FORWARD -i %s -o %s -j ACCEPT
-PostUp = iptables -A FORWARD -i %s -o %s -j ACCEPT
-# 3. NAT规则：关键 - 对 WireGuard 网段通过 veth 出去的流量进行 MASQUERADE
-PostUp = iptables -t nat -A POSTROUTING -s %s -o %s -j MASQUERADE
-# 4. NAT规则：对通过外网接口出去的流量进行MASQUERADE
-PostUp = iptables -t nat -A POSTROUTING -o %s -j MASQUERADE
-
-# PostDown 规则：清理上述规则
-PostDown = iptables -D FORWARD -i %%i -o %s -j ACCEPT
-PostDown = iptables -D FORWARD -i %s -o %%i -j ACCEPT
-PostDown = iptables -D FORWARD -i %%i -o %%i -j ACCEPT
-PostDown = iptables -D FORWARD -i %s -o %s -j ACCEPT
-PostDown = iptables -D FORWARD -i %s -o %s -j ACCEPT
-PostDown = iptables -t nat -D POSTROUTING -s %s -o %s -j MASQUERADE
-PostDown = iptables -t nat -D POSTROUTING -o %s -j MASQUERADE
-`,
-		config.PrivateKey,
-		config.Address,
-		config.ListenPort,
-		// PostUp
-		config.VethInterface,
-		config.VethInterface,
-		config.VethInterface, config.OutInterface,
-		config.OutInterface, config.VethInterface,
-		config.Address, config.VethInterface, // NAT for WireGuard subnet
-		config.OutInterface,
-		// PostDown
-		config.VethInterface,
-		config.VethInterface,
-		config.VethInterface, config.OutInterface,
-		config.OutInterface, config.VethInterface,
-		config.Address, config.VethInterface, // NAT for WireGuard subnet
-		config.OutInterface,
-	)
-
-	// 写入配置文件
 	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
 		return "", fmt.Errorf("failed to write config file: %v", err)
+	}
+
+	if err := s.writePrivateKeyFile(userUID, config.PrivateKey); err != nil {
+		return "", err
 	}
 
 	return configPath, nil
 }
 
-// StartWireguardInNamespace 在命名空间中启动WireGuard
-func (s *WireguardService) StartWireguardInNamespace(nsName, configPath string) error {
-	// 在命名空间中启动WireGuard
-	cmd := exec.Command("ip", "netns", "exec", nsName, "wg-quick", "up", configPath)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to start wireguard in namespace: %v, output: %s", err, string(output))
+// PrivateKeyPath 返回账号私钥文件路径（供 wg set 读取）。
+func (s *WireguardService) PrivateKeyPath(userUID string) string {
+	return filepath.Join(s.configDir, userUID, "private.key")
+}
+
+// writePrivateKeyFile 落一份 0600 的私钥文件。
+// wg set 只接受从文件读取私钥，因此这一步是接口配置的前置条件。
+func (s *WireguardService) writePrivateKeyFile(userUID, privateKey string) error {
+	path := s.PrivateKeyPath(userUID)
+	if err := os.WriteFile(path, []byte(privateKey+"\n"), 0600); err != nil {
+		return fmt.Errorf("failed to write private key file: %v", err)
+	}
+	// 已存在的文件不会被 WriteFile 收紧权限，显式兜一次
+	if err := os.Chmod(path, 0600); err != nil {
+		return fmt.Errorf("failed to secure private key file: %v", err)
 	}
 	return nil
 }
 
-// StopWireguardInNamespace 在命名空间中停止WireGuard
-func (s *WireguardService) StopWireguardInNamespace(nsName, configPath string) error {
-	cmd := exec.Command("ip", "netns", "exec", nsName, "wg-quick", "down", configPath)
+// ApplyInterfaceInNamespace 用 wg set 逐项下发接口参数。
+//
+// 刻意不用 wg setconf/syncconf：二者都以整份配置为单位，setconf 会把未出现在
+// 配置里的 peer 全部移除，syncconf 也要求配置覆盖全部 peer。接口参数（私钥、
+// 监听端口）与 peer 列表的生命周期完全独立，用 wg set 只改前者，任何时刻执行
+// 都不会波及已下发的设备。
+//
+// 设置 listen-port 会触发内核重建 UDP socket；因为接口诞生于宿主命名空间，
+// 重建后的 socket 依然落在宿主命名空间，这正是握手稳定性的来源。
+func (s *WireguardService) ApplyInterfaceInNamespace(nsName, interfaceName, userUID string, listenPort int) error {
+	cmd := exec.Command("ip", "netns", "exec", nsName,
+		"wg", "set", interfaceName,
+		"private-key", s.PrivateKeyPath(userUID),
+		"listen-port", strconv.Itoa(listenPort))
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to stop wireguard in namespace: %v, output: %s", err, string(output))
+		return fmt.Errorf("failed to apply interface config for %s in namespace %s: %v, output: %s",
+			interfaceName, nsName, err, string(output))
 	}
 	return nil
 }

@@ -426,27 +426,9 @@ const peerRecordCreateAttempts = 3
 // createPeerRecord 生成密钥、分配 IP 并写入 peer 记录。
 // 命中唯一约束冲突时会重新生成密钥并重新分配 IP，最多重试 peerRecordCreateAttempts 次。
 // 返回的错误文案面向客户端，故保留原有 "Failed to xxx: cause" 形式。
-// buildServerAllowedIPs 计算服务端该 peer 的 allowed-ips：
-// 设备自身地址 + 它背后的网段（用于跨网段转发）。
-//
-// 全局代理（0.0.0.0/0、::/0）会被排除——那是客户端把流量送进隧道的行为，
-// 若写进服务端 allowed-ips 会导致所有流量都被转发给该设备。
+// buildServerAllowedIPs 见 services.ServerAllowedIPs（实现已下沉，供启动期自愈复用）。
 func buildServerAllowedIPs(peer *models.WireguardPeer) string {
-	self := peer.PeerAddress + "/32"
-	parts := []string{self}
-
-	for _, cidr := range strings.Split(peer.AllowedIPs, ",") {
-		cidr = strings.TrimSpace(cidr)
-		if cidr == "" || cidr == self || cidr == peer.PeerAddress {
-			continue
-		}
-		if cidr == "0.0.0.0/0" || cidr == "::/0" {
-			continue
-		}
-		parts = append(parts, cidr)
-	}
-
-	return strings.Join(parts, ",")
+	return services.ServerAllowedIPs(peer)
 }
 
 // usePresharedKeyForNewPeer 决定新设备是否启用预共享密钥：
@@ -532,8 +514,7 @@ func provisionPeerResources(wgService *services.WireguardService, netnsService *
 
 	// 5. 添加到WireGuard配置。allowed-ips 需要包含该设备背后的网段，
 	// 否则命名空间内的转发会失败：WireGuard 依据 allowed-ips 决定把包加密发给哪个
-	// peer（cryptokey routing），只加 ip route 而不声明 allowed-ips 时包会被直接丢弃。
-	// 声明之后内核会自动为这些网段生成指向本接口的路由，无需再手工添加。
+	// peer（cryptokey routing）。
 	serverAllowedIPs := buildServerAllowedIPs(peer)
 	if err := wgService.AddPeer(namespace, wgInterface, peer.PublicKey, serverAllowedIPs, ""); err != nil {
 		return fmt.Errorf("Failed to add peer to WireGuard: %w", err)
@@ -547,8 +528,8 @@ func provisionPeerResources(wgService *services.WireguardService, netnsService *
 		}
 	}
 
-	// 6. 路由：allowed-ips 声明后内核通常已自动生成路由；这里仅在缺失时补一条，
-	// 作为兜底（重复添加会被判定 File exists 并忽略）。
+	// 6. 路由：allowed-ips 只影响 cryptokey routing，内核不会据此写路由表，
+	// 因此对端下挂网段必须显式补一条路由，否则命名空间内的转发会因查不到路由而丢包。
 	// 全局代理（0.0.0.0/0）不参与服务端路由，它只是客户端的行为。
 	needExtraRouting := peer.AllowedIPs != peerAllowedIPs && peer.AllowedIPs != "0.0.0.0/0"
 	if !needExtraRouting {
@@ -560,13 +541,8 @@ func provisionPeerResources(wgService *services.WireguardService, netnsService *
 		return fmt.Errorf("Failed to add route for peer: %w", err)
 	}
 
-	// 7. 同步iptables规则：允许转发peer网段的流量
-	if err := netnsService.AddIptablesRuleForPeer(namespace, peer.AllowedIPs); err != nil {
-		netnsService.DeleteRouteForPeer(namespace, wgInterface, peer.AllowedIPs)
-		wgService.RemovePeer(namespace, wgInterface, peer.PublicKey)
-		return fmt.Errorf("Failed to add iptables rule for peer: %w", err)
-	}
-
+	// 7. 不再需要配套的 iptables 规则：命名空间新建时 FORWARD 策略即为 ACCEPT，
+	//    且每个账号独占一个命名空间；转发能力仅依赖命名空间内的 ip_forward。
 	return nil
 }
 
@@ -664,11 +640,9 @@ func DeletePeer(c *gin.Context) {
 		return
 	}
 
-	// 清理iptables规则
-	netnsService := services.NewNetnsService()
-	netnsService.DeleteIptablesRuleForPeer(wgServer.Namespace, peer.AllowedIPs)
-
 	// 清理路由规则
+	// 转发控制已由命名空间自身的 FORWARD 策略承担，不再需要 peer 级 iptables 规则
+	netnsService := services.NewNetnsService()
 	netnsService.DeleteRouteForPeer(wgServer.Namespace, wgServer.WgInterface, peer.AllowedIPs)
 
 	// 从WireGuard配置中删除
@@ -818,23 +792,15 @@ func UpdatePeer(c *gin.Context) {
 			return
 		}
 
-		// 2. 清理旧的路由和iptables规则
+		// 2. 清理旧路由（转发控制由命名空间的 FORWARD 策略承担，无 iptables 需同步）
 		clearPeerRoutes(netnsService, wgServer.Namespace, wgServer.WgInterface, peer.AllowedIPs)
 
-		// 3. 添加新的路由和iptables规则
+		// 3. 添加新的路由
 		if req.AllowedIPs != "" && req.AllowedIPs != "0.0.0.0/0" {
 			if err := netnsService.AddRouteForPeer(wgServer.Namespace, wgServer.WgInterface, req.AllowedIPs); err != nil {
 				// 尝试恢复旧规则
 				restorePeerRoutes(netnsService, wgServer.Namespace, wgServer.WgInterface, peer.AllowedIPs)
 				response.InternalError(c, "Failed to add route for peer: "+err.Error())
-				return
-			}
-
-			if err := netnsService.AddIptablesRuleForPeer(wgServer.Namespace, req.AllowedIPs); err != nil {
-				// 回滚新规则并恢复旧规则
-				netnsService.DeleteRouteForPeer(wgServer.Namespace, wgServer.WgInterface, req.AllowedIPs)
-				restorePeerRoutes(netnsService, wgServer.Namespace, wgServer.WgInterface, peer.AllowedIPs)
-				response.InternalError(c, "Failed to add iptables rule for peer: "+err.Error())
 				return
 			}
 		}
@@ -852,17 +818,16 @@ func UpdatePeer(c *gin.Context) {
 	response.Success(c, "Peer updated successfully", peer.ToResponse())
 }
 
-// clearPeerRoutes 删除 peer 现有的路由与 iptables 规则（尽力而为，错误由 netns 层忽略）。
+// clearPeerRoutes 删除 peer 现有的路由（尽力而为，错误由 netns 层忽略）。
 func clearPeerRoutes(netnsService *services.NetnsService, namespace, wgInterface, allowedIPs string) {
 	if allowedIPs == "" || allowedIPs == "0.0.0.0/0" {
 		return
 	}
 
-	netnsService.DeleteIptablesRuleForPeer(namespace, allowedIPs)
 	netnsService.DeleteRouteForPeer(namespace, wgInterface, allowedIPs)
 }
 
-// restorePeerRoutes 尝试恢复 peer 旧的路由与 iptables 规则，用于新规则写入失败时的回滚。
+// restorePeerRoutes 尝试恢复 peer 旧的路由，用于新路由写入失败时的回滚。
 func restorePeerRoutes(netnsService *services.NetnsService, namespace, wgInterface, allowedIPs string) {
 	if allowedIPs == "" || allowedIPs == "0.0.0.0/0" {
 		return
@@ -870,9 +835,6 @@ func restorePeerRoutes(netnsService *services.NetnsService, namespace, wgInterfa
 
 	if err := netnsService.AddRouteForPeer(namespace, wgInterface, allowedIPs); err != nil {
 		log.Printf("Warning: failed to restore route %s in %s/%s: %v", allowedIPs, namespace, wgInterface, err)
-	}
-	if err := netnsService.AddIptablesRuleForPeer(namespace, allowedIPs); err != nil {
-		log.Printf("Warning: failed to restore iptables rule %s in %s: %v", allowedIPs, namespace, err)
 	}
 }
 
@@ -1227,7 +1189,7 @@ func AdminDeleteWireguardServer(c *gin.Context) {
 			return fmt.Errorf("failed to delete server: %v", err)
 		}
 
-		// 3. 清理网络资源（命名空间、veth、iptables规则等）
+		// 3. 清理网络资源（命名空间及其中的接口、路由）
 		// 使用 UserNetworkService 清理网络环境
 		networkService := services.NewUserNetworkServiceFromRuntime()
 

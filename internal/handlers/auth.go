@@ -67,7 +67,15 @@ func Register(c *gin.Context) {
 	// 为用户配置网络环境（命名空间 + WireGuard）
 	networkService := services.NewUserNetworkServiceFromRuntime()
 
-	wgServer, err := networkService.ProvisionUserNetwork(&user)
+	// 分配端口与网段前先取回已被占用的资源，避免与既有账号冲突
+	var existingServers []models.WireguardServer
+	if err := database.DB.Find(&existingServers).Error; err != nil {
+		database.DB.Delete(&user)
+		response.InternalError(c, "Failed to read existing network allocations")
+		return
+	}
+
+	wgServer, err := networkService.ProvisionUserNetwork(&user, services.AllocationsFromServers(existingServers))
 	if err != nil {
 		// 网络配置失败，回滚用户创建
 		database.DB.Delete(&user)
