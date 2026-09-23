@@ -111,7 +111,9 @@ export const useAuthStore = create<AuthStore>()(
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         user: state.user,
-        token: state.token,
+        // 刻意不持久化 token：它以 localStorage 的 wm_auth_token 为唯一来源，
+        // 每次 rehydrate 都会从那里重新读取并覆盖。若这里也存一份，
+        // 凭据就同时躺在两个键里，登出时得擦两处，容易出现漏擦的残留。
         isAuthenticated: state.isAuthenticated,
       }),
       onRehydrateStorage: () => (state) => {
