@@ -41,6 +41,7 @@ import { InlineLoader } from '@/components/common/LoadingScreen';
 import { MetricCard } from '@/components/common/MetricCard';
 import { PageHeader } from '@/components/common/PageHeader';
 import { useInterval } from '@/hooks/use-interval';
+import { usePollingTask } from '@/hooks/use-polling-task';
 import { useTranslation } from '@/i18n';
 import { formatBytes, formatRelativeTime, formatTime, messageOf, shortKey } from '@/lib/format';
 import { wireguardService } from '@/services';
@@ -67,6 +68,9 @@ export default function AdminWireguardPage() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [togglingId, setTogglingId] = useState<number | null>(null);
+
+  /** 轮询任务的执行守卫：上一轮未结束则跳过本轮 */
+  const runPollingTask = usePollingTask();
 
   const [detailOpened, detailDrawer] = useDisclosure(false);
   const [rateOpened, rateModal] = useDisclosure(false);
@@ -120,8 +124,11 @@ export default function AdminWireguardPage() {
 
   useInterval(
     () => {
-      void loadTraffic().catch((err) => setError(messageOf(err, t('errors.networkError'))));
-      void loadLiveness();
+      // 上一轮还没回来就跳过本轮：避免请求堆积，也避免旧响应覆盖新数据
+      void runPollingTask(async () => {
+        await loadTraffic().catch((err) => setError(messageOf(err, t('errors.networkError'))));
+        await loadLiveness();
+      });
     },
     autoRefresh ? POLL_INTERVAL_MS : null,
   );

@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"sync"
+
 	"cloud-platform/internal/auth"
 	"cloud-platform/internal/database"
 	"cloud-platform/internal/middleware"
@@ -11,6 +13,12 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// networkProvisionMu 串行化「读取既有分配 → 分配端口/网段 → 建网 → 落库」这一整段。
+//
+// 见 Register 中的说明：分配依赖数据库快照与宿主机端口探测，二者都无法表达
+// 「正在被分配」的中间状态，故用进程级互斥消除并发注册的撞车窗口。
+var networkProvisionMu sync.Mutex
 
 type RegisterRequest struct {
 	Email    string `json:"email" binding:"required,email"`
@@ -67,7 +75,16 @@ func Register(c *gin.Context) {
 	// 为用户配置网络环境（命名空间 + WireGuard）
 	networkService := services.NewUserNetworkServiceFromRuntime()
 
-	// 分配端口与网段前先取回已被占用的资源，避免与既有账号冲突
+	// 分配端口与网段前先取回已被占用的资源，避免与既有账号冲突。
+	//
+	// 从这次读取到下面建网完成，整段必须是原子的：每一步单独看都安全，组合起来却有窗口——
+	// 并发注册会读到同一份分配快照、选中同一个监听端口与网段，随后在建网阶段撞车
+	// （后者在宿主命名空间绑定同一端口失败，报出一个对用户毫无意义的错误）。
+	// 分配依据是「数据库快照 + 宿主机端口占用探测」，两者都无法表达「正在被分配」
+	// 这一瞬间状态，因此用进程级互斥把临界区串起来。本服务为单进程部署，进程内锁足够。
+	networkProvisionMu.Lock()
+	defer networkProvisionMu.Unlock()
+
 	var existingServers []models.WireguardServer
 	if err := database.DB.Find(&existingServers).Error; err != nil {
 		database.DB.Delete(&user)
@@ -138,6 +155,11 @@ func GetMe(c *gin.Context) {
 type UpdateProfileRequest struct {
 	Name     string `json:"name,omitempty"`
 	Password string `json:"password,omitempty"`
+	// CurrentPassword 修改密码时必须提供。
+	//
+	// 仅凭持有 token 就能改密意味着：token 一旦泄漏（前端存在 localStorage 中），
+	// 攻击者可以改掉密码完成账号接管，而真正的用户连「密码被改过」都不会察觉。
+	CurrentPassword string `json:"current_password,omitempty"`
 }
 
 func UpdateProfile(c *gin.Context) {
@@ -162,6 +184,15 @@ func UpdateProfile(c *gin.Context) {
 	if req.Password != "" {
 		if len(req.Password) < 6 {
 			response.BadRequest(c, "Password must be at least 6 characters", nil)
+			return
+		}
+		// 改密必须验证旧密码，避免 token 泄漏直接升级为账号接管
+		if req.CurrentPassword == "" {
+			response.BadRequest(c, "Current password is required to change the password", nil)
+			return
+		}
+		if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.CurrentPassword)); err != nil {
+			response.Unauthorized(c, "Current password is incorrect")
 			return
 		}
 		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)

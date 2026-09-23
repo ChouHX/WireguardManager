@@ -21,6 +21,27 @@ import (
 
 var DB *gorm.DB
 
+// Close 释放数据库连接。
+//
+// SQLite 在 WAL 模式下，已提交事务的持久性由 WAL 保证，进程被强杀也不会丢数据
+// （下次打开会自动重放）。但正常退出时显式关闭会让 WAL 合并回主库，退出后的
+// 数据目录更干净——这对「直接复制数据文件做备份」的场景尤其重要，否则副本必须
+// 连同 -wal / -shm 一起带走才算完整。
+func Close() error {
+	if DB == nil {
+		return nil
+	}
+
+	sqlDB, err := DB.DB()
+	if err != nil {
+		return fmt.Errorf("failed to access underlying sql.DB: %w", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		return fmt.Errorf("failed to close sqlite database: %w", err)
+	}
+	return nil
+}
+
 func InitDB() error {
 	cfg := config.AppConfig
 	dsn := cfg.GetDSN()

@@ -1,6 +1,9 @@
 package routes
 
 import (
+	"time"
+
+	"cloud-platform/internal/config"
 	"cloud-platform/internal/handlers"
 	"cloud-platform/internal/middleware"
 
@@ -11,8 +14,12 @@ func SetupRoutes(r *gin.Engine) {
 	api := r.Group("/api")
 
 	// Public routes
-	api.POST("/register", handlers.Register)
-	api.POST("/login", handlers.Login)
+	//
+	// 这两个接口无需认证，是外部唯一能直接触及的入口，必须限速：
+	// login 不限速即可被无限次猜密码，register 每成功一次都会创建命名空间与隧道，
+	// 而隧道网段只有 254 个，刷满之后正常用户就注册不进来了。
+	api.POST("/register", middleware.RateLimitByIP(registerLimit()), handlers.Register)
+	api.POST("/login", middleware.RateLimitByIP(loginLimit()), handlers.Login)
 
 	// Protected routes
 	protected := api.Group("")
@@ -57,6 +64,7 @@ func SetupRoutes(r *gin.Engine) {
 		
 		// 管理员管理 WireGuard 服务器
 		admin.DELETE("/wireguard/servers/:id", handlers.AdminDeleteWireguardServer) // 删除服务器
+		admin.POST("/wireguard/users/:id/server", handlers.AdminRecreateWireguardServer) // 为账号重新分配隧道（误删后的补救）
 		admin.PATCH("/wireguard/servers/:id/toggle", handlers.AdminToggleWireguardServer) // 启用/禁用服务器
 		admin.PATCH("/wireguard/servers/:id/ratelimit", handlers.AdminSetRateLimit) // 设置速率限制
 		
@@ -73,5 +81,29 @@ func SetupRoutes(r *gin.Engine) {
 		admin.GET("/monitoring/chart", handlers.GetMonitoringChart)     // 获取图表数据（简化版）
 		admin.GET("/monitoring/history", handlers.GetMonitoringHistory) // 获取历史监控记录（完整版）
 		admin.GET("/monitoring/stats", handlers.GetMonitoringStats)     // 获取聚合统计数据（完整版）
+	}
+}
+
+// loginLimit 登录接口的限速配置。
+func loginLimit() middleware.RateLimitConfig {
+	cfg := config.AppConfig.RateLimit
+	if !cfg.Enabled {
+		return middleware.RateLimitConfig{Limit: 0}
+	}
+	return middleware.RateLimitConfig{
+		Limit:  cfg.LoginPerMinute,
+		Window: time.Minute,
+	}
+}
+
+// registerLimit 注册接口的限速配置，窗口取一小时。
+func registerLimit() middleware.RateLimitConfig {
+	cfg := config.AppConfig.RateLimit
+	if !cfg.Enabled {
+		return middleware.RateLimitConfig{Limit: 0}
+	}
+	return middleware.RateLimitConfig{
+		Limit:  cfg.RegisterPerHour,
+		Window: time.Hour,
 	}
 }

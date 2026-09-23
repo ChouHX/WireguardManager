@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -140,16 +141,158 @@ func (s *NetnsService) DeleteLinkInHost(link string) error {
 	return nil
 }
 
-// SetLinkUpInNamespace 在命名空间内拉起网卡（WireGuard 接口在此刻建立监听 socket）。
-func (s *NetnsService) SetLinkUpInNamespace(nsName, link string) error {
-	cmd := exec.Command("ip", "netns", "exec", nsName, "ip", "link", "set", "lo", "up")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to bring up lo in namespace %s: %v, output: %s", nsName, err, string(output))
+// LinkIsUpInNamespace 判断命名空间内网卡是否处于 UP 状态（即 IFF_UP 管理状态）。
+//
+// 注意不能看 operstate：WireGuard 接口即便已拉起，operstate 仍是 UNKNOWN，
+// 必须解析 `<...>` 里的标志位。这里只认独立的 UP 标志，正是 `ip link set up/down`
+// 所切换的那一位。
+func (s *NetnsService) LinkIsUpInNamespace(nsName, link string) bool {
+	cmd := exec.Command("ip", "netns", "exec", nsName, "ip", "-o", "link", "show", "dev", link)
+	output, err := cmd.Output()
+	if err != nil {
+		return false
 	}
 
-	cmd = exec.Command("ip", "netns", "exec", nsName, "ip", "link", "set", "dev", link, "up")
+	// 形如：3: wg0: <POINTOPOINT,NOARP,UP,LOWER_UP> mtu 1420 qdisc noqueue state UNKNOWN
+	line := string(output)
+	start := strings.Index(line, "<")
+	end := strings.Index(line, ">")
+	if start < 0 || end <= start {
+		return false
+	}
+
+	for _, flag := range strings.Split(line[start+1:end], ",") {
+		if strings.TrimSpace(flag) == "UP" {
+			return true
+		}
+	}
+	return false
+}
+
+// ApplyRateLimit 在命名空间内的隧道接口上实施双向限速。
+//
+// 方向对应客户端的直观感受：
+//   - downloadMbps 限制「服务端 → 设备」的流量，即客户端的下载速率，用 egress 整形（tbf）；
+//   - uploadMbps 限制「设备 → 服务端」的流量，即客户端的上传速率，用 ingress 限速
+//     （ingress qdisc + police，超速直接丢弃）。ingress 方向无法整形只能限速，
+//     对「限速」这个语义来说足够。
+//
+// 取值为 0 表示该方向不限速；两者都为 0 时清除全部规则，恢复到不限速状态。
+//
+// qdisc 挂在 netdev 上，因此接口 down/up 都不会丢规则；但命名空间被销毁重建后
+// netdev 是新对象，规则随之消失，需要由收敛流程重新下发（见 reconcile）。
+func (s *NetnsService) ApplyRateLimit(nsName, link string, downloadMbps, uploadMbps int) error {
+	// 先清空既有规则，保证该操作幂等：重复设置不会叠加出多条 qdisc
+	if err := s.clearRateLimit(nsName, link); err != nil {
+		return err
+	}
+
+	if downloadMbps <= 0 && uploadMbps <= 0 {
+		return nil
+	}
+
+	if downloadMbps > 0 {
+		burst := rateLimitBurstBytes(downloadMbps)
+		cmd := exec.Command("ip", "netns", "exec", nsName,
+			"tc", "qdisc", "replace", "dev", link, "root", "tbf",
+			"rate", fmt.Sprintf("%dmbit", downloadMbps),
+			"burst", strconv.Itoa(burst),
+			"latency", "400ms")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to set download rate limit (%d Mbps) on %s: %v, output: %s",
+				downloadMbps, link, err, string(output))
+		}
+	}
+
+	if uploadMbps > 0 {
+		cmd := exec.Command("ip", "netns", "exec", nsName,
+			"tc", "qdisc", "add", "dev", link, "handle", "ffff:", "ingress")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to add ingress qdisc on %s: %v, output: %s", link, err, string(output))
+		}
+
+		cmd = exec.Command("ip", "netns", "exec", nsName,
+			"tc", "filter", "add", "dev", link, "parent", "ffff:",
+			"protocol", "all", "u32", "match", "u32", "0", "0",
+			"police", "rate", fmt.Sprintf("%dmbit", uploadMbps),
+			"burst", strconv.Itoa(rateLimitBurstBytes(uploadMbps)),
+			"drop", "flowid", ":1")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to set upload rate limit (%d Mbps) on %s: %v, output: %s",
+				uploadMbps, link, err, string(output))
+		}
+	}
+
+	return nil
+}
+
+// clearRateLimit 清除接口上的限速规则，使 ApplyRateLimit 可以幂等重放。
+//
+// 刻意忽略失败：设备上的默认 root qdisc（noqueue/pfifo_fast）不允许删除，
+// 「规则本来就不存在」是这里的常态而非异常。真正需要报错的情况会在随后的
+// replace / add 中暴露出来。
+func (s *NetnsService) clearRateLimit(nsName, link string) error {
+	for _, args := range [][]string{
+		{"tc", "qdisc", "del", "dev", link, "root"},
+		{"tc", "qdisc", "del", "dev", link, "ingress"},
+	} {
+		cmd := exec.Command("ip", append([]string{"netns", "exec", nsName}, args...)...)
+		_ = cmd.Run()
+	}
+	return nil
+}
+
+// rateLimitBurstBytes 计算 tbf/police 的突发额度（字节）。
+//
+// 突发额度决定了「瞬时允许多大的流量高于限定速率」，太小会让限速口吃、
+// 吞吐远低于设定值。这里取约 25ms 的额度（速率 × 3200 字节），并以 MTU
+// 与一个上限做兜底，覆盖 100000 Mbps 这类极端取值时不至于溢出。
+func rateLimitBurstBytes(rateMbps int) int {
+	const (
+		minBurst = 16000             // 约 10 个 MTU，保证小速率下也有足够缓冲
+		maxBurst = 128 * 1024 * 1024 // 防止极端速率下算出过大的值
+	)
+	burst := rateMbps * 3200
+	if burst < minBurst {
+		burst = minBurst
+	}
+	if burst > maxBurst {
+		burst = maxBurst
+	}
+	return burst
+}
+
+// SetLinkUpInNamespace 在命名空间内拉起网卡（WireGuard 接口在此刻建立监听 socket）。
+func (s *NetnsService) SetLinkUpInNamespace(nsName, link string) error {
+	return s.SetLinkStateInNamespace(nsName, link, true)
+}
+
+// SetLinkStateInNamespace 切换命名空间内隧道接口的启停状态。
+//
+// 这是「启用/禁用账号」的执行手段：把接口 down 会触发内核销毁该设备的加密
+// UDP socket，客户端立即连不上；重新 up 时内核会在设备诞生地（宿主命名空间）
+// 重建 socket，因此恢复后监听端口与握手路径跟禁用前完全一致。
+//
+// 相比删除配置再重建，这样做保留了全部 peer、密钥与路由，禁用期间不产生任何
+// 状态丢失，开关可以随时来回切换。
+func (s *NetnsService) SetLinkStateInNamespace(nsName, link string, up bool) error {
+	state := "down"
+	if up {
+		state = "up"
+	}
+
+	// 拉起隧道前先确保 lo 可用：命名空间内的转发与探测都依赖它
+	if up {
+		cmd := exec.Command("ip", "netns", "exec", nsName, "ip", "link", "set", "lo", "up")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to bring up lo in namespace %s: %v, output: %s", nsName, err, string(output))
+		}
+	}
+
+	cmd := exec.Command("ip", "netns", "exec", nsName, "ip", "link", "set", "dev", link, state)
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to bring up %s in namespace %s: %v, output: %s", link, nsName, err, string(output))
+		return fmt.Errorf("failed to set %s %s in namespace %s: %v, output: %s",
+			link, state, nsName, err, string(output))
 	}
 	return nil
 }

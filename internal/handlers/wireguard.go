@@ -423,10 +423,8 @@ func AddPeer(c *gin.Context) {
 // peerRecordCreateAttempts 创建 peer 记录的重试次数：覆盖 IP 唯一约束冲突等并发场景
 const peerRecordCreateAttempts = 3
 
-// createPeerRecord 生成密钥、分配 IP 并写入 peer 记录。
-// 命中唯一约束冲突时会重新生成密钥并重新分配 IP，最多重试 peerRecordCreateAttempts 次。
-// 返回的错误文案面向客户端，故保留原有 "Failed to xxx: cause" 形式。
-// buildServerAllowedIPs 见 services.ServerAllowedIPs（实现已下沉，供启动期自愈复用）。
+// buildServerAllowedIPs 计算服务端为该 peer 声明的 allowed-ips（设备自身地址 + 其背后网段）。
+// 实现在 services.ServerAllowedIPs，下沉后可由启动期自愈流程复用。
 func buildServerAllowedIPs(peer *models.WireguardPeer) string {
 	return services.ServerAllowedIPs(peer)
 }
@@ -443,6 +441,9 @@ func usePresharedKeyForNewPeer(explicit *bool) bool {
 	return false
 }
 
+// createPeerRecord 生成密钥、分配 IP 并写入 peer 记录。
+// 命中唯一约束冲突时会重新生成密钥并重新分配 IP，最多重试 peerRecordCreateAttempts 次。
+// 返回的错误文案面向客户端，故保留原有 "Failed to xxx: cause" 形式。
 func createPeerRecord(wgService *services.WireguardService, wgServer *models.WireguardServer, req AddPeerRequest) (*models.WireguardPeer, error) {
 	var lastErr error
 
@@ -591,7 +592,10 @@ func allocatePeerIP(serverID uint, serverAddress string) (string, error) {
 	return "", fmt.Errorf("no available IP addresses in the subnet")
 }
 
-// isUniqueViolation 判断数据库错误是否是唯一约束冲突（Postgres 错误码 23505）。
+// isUniqueViolation 判断数据库错误是否是唯一约束冲突。
+// 数据库为嵌入式 SQLite，错误文案形如 "UNIQUE constraint failed: ..."；
+// 同时保留对 gorm.ErrDuplicatedKey 与其它后端写法（含 Postgres 23505）的识别，
+// 以便将来更换数据库时无需改动调用方。
 func isUniqueViolation(err error) bool {
 	if err == nil {
 		return false
@@ -741,7 +745,6 @@ func UpdatePeer(c *gin.Context) {
 		wantPSK := *req.UsePresharedKey
 		hasPSK := peer.PresharedKey != ""
 		wgService := services.NewWireguardService(config.AppConfig.Network.ConfigDir)
-		peerAllowedIPs := peer.PeerAddress + "/32"
 
 		switch {
 		case wantPSK && !hasPSK:
@@ -761,7 +764,17 @@ func UpdatePeer(c *gin.Context) {
 				response.InternalError(c, "Failed to reset peer before disabling preshared key: "+err.Error())
 				return
 			}
-			if err := wgService.AddPeer(wgServer.Namespace, wgServer.WgInterface, peer.PublicKey, peerAllowedIPs, ""); err != nil {
+			// 重建时必须沿用服务端 allowed-ips 的完整取值（设备自身地址 + 它背后的网段）。
+			// 只写回 /32 会把下挂网段从加密路由表里摘掉，而数据库仍记着原网段，
+			// 结果是 site-to-site 静默失联且界面显示一切正常。
+			serverAllowedIPs := buildServerAllowedIPs(&peer)
+			if err := wgService.AddPeer(wgServer.Namespace, wgServer.WgInterface, peer.PublicKey, serverAllowedIPs, ""); err != nil {
+				// peer 此刻已从内核移除、数据库仍记着带 PSK 的旧状态：尽力按原样补回，
+				// 避免设备在无人察觉的情况下掉线。
+				if restoreErr := restorePeerWithPresharedKey(wgService, wgServer, &peer, serverAllowedIPs); restoreErr != nil {
+					log.Printf("Failed to restore peer %s on server %d after disabling preshared key: %v",
+						peer.PublicKey, wgServer.ID, restoreErr)
+				}
 				response.InternalError(c, "Failed to re-add peer without preshared key: "+err.Error())
 				return
 			}
@@ -836,6 +849,78 @@ func restorePeerRoutes(netnsService *services.NetnsService, namespace, wgInterfa
 	if err := netnsService.AddRouteForPeer(namespace, wgInterface, allowedIPs); err != nil {
 		log.Printf("Warning: failed to restore route %s in %s/%s: %v", allowedIPs, namespace, wgInterface, err)
 	}
+}
+
+// restorePeerWithPresharedKey 把 peer 恢复成「带预共享密钥」的形态。
+//
+// 关闭 PSK 需要先移除再重建，若重建失败，peer 已经不在内核里而数据库仍记着
+// 带 PSK 的旧状态。这里按原样补回，避免设备在无人察觉的情况下掉线。
+func restorePeerWithPresharedKey(wgService *services.WireguardService, wgServer models.WireguardServer, peer *models.WireguardPeer, serverAllowedIPs string) error {
+	if err := wgService.AddPeer(wgServer.Namespace, wgServer.WgInterface, peer.PublicKey, serverAllowedIPs, ""); err != nil {
+		return err
+	}
+	if peer.PresharedKey == "" {
+		return nil
+	}
+	return wgService.SetPeerPresharedKey(wgServer.Namespace, wgServer.WgInterface, peer.PublicKey, peer.PresharedKey)
+}
+
+// AdminRecreateWireguardServer 为账号重新分配一套隧道。
+//
+// 补上一个功能缺口：管理员删除服务器后账号本身仍在，但用户侧所有 WireGuard
+// 接口都会返回「未配置服务器」，系统里原本没有任何重建入口，只能删号重建。
+//
+// 重新分配会生成新的密钥、监听端口与隧道网段，客户端必须重新导入配置，
+// 因此这是管理员在「账号被误删服务器」时的补救手段，而不是常规操作。
+func AdminRecreateWireguardServer(c *gin.Context) {
+	userIDStr := c.Param("id")
+	userID, err := strconv.ParseUint(userIDStr, 10, 32)
+	if err != nil {
+		response.BadRequest(c, "Invalid user ID", nil)
+		return
+	}
+
+	var user models.User
+	if err := database.DB.First(&user, userID).Error; err != nil {
+		response.NotFound(c, "User not found")
+		return
+	}
+
+	// 与注册共用同一把锁：分配依据同样是「数据库快照 + 宿主机端口探测」，
+	// 存在「正在被分配」的中间状态，必须与注册串行化。
+	networkProvisionMu.Lock()
+	defer networkProvisionMu.Unlock()
+
+	// 已有服务器就不重复分配（检查放在锁内，避免与并发的重建请求互相覆盖）
+	var existingServer models.WireguardServer
+	if err := database.DB.Where("user_id = ?", user.ID).First(&existingServer).Error; err == nil {
+		response.BadRequest(c, "This user already has a WireGuard server", nil)
+		return
+	}
+
+	var servers []models.WireguardServer
+	if err := database.DB.Find(&servers).Error; err != nil {
+		response.InternalError(c, "Failed to read existing network allocations")
+		return
+	}
+
+	networkService := services.NewUserNetworkServiceFromRuntime()
+	server, err := networkService.ProvisionUserNetwork(&user, services.AllocationsFromServers(servers))
+	if err != nil {
+		response.InternalError(c, "Failed to provision user network: "+err.Error())
+		return
+	}
+
+	if err := database.DB.Create(server).Error; err != nil {
+		// 落库失败就回收刚建好的网络，不留孤儿资源
+		if destroyErr := networkService.DestroyUserNetwork(server, user.UserUID); destroyErr != nil {
+			log.Printf("Failed to clean up the network of user %d after a database error: %v", user.ID, destroyErr)
+		}
+		response.InternalError(c, "Failed to save user network info")
+		return
+	}
+
+	response.Created(c, "WireGuard server recreated successfully", server)
 }
 
 // livenessMonitor 由 main 注入；为 nil 表示未启用存活探测。
@@ -1074,6 +1159,13 @@ func GetPeerConfig(c *gin.Context) {
 		return
 	}
 
+	// 管理员禁用后不再下发配置：接口此时已被 down 掉，发出去的配置也用不了，
+	// 直接说明原因比让用户对着一个连不上的隧道排查要好。
+	if !wgServer.Enabled {
+		response.Forbidden(c, "This account's WireGuard server has been disabled by the administrator")
+		return
+	}
+
 	// 获取peer信息
 	var peer models.WireguardPeer
 	if err := database.DB.First(&peer, peerID).Error; err != nil {
@@ -1177,32 +1269,37 @@ func AdminDeleteWireguardServer(c *gin.Context) {
 		return
 	}
 
-	// 使用事务确保数据一致性
+	// 先回收网络，再进数据库事务。
+	//
+	// 次序很关键：DestroyUserNetwork 内部是一串 fork/exec（ip netns del 等），
+	// 而数据库连接池默认只有 1 条连接（config.Database.MaxOpenConns = 1）。
+	// 把外部命令放进事务里，等于让全站请求排在一条被占住的连接后面等待。
+	//
+	// 反过来放在事务之前也有语义上的理由：网络资源不是事务性对象——事务一旦回滚，
+	// 被删掉的命名空间不会回来。先拆网络、成功后再删记录，两边才始终一致。
+	networkService := services.NewUserNetworkServiceFromRuntime()
+	if err := networkService.DestroyUserNetwork(&server, server.User.UserUID); err != nil {
+		// 网络回收失败就保留记录：账号保持完整、可以重试，也仍会被启动期收敛流程看到。
+		// 若在这里继续删记录，命名空间就再没有任何线索可以被发现，只能靠人工排查。
+		response.InternalError(c, "Failed to tear down the account network: "+err.Error())
+		return
+	}
+
+	// 数据库部分只需一次极短的事务：网络已回收，这里不再有任何耗时的外部调用
 	err = database.DB.Transaction(func(tx *gorm.DB) error {
-		// 1. 先删除所有关联的 peers
 		if err := tx.Where("server_id = ?", serverID).Delete(&models.WireguardPeer{}).Error; err != nil {
 			return fmt.Errorf("failed to delete peers: %v", err)
 		}
-
-		// 2. 删除服务器记录
 		if err := tx.Delete(&server).Error; err != nil {
 			return fmt.Errorf("failed to delete server: %v", err)
 		}
-
-		// 3. 清理网络资源（命名空间及其中的接口、路由）
-		// 使用 UserNetworkService 清理网络环境
-		networkService := services.NewUserNetworkServiceFromRuntime()
-
-		// 清理网络环境（即使失败也继续，因为数据库记录已删除）
-		if err := networkService.DestroyUserNetwork(&server, server.User.UserUID); err != nil {
-			// 记录错误但不回滚事务
-			log.Printf("Warning: Failed to cleanup network resources for server %d: %v", serverID, err)
-		}
-
 		return nil
 	})
 
 	if err != nil {
+		// 网络已销毁而记录删除失败：数据库里会留下一个指向空网络的账号。
+		// 启动期收敛流程会依据这条记录重建网络，因此该状态可自愈，如实记录即可。
+		log.Printf("Network of server %d was torn down, but deleting its records failed: %v", serverID, err)
 		response.InternalError(c, fmt.Sprintf("Failed to delete server: %v", err))
 		return
 	}
@@ -1238,14 +1335,44 @@ func AdminToggleWireguardServer(c *gin.Context) {
 		return
 	}
 
-	// 更新状态
+	// 真正生效的开关：把命名空间内的隧道接口 down/up。
+	// 接口 down 会让内核立即销毁加密 UDP socket，客户端随即连不上；up 时 socket
+	// 在设备诞生地（宿主命名空间）重建，端口与握手路径与禁用前一致。
+	//
+	// 顺序刻意是「先动网络、后落库」：反过来会留下一个数据库声称已禁用、
+	// 内核却仍在转发的状态，也就是这次要修掉的那种「界面撒谎」。
+	netnsService := services.NewNetnsService()
+
+	// 网络尚未落地（命名空间或接口缺失）时只记录意图，实际状态交给启动期收敛对齐
+	if !netnsService.LinkExistsInNamespace(server.Namespace, server.WgInterface) {
+		if err := database.DB.Model(&server).Update("enabled", *req.Enabled).Error; err != nil {
+			response.InternalError(c, "Failed to update server status")
+			return
+		}
+		log.Printf("Server %d (%s) status set to %t, but its network is not provisioned yet",
+			server.ID, server.Namespace, *req.Enabled)
+		response.Success(c, "Server status saved; network provisioning is pending", nil)
+		return
+	}
+
+	if err := netnsService.SetLinkStateInNamespace(server.Namespace, server.WgInterface, *req.Enabled); err != nil {
+		response.InternalError(c, "Failed to toggle tunnel interface: "+err.Error())
+		return
+	}
+
 	if err := database.DB.Model(&server).Update("enabled", *req.Enabled).Error; err != nil {
+		// 网络已切换而落库失败：把接口恢复到原状态，避免两边不一致
+		if rollbackErr := netnsService.SetLinkStateInNamespace(
+			server.Namespace, server.WgInterface, !*req.Enabled); rollbackErr != nil {
+			log.Printf("Failed to roll back interface state for server %d after a database error: %v",
+				server.ID, rollbackErr)
+		}
 		response.InternalError(c, "Failed to update server status")
 		return
 	}
 
-	// TODO: 实现启用/禁用命名空间网络的逻辑
-	// 可以通过 iptables 规则来实现禁用功能
+	// 接口状态变化后，缓存里的实时统计已不代表现状
+	services.InvalidateStatsCache(server.Namespace, server.WgInterface)
 
 	message := "Server enabled successfully"
 	if !*req.Enabled {
@@ -1291,18 +1418,36 @@ func AdminSetRateLimit(c *gin.Context) {
 		return
 	}
 
-	// 更新速率限制
+	// 与启用/禁用同样的次序：先把限速落到内核，成功后再写库，
+	// 否则会出现「界面显示了限速、实际不限速」这种看起来正常的假象。
+	netnsService := services.NewNetnsService()
+
+	if netnsService.LinkExistsInNamespace(server.Namespace, server.WgInterface) {
+		if err := netnsService.ApplyRateLimit(server.Namespace, server.WgInterface,
+			req.DownloadRate, req.UploadRate); err != nil {
+			response.InternalError(c, "Failed to apply rate limit: "+err.Error())
+			return
+		}
+	} else {
+		// 网络尚未落地时只记录取值，收敛流程重建接口后会按库里的值重新下发
+		log.Printf("Server %d (%s) rate limit saved, but its network is not provisioned yet",
+			server.ID, server.Namespace)
+	}
+
 	updates := map[string]interface{}{
 		"download_rate": req.DownloadRate,
 		"upload_rate":   req.UploadRate,
 	}
 	if err := database.DB.Model(&server).Updates(updates).Error; err != nil {
+		// 内核已按新值限速而落库失败：把限速恢复成原值，保持两边一致
+		if rollbackErr := netnsService.ApplyRateLimit(server.Namespace, server.WgInterface,
+			server.DownloadRate, server.UploadRate); rollbackErr != nil {
+			log.Printf("Failed to roll back rate limit for server %d after a database error: %v",
+				server.ID, rollbackErr)
+		}
 		response.InternalError(c, "Failed to update rate limit")
 		return
 	}
-
-	// TODO: 实现 tc (traffic control) 命令来设置实际的速率限制
-	// 需要在命名空间中执行 tc 命令
 
 	response.Success(c, "Rate limit set successfully", nil)
 }

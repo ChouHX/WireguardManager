@@ -41,12 +41,37 @@ type Config struct {
 	Monitoring MonitoringConfig `yaml:"monitoring"`
 	Liveness   LivenessConfig   `yaml:"liveness"`
 	Default    DefaultConfig    `yaml:"default"`
+	RateLimit  RateLimitConfig  `yaml:"rate_limit"`
+}
+
+// RateLimitConfig 公开接口的访问限速。
+//
+// 这两个接口都不需要认证，却各自有实际代价：login 可被用来无限次猜密码，
+// register 每成功一次就创建一个命名空间与一条隧道。限速表以来源地址为键，
+// 因此必须配合 server.trusted_proxies 收窄可信代理，否则可被伪造来源绕过。
+type RateLimitConfig struct {
+	Enabled bool `yaml:"enabled"` // 总开关，默认开启
+
+	// LoginPerMinute 单个来源每分钟允许的登录尝试次数。
+	LoginPerMinute int `yaml:"login_per_minute"`
+	// RegisterPerHour 单个来源每小时允许的注册次数。
+	//
+	// 比登录严格得多：注册要占用一个隧道网段（上限 254 个）并创建命名空间，
+	// 属于典型的低频操作，正常用户不会在短时间内反复注册。
+	RegisterPerHour int `yaml:"register_per_hour"`
 }
 
 type ServerConfig struct {
 	Port        int      `yaml:"port"`
 	Mode        string   `yaml:"mode"`         // gin 运行模式：debug / release / test，默认 release
 	CorsOrigins []string `yaml:"cors_origins"` // 允许的跨域来源，默认 ["*"]
+
+	// TrustedProxies 可信反向代理的网段/IP 列表，默认空表示不信任任何代理。
+	//
+	// 这项配置直接影响限速与访问日志的可信度：gin 的默认值是信任所有来源，
+	// 于是任何客户端都可以用 X-Forwarded-For 伪造自己的地址，按 IP 限速形同虚设。
+	// 只有在确知前面有反向代理时，才把该代理的地址填进来。
+	TrustedProxies []string `yaml:"trusted_proxies"`
 }
 
 // DatabaseConfig 使用嵌入式 SQLite（纯 Go 驱动，无需 CGO）。
@@ -127,6 +152,14 @@ func defaultConfig() *Config {
 			Port:        DefaultServerPort,
 			Mode:        "release",
 			CorsOrigins: []string{"*"},
+			// 默认不信任任何代理：gin 的默认值恰好相反（信任全部来源），
+			// 那会让 X-Forwarded-For 可被任意伪造。确有反向代理时再显式填写。
+			TrustedProxies: nil,
+		},
+		RateLimit: RateLimitConfig{
+			Enabled:         true,
+			LoginPerMinute:  10,
+			RegisterPerHour: 5,
 		},
 		Database: DatabaseConfig{
 			Path:          "./data/cloud_platform.db",
@@ -318,6 +351,12 @@ func (c *Config) normalize() {
 func applyEnvOverrides(c *Config) {
 	setString(&c.Server.Mode, "WM_SERVER_MODE")
 	setInt(&c.Server.Port, "WM_SERVER_PORT")
+	setStringSlice(&c.Server.CorsOrigins, "WM_CORS_ORIGINS")
+	setStringSlice(&c.Server.TrustedProxies, "WM_TRUSTED_PROXIES")
+
+	setBool(&c.RateLimit.Enabled, "WM_RATE_LIMIT_ENABLED")
+	setInt(&c.RateLimit.LoginPerMinute, "WM_RATE_LIMIT_LOGIN_PER_MINUTE")
+	setInt(&c.RateLimit.RegisterPerHour, "WM_RATE_LIMIT_REGISTER_PER_HOUR")
 	if v := strings.TrimSpace(os.Getenv("WM_SERVER_CORS_ORIGINS")); v != "" {
 		origins := make([]string, 0, 4)
 		for _, part := range strings.Split(v, ",") {
@@ -390,6 +429,23 @@ func setBool(dst *bool, envKey string) {
 	*dst = parsed
 }
 
+// setStringSlice 解析逗号分隔的列表型环境变量。
+// 显式传入空字符串（WM_X=""）表示清空为无元素，而不是"未设置"。
+func setStringSlice(dst *[]string, envKey string) {
+	raw, ok := os.LookupEnv(envKey)
+	if !ok {
+		return
+	}
+
+	items := make([]string, 0, 4)
+	for _, part := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			items = append(items, trimmed)
+		}
+	}
+	*dst = items
+}
+
 // validateJWT 只校验 JWT 相关配置，用于 LoadConfig 中的"致命错误"判定。
 func (c *Config) validateJWT() error {
 	secret := c.JWT.Secret
@@ -422,6 +478,12 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(c.Database.Path) == "" {
 		problems = append(problems, "database.path must not be empty")
+	}
+	if c.RateLimit.LoginPerMinute < 0 {
+		problems = append(problems, fmt.Sprintf("rate_limit.login_per_minute must be >= 0, got %d", c.RateLimit.LoginPerMinute))
+	}
+	if c.RateLimit.RegisterPerHour < 0 {
+		problems = append(problems, fmt.Sprintf("rate_limit.register_per_hour must be >= 0, got %d", c.RateLimit.RegisterPerHour))
 	}
 	if c.Database.MaxOpenConns < 1 {
 		problems = append(problems, fmt.Sprintf("database.max_open_conns must be >= 1, got %d", c.Database.MaxOpenConns))

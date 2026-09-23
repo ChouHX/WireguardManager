@@ -50,6 +50,8 @@ export interface LoginResponse {
 export interface UpdateProfileRequest {
   name?: string;
   password?: string;
+  /** 修改密码时必须同时提交当前密码（服务端会校验） */
+  current_password?: string;
 }
 
 export interface UpdateUserRequest {

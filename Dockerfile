@@ -63,8 +63,12 @@ WORKDIR /root
 
 EXPOSE 3000
 
+# 探针指向 /ready 而非 /health：
+#   /health 是无条件 200 的存活探针，数据库不可用时它也照样返回 200，
+#   容器会一直显示 healthy 而实际已经不可服务；
+#   /ready 会真正 Ping 数据库并检查采集器状态，能反映「进程活着但不能干活」。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -qO- "http://127.0.0.1:${WM_SERVER_PORT}/health" >/dev/null 2>&1 || exit 1
+    CMD wget -qO- "http://127.0.0.1:${WM_SERVER_PORT}/ready" >/dev/null 2>&1 || exit 1
 
 # 后端即 PID 1：Go 直接处理 SIGTERM 做优雅关闭
 ENTRYPOINT ["/usr/local/bin/wm-backend"]

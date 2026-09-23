@@ -27,6 +27,7 @@ import type { UpdateProfileRequest } from '@/types/auth';
 interface ProfileFormValues {
   name: string;
   password: string;
+  currentPassword: string;
 }
 
 /** 信息行：左侧灰色小字标签，右侧加粗取值 */
@@ -57,11 +58,14 @@ export default function AccountPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const form = useForm<ProfileFormValues>({
-    initialValues: { name: user?.name ?? '', password: '' },
+    initialValues: { name: user?.name ?? '', password: '', currentPassword: '' },
     validate: {
       name: (value) => (value.trim().length < 2 ? t('auth.nameMinLength') : null),
       // 密码留空表示不修改，填了才校验长度
       password: (value) => (value.length > 0 && value.length < 6 ? t('auth.passwordMinLength') : null),
+      // 改密必须验证当前密码，否则 token 泄漏即可直接接管账号
+      currentPassword: (value, values) =>
+        values.password.length > 0 && value.length === 0 ? t('user.currentPasswordRequired') : null,
     },
   });
 
@@ -72,7 +76,10 @@ export default function AccountPage() {
     const nextName = values.name.trim();
     const payload: UpdateProfileRequest = {};
     if (nextName !== user.name) payload.name = nextName;
-    if (values.password) payload.password = values.password;
+    if (values.password) {
+      payload.password = values.password;
+      payload.current_password = values.currentPassword;
+    }
 
     if (!payload.name && !payload.password) {
       notifications.show({ color: 'yellow', message: t('user.noFieldsChanged') });
@@ -89,6 +96,7 @@ export default function AccountPage() {
       setUser(response.data);
       // 密码不回填，并把当前值作为新的基线，清掉“已修改”标记
       form.setFieldValue('password', '');
+      form.setFieldValue('currentPassword', '');
       form.resetDirty();
       notifications.show({
         color: 'teal',
@@ -185,6 +193,18 @@ export default function AccountPage() {
                   leftSection={<IconShieldLock size={16} />}
                   {...form.getInputProps('password')}
                 />
+
+                {/* 只在填写新密码时出现：改密必须先验证当前密码 */}
+                {form.values.password.length > 0 && (
+                  <PasswordInput
+                    label={t('user.currentPassword')}
+                    placeholder={t('user.currentPasswordPlaceholder')}
+                    autoComplete="current-password"
+                    leftSection={<IconShieldLock size={16} />}
+                    withAsterisk
+                    {...form.getInputProps('currentPassword')}
+                  />
+                )}
 
                 <ErrorAlert message={error} />
 

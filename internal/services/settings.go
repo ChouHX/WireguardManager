@@ -224,8 +224,10 @@ func (s *Settings) Update(values map[string]string) error {
 	}
 
 	s.mu.Lock()
-	for key, value := range values {
-		s.values[key] = value
+	// 遍历 rows 而非 values：上面已把非白名单键过滤掉，若这里仍按原始入参写入，
+	// 内存里就会存在数据库中没有的键，两边从此不一致，而过滤也形同虚设。
+	for _, row := range rows {
+		s.values[row.Key] = row.Value
 	}
 	s.mu.Unlock()
 

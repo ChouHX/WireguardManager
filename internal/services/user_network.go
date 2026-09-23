@@ -102,7 +102,7 @@ func (s *UserNetworkService) ProvisionUserNetwork(user *models.User, existing []
 		WgAddress:    wgIP,
 	}
 
-	if err := s.createNetwork(nsName, wgInterface, user.UserUID, privateKey, wgIP, port); err != nil {
+	if err := s.createNetwork(nsName, wgInterface, user.UserUID, privateKey, wgIP, port, true); err != nil {
 		return nil, err
 	}
 
@@ -137,7 +137,7 @@ func (s *UserNetworkService) EnsureUserNetwork(server *models.WireguardServer, u
 		return err
 	}
 
-	return s.createNetwork(nsName, wgInterface, userUID, server.WgPrivateKey, server.WgAddress, server.WgPort)
+	return s.createNetwork(nsName, wgInterface, userUID, server.WgPrivateKey, server.WgAddress, server.WgPort, server.Enabled)
 }
 
 // createNetwork 按「原生跨命名空间」方案构建一个账号的网络环境。
@@ -146,8 +146,11 @@ func (s *UserNetworkService) EnsureUserNetwork(server *models.WireguardServer, u
 //  1. 在宿主机创建接口 —— 内核把 creating_net 记为宿主命名空间；
 //  2. 移入账号命名空间并改名为 wg0；
 //  3. 下发私钥与监听端口；
-//  4. 配置地址并拉起接口 —— 监听 socket 在此刻于宿主命名空间建立。
-func (s *UserNetworkService) createNetwork(nsName, wgInterface, userUID, privateKey, wgIP string, port int) error {
+//  4. 配置地址，并按 enabled 决定是否拉起接口 —— 拉起时监听 socket 在宿主命名空间建立。
+//
+// enabled=false 用于保留「被管理员禁用」的账号形态：接口建好但保持 down，
+// 内核因此不会为该设备建立加密 socket，重启后也不会被收敛流程意外启用。
+func (s *UserNetworkService) createNetwork(nsName, wgInterface, userUID, privateKey, wgIP string, port int, enabled bool) error {
 	tempLink := tempLinkName(userUID)
 
 	rollback := func() {
@@ -195,7 +198,8 @@ func (s *UserNetworkService) createNetwork(nsName, wgInterface, userUID, private
 		return err
 	}
 
-	if err := s.netnsService.SetLinkUpInNamespace(nsName, wgInterface); err != nil {
+	// 显式设置状态而非只做「拉起」：禁用中的账号必须保持 down
+	if err := s.netnsService.SetLinkStateInNamespace(nsName, wgInterface, enabled); err != nil {
 		rollback()
 		return err
 	}

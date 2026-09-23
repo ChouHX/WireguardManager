@@ -175,12 +175,11 @@ WM_SERVER_PORT=8080 docker compose up -d
 
 ### 客户端配置
 
-下载的 `AllowedIPs` 默认按设备所在网段下发（服务端接口 `10.100.0.1/24`、设备分配到 `10.100.0.2` 时下发 `10.100.0.0/24`），只把 VPN 网段流量送进隧道。需要全局代理时：
+下载的 `AllowedIPs` 默认按设备所在网段下发（服务端接口 `10.100.0.1/24`、设备分配到 `10.100.0.2` 时下发 `10.100.0.0/24`），只把 VPN 网段流量送进隧道。
 
-```yaml
-network:
-  client_allowed_ips: "0.0.0.0/0, ::/0"
-```
+> **关于全局代理**：`network.client_allowed_ips` 可以写成 `0.0.0.0/0, ::/0`，但在当前架构下这样只会得到一个「握手正常却上不了网」的隧道——账号命名空间不接公网出口，隧道里也没有 NAT。想要全局代理，需要为每个账号命名空间补一条出口链路（veth 对 + 宿主 `MASQUERADE` + 开启 `net.ipv4.ip_forward`）。详见「架构」一节对加密信道与明文路径的说明。
+>
+> 请勿在客户端配置里写 `0.0.0.0/0` 作为**服务端** allowed-ips（界面上的「设备网段」）：那会让服务端把所有流量都转发给该设备，抢走其他设备的流量。程序会自动从服务端 allowed-ips 中剔除全局代理条目。
 
 开启「网关转发」后，该设备可作为网关，让其他设备经它访问 VPN。生成的客户端配置形如：
 
@@ -214,11 +213,14 @@ PostUp = iptables -t nat -A POSTROUTING ! -o %i -j MASQUERADE; iptables -A FORWA
 | `GET` | `/api/admin/wireguard/traffic` | 全部账号流量汇总 |
 | `GET` | `/api/admin/wireguard/traffic/{id}` | 单个账号流量详情 |
 | `GET` | `/api/admin/wireguard/liveness` | 各账号在线设备统计 |
-| `PATCH` | `/api/admin/wireguard/servers/{id}/toggle` | 启用 / 禁用账号网络 |
-| `PATCH` | `/api/admin/wireguard/servers/{id}/ratelimit` | 设置限速 |
+| `PATCH` | `/api/admin/wireguard/servers/{id}/toggle` | 启用 / 禁用账号网络（真实把隧道接口 down/up） |
+| `PATCH` | `/api/admin/wireguard/servers/{id}/ratelimit` | 设置限速（在命名空间内用 `tc` 实际生效） |
 | `DELETE` | `/api/admin/wireguard/servers/{id}` | 删除账号网络环境 |
+| `POST` | `/api/admin/wireguard/users/{id}/server` | 为账号重新分配隧道（误删服务器后的补救） |
 | `GET` | `/api/admin/monitoring/*` | 系统监控（`system` `cpu` `memory` `disk` `network` `chart` `history` `stats`） |
 | `GET` | `/health` `/ready` | 存活 / 就绪探针 |
+
+`/api/register` 与 `/api/login` 无需鉴权，因此默认启用按来源地址的限速（见下方「安全提示」）。
 
 ## 目录结构
 
@@ -371,8 +373,18 @@ SQLite 面向单实例部署设计。需要横向扩容时应改用支持并发�
 ## 安全提示
 
 - JWT 密钥默认自动生成并持久化到 `data/jwt.secret`（0600）；若通过 `WM_JWT_SECRET` 显式指定，请使用足够长的随机字符串。
-- 默认管理员密码请在首次登录后立即修改。
-- 后端需要 `privileged` 与 host 网络才能管理 netns、iptables，请仅在受控主机上部署，并限制控制台的网络暴露面（建议置于 TLS 反向代理之后）。
+- 默认管理员密码请在首次登录后立即修改。修改密码需要在「个人资料」中同时提交当前密码（服务端会校验），避免 Token 泄漏直接升级为账号接管。
+- `/api/register` 与 `/api/login` 无需鉴权，默认启用按来源地址的限速：登录 `10 次/分钟`，注册 `5 次/小时`（注册会占用隧道网段，故严格得多）。可用 `WM_RATE_LIMIT_LOGIN_PER_MINUTE`、`WM_RATE_LIMIT_REGISTER_PER_HOUR` 调整，`WM_RATE_LIMIT_ENABLED=false` 关闭。
+- **限速依赖来源地址的准确性**：Gin 默认信任所有来源，任何客户端都能用 `X-Forwarded-For` 伪造地址绕过限速。本项目已默认改为不信任任何代理；**若你确实在反向代理之后部署，必须显式声明代理地址**，否则所有请求都会被记为代理自身的地址：
+
+  ```bash
+  # 容器部署：加进 compose 的 environment
+  - WM_TRUSTED_PROXIES=172.18.0.1
+  ```
+
+  跨域来源同理可用 `WM_CORS_ORIGINS`（逗号分隔）显式收窄，默认放行全部来源时启动日志会给出提示。
+- 后端需要 `privileged` 与 host 网络才能管理 netns、iptables，请仅在受控主机上部署，并限制控制台的网络暴露面（建议置于 TLS 反向代理之后）。`privileged` 无法用 `cap_add` 替代——`ip netns add` 需要改动挂载传播属性，而 Docker 默认对该操作加了锁，仅凭 `CAP_SYS_ADMIN` 无法绕过（compose 文件中有实测说明）。
+- 容器健康检查指向 `/ready`（会真正 Ping 数据库），而非无条件返回 200 的 `/health`。
 - 设备配置中包含私钥，下载链路应确保可信。
 
 ## 许可证

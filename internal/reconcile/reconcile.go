@@ -68,6 +68,15 @@ func Networks() {
 			continue
 		}
 
+		// 限速规则挂在 netdev 上，命名空间重建后 netdev 是新对象、规则已随旧接口消失，
+		// 必须按数据库里的取值重新下发，否则重启一次限速就悄悄失效了。
+		if err := netnsService.ApplyRateLimit(server.Namespace, server.WgInterface,
+			server.DownloadRate, server.UploadRate); err != nil {
+			log.Printf("reconcile: peers of server %d were restored, but applying its rate limit failed: %v",
+				server.ID, err)
+			continue
+		}
+
 		rebuilt++
 		log.Printf("reconcile: server %d (%s) now runs on the native cross-namespace layout, %d peer(s) restored",
 			server.ID, server.Namespace, len(peers))
@@ -91,6 +100,13 @@ func networkReady(netnsService *services.NetnsService, server *models.WireguardS
 
 	if !netnsService.LinkExistsInNamespace(server.Namespace, server.WgInterface) {
 		return false
+	}
+
+	// 被禁用的账号：接口按设计保持 down，内核不会为它建立 socket，
+	// 「socket 落在宿主命名空间」这条判据对它不适用。此时只要确认接口确实是
+	// down 的就视为已就绪；若它反被拉起（人为误操作），下面的重建会纠正回来。
+	if !server.Enabled {
+		return !netnsService.LinkIsUpInNamespace(server.Namespace, server.WgInterface)
 	}
 
 	// 新形态下加密 socket 一定落在宿主命名空间；缺失说明仍是旧形态或接口未拉起

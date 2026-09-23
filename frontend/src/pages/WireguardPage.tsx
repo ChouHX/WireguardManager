@@ -46,6 +46,7 @@ import { InlineLoader } from '@/components/common/LoadingScreen';
 import { MetricCard } from '@/components/common/MetricCard';
 import { PageHeader } from '@/components/common/PageHeader';
 import { useInterval } from '@/hooks/use-interval';
+import { usePollingTask } from '@/hooks/use-polling-task';
 import { useTranslation } from '@/i18n';
 import {
   formatAgeSeconds,
@@ -204,6 +205,9 @@ export default function WireguardPage() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  /** 轮询任务的执行守卫：上一轮未结束则跳过本轮 */
+  const runPollingTask = usePollingTask();
+
   const [addOpened, addModal] = useDisclosure(false);
   const [editOpened, editModal] = useDisclosure(false);
   const [deleteOpened, deleteModal] = useDisclosure(false);
@@ -275,10 +279,13 @@ export default function WireguardPage() {
     () => {
       // 已知未分配网络时不再重复请求，避免持续 400
       if (noServer) return;
-      void loadTraffic().catch((err) => {
-        if (!isNoServerError(err)) {
-          setError(messageOf(err, t('errors.networkError')));
-        }
+      // 上一轮还没回来就跳过本轮：避免请求堆积，也避免旧响应覆盖新数据
+      void runPollingTask(async () => {
+        await loadTraffic().catch((err) => {
+          if (!isNoServerError(err)) {
+            setError(messageOf(err, t('errors.networkError')));
+          }
+        });
       });
     },
     noServer ? null : POLL_INTERVAL_MS,

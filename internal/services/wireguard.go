@@ -258,6 +258,9 @@ func (s *WireguardService) AddPeer(nsName, interfaceName, peerPublicKey, allowed
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to add peer: %v, output: %s", err, string(output))
 	}
+
+	// 新增设备后让缓存立即失效，否则在一个 TTL 窗口内它不会出现在流量列表里
+	InvalidateStatsCache(nsName, interfaceName)
 	return nil
 }
 
@@ -285,6 +288,9 @@ func (s *WireguardService) RemovePeer(nsName, interfaceName, peerPublicKey strin
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to remove peer: %v, output: %s", err, string(output))
 	}
+
+	// 删除设备后让缓存立即失效，否则已删除的设备会在一个 TTL 窗口内继续显示
+	InvalidateStatsCache(nsName, interfaceName)
 	return nil
 }
 

@@ -61,15 +61,24 @@ echo -e "${GREEN}✓ Docker Compose 已安装${NC}"
 # 配置 Docker 镜像加速器（国内用户）
 echo -e "${YELLOW}[3/7] 配置 Docker 镜像加速器...${NC}"
 if [ -f "daemon.json" ]; then
-    read -p "是否配置 Docker 镜像加速器（国内推荐）? [Y/n] " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
-        sudo cp daemon.json /etc/docker/daemon.json
-        sudo systemctl daemon-reload
-        sudo systemctl restart docker
-        echo -e "${GREEN}✓ Docker 镜像加速器已配置${NC}"
+    # 只在交互式终端里询问。
+    # 管道 / CI 环境下 read 会立刻返回且 REPLY 为空，原先的实现会因为
+    # `[ -z $REPLY ]` 判定成立而"默认同意"，导致未经确认就覆盖宿主机的
+    # /etc/docker/daemon.json 并重启 Docker 守护进程——那会把宿主机上
+    # 其它所有容器一并重启。
+    if [ -t 0 ]; then
+        read -p "是否配置 Docker 镜像加速器（国内推荐）? [Y/n] " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
+            sudo cp daemon.json /etc/docker/daemon.json
+            sudo systemctl daemon-reload
+            sudo systemctl restart docker
+            echo -e "${GREEN}✓ Docker 镜像加速器已配置${NC}"
+        else
+            echo -e "${YELLOW}跳过镜像加速器配置${NC}"
+        fi
     else
-        echo -e "${YELLOW}跳过镜像加速器配置${NC}"
+        echo -e "${YELLOW}非交互式运行，跳过镜像加速器配置（避免重启宿主机 Docker）${NC}"
     fi
 else
     echo -e "${YELLOW}未找到 daemon.json，跳过${NC}"

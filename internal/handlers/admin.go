@@ -6,10 +6,13 @@ import (
 	"cloud-platform/internal/models"
 	"cloud-platform/internal/response"
 	"cloud-platform/internal/services"
+	"fmt"
+	"log"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
 type UpdateUserRequest struct {
@@ -66,22 +69,36 @@ func DeleteUser(c *gin.Context) {
 		return
 	}
 
-	// 清理用户的网络资源
+	// 网络先拆，再删记录：顺序反了会留下数据库里查不到的孤儿命名空间，
+	// 启动期收敛流程依据服务器记录工作，记录一删就再也发现不了残留资源。
 	var wgServer models.WireguardServer
 	if err := database.DB.Where("user_id = ?", targetUser.ID).First(&wgServer).Error; err == nil {
 		networkService := services.NewUserNetworkServiceFromRuntime()
-
-		// 删除所有peers
-		database.DB.Where("server_id = ?", wgServer.ID).Delete(&models.WireguardPeer{})
-
-		// 清理网络环境（忽略错误）
-		networkService.DestroyUserNetwork(&wgServer, targetUser.UserUID)
-
-		// 删除服务器记录
-		database.DB.Delete(&wgServer)
+		if err := networkService.DestroyUserNetwork(&wgServer, targetUser.UserUID); err != nil {
+			// 与删除服务器保持一致：回收失败就保留记录，让这次操作可重试、
+			// 也仍然对收敛流程可见，而不是留下一个谁也看不见的命名空间。
+			response.InternalError(c, "Failed to tear down the user's network: "+err.Error())
+			return
+		}
 	}
 
-	if err := database.DB.Delete(&targetUser).Error; err != nil {
+	// 网络已回收，这里只需一次极短的事务
+	err = database.DB.Transaction(func(tx *gorm.DB) error {
+		if wgServer.ID != 0 {
+			if err := tx.Where("server_id = ?", wgServer.ID).Delete(&models.WireguardPeer{}).Error; err != nil {
+				return fmt.Errorf("failed to delete peers: %v", err)
+			}
+			if err := tx.Delete(&wgServer).Error; err != nil {
+				return fmt.Errorf("failed to delete server: %v", err)
+			}
+		}
+		if err := tx.Delete(&targetUser).Error; err != nil {
+			return fmt.Errorf("failed to delete user: %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		log.Printf("Network of user %d was torn down, but deleting its records failed: %v", targetUser.ID, err)
 		response.InternalError(c, "Failed to delete user")
 		return
 	}

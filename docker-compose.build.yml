@@ -19,7 +19,13 @@ services:
     image: wireguardmanager:local
     container_name: cloud-app
     restart: unless-stopped
-    # 需要管理宿主机的 netns / iptables / WireGuard 接口，必须使用宿主网络与特权
+    # 需要管理宿主机的 netns / iptables / WireGuard 接口，必须使用宿主网络与特权。
+    #
+    # privileged 不能换成「cap_add 精确授权」：只给 SYS_ADMIN + NET_ADMIN + SYS_MODULE
+    # （即使再把 /var/run/netns 以 rshared 绑定挂载进去）时，ip netns add 依然会因为
+    # Docker 的挂载传播锁定而失败：
+    #     mount --make-shared /var/run/netns failed: Permission denied
+    # 下面两项在特权模式下是冗余的，保留仅为说明本服务实际用到的能力范围。
     network_mode: host
     privileged: true
     cap_add:
@@ -32,3 +38,12 @@ services:
       - /var/run/netns:/var/run/netns:shared
     environment:
       - WM_SERVER_PORT=${WM_SERVER_PORT:-3000}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
