@@ -78,13 +78,19 @@ type MetricsCollector struct {
 	prevNetAt        time.Time
 	netBaseline      bool
 
-	cancel   context.CancelFunc
+	// ctx 是服务级上下文，由 Stop 取消；在构造时同步创建，
+	// 保证 Stop 时 cancel 必定可用（详见 NewMetricsCollector 的说明）。
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	// wg 跟踪采样循环，供 Stop 等待收尾（计数在协程启动前登记）
+	wg       sync.WaitGroup
 	stopOnce sync.Once
 }
 
 // NewMetricsCollector 创建采集器，并在返回前同步完成第一次采集，
 // 使得调用方在 Start 之前就有一个可用的快照。
-func NewMetricsCollector(interval time.Duration) *MetricsCollector {
+func NewMetricsCollector(ctx context.Context, interval time.Duration) *MetricsCollector {
 	if interval <= 0 {
 		interval = 10 * time.Second
 	}
@@ -93,28 +99,35 @@ func NewMetricsCollector(interval time.Duration) *MetricsCollector {
 		interval: interval,
 		cores:    detectCPUCores(),
 	}
+	// 在构造时同步建立可取消上下文：若把它留到 Start 里再赋值，
+	// Stop 有可能先于采样协程执行到，那时 cancel 仍为 nil，
+	// 采样循环便永远不会停止，关闭之后还在持续采集。
+	collector.ctx, collector.cancel = context.WithCancel(ctx)
 	collector.collect()
 
 	return collector
 }
 
-// Start 启动后台采样循环，ctx 取消后退出。
-func (m *MetricsCollector) Start(ctx context.Context) {
-	ctx, cancel := context.WithCancel(ctx)
+// StartBackground 启动后台采样循环。返回前已登记等待计数，
+// 避免 Stop 先于协程启动执行时因计数为 0 直接返回。
+func (m *MetricsCollector) StartBackground() {
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		m.run()
+	}()
+}
 
-	m.mu.Lock()
-	m.cancel = cancel
-	m.mu.Unlock()
-
+// run 后台采样循环，服务上下文取消后退出。
+func (m *MetricsCollector) run() {
 	log.Printf("Metrics collector started with interval %v", m.interval)
 
 	ticker := time.NewTicker(m.interval)
 	defer ticker.Stop()
-	defer cancel()
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-m.ctx.Done():
 			log.Println("Metrics collector stopped")
 			return
 		case <-ticker.C:
@@ -123,16 +136,14 @@ func (m *MetricsCollector) Start(ctx context.Context) {
 	}
 }
 
-// Stop 停止采样循环，可重复调用。
+// Stop 停止采样循环并等待其退出，可重复调用。
 func (m *MetricsCollector) Stop() {
 	m.stopOnce.Do(func() {
-		m.mu.Lock()
-		cancel := m.cancel
-		m.mu.Unlock()
-		if cancel != nil {
-			cancel()
-		}
+		m.cancel()
 	})
+	// 与 MonitoringService 同理：采样协程会持续更新内存快照，
+	// 等它真正退出再返回，避免关闭流程与采样并发。
+	m.wg.Wait()
 }
 
 // Snapshot 返回当前快照的副本（含 per-core 切片的深拷贝，调用方可安全改写）。
@@ -274,12 +285,14 @@ var (
 )
 
 // InitMetricsCollector 创建并注册进程级采集器单例（在 main 中调用一次）。
-func InitMetricsCollector(interval time.Duration) *MetricsCollector {
+func InitMetricsCollector(ctx context.Context, interval time.Duration) *MetricsCollector {
+	collector := NewMetricsCollector(ctx, interval)
+
 	collectorMu.Lock()
 	defer collectorMu.Unlock()
+	defaultCollector = collector
 
-	defaultCollector = NewMetricsCollector(interval)
-	return defaultCollector
+	return collector
 }
 
 // GetMetricsCollector 返回进程级采集器单例，未初始化时按默认 10 秒间隔惰性创建。
@@ -288,7 +301,9 @@ func GetMetricsCollector() *MetricsCollector {
 	defer collectorMu.Unlock()
 
 	if defaultCollector == nil {
-		defaultCollector = NewMetricsCollector(10 * time.Second)
+		// 惰性创建只发生在 main 尚未初始化时（例如单元测试），
+		// 用 Background 作为父上下文即可，停止仍由 Stop 负责。
+		defaultCollector = NewMetricsCollector(context.Background(), 10*time.Second)
 	}
 	return defaultCollector
 }

@@ -63,13 +63,12 @@ func main() {
 	monitoringCfg := config.AppConfig.Monitoring
 
 	// 后台指标采集：所有监控接口读内存快照，不再在请求内阻塞采样
-	collector := services.InitMetricsCollector(monitoringCfg.Interval())
-	go collector.Start(ctx)
+	collector := services.InitMetricsCollector(ctx, monitoringCfg.Interval())
+	collector.StartBackground()
 
 	// 监控记录落库 + 过期清理
-	monitoringService := services.NewMonitoringService(database.DB, monitoringCfg.Interval())
-	go monitoringService.Start(ctx)
-	go monitoringService.RunCleanupLoop(ctx, monitoringCfg.CleanupInterval(), monitoringCfg.Retention())
+	monitoringService := services.NewMonitoringService(ctx, database.DB, monitoringCfg.Interval())
+	monitoringService.StartBackground(monitoringCfg.CleanupInterval(), monitoringCfg.Retention())
 
 	// 设备实时存活探测（TCP SYN/RST，秒级感知；客户端无需 Agent）
 	var livenessMonitor *services.LivenessMonitor

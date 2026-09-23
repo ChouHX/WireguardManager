@@ -4,6 +4,7 @@ import (
 	"cloud-platform/internal/models"
 	"context"
 	"log"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -13,27 +14,50 @@ import (
 type MonitoringService struct {
 	db       *gorm.DB
 	interval time.Duration
-	cancel   context.CancelFunc
+
+	// ctx 是服务级上下文，由 Stop 取消；两个后台循环都 select 它。
+	// 在构造时同步创建，避免「Start 在协程里赋值 cancel、Stop 同时读取」的竞争，
+	// 也保证 Stop 时 cancel 必定非 nil —— 否则 wg.Wait() 会永久阻塞、卡死关闭流程。
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	// wg 跟踪 StartBackground 启动的两个后台循环，供 Stop 等待收尾
+	wg sync.WaitGroup
 }
 
 // NewMonitoringService creates a new monitoring service
-func NewMonitoringService(db *gorm.DB, interval time.Duration) *MonitoringService {
+func NewMonitoringService(ctx context.Context, db *gorm.DB, interval time.Duration) *MonitoringService {
 	if interval <= 0 {
 		interval = 10 * time.Second
 	}
+	ctx, cancel := context.WithCancel(ctx)
 	return &MonitoringService{
 		db:       db,
 		interval: interval,
+		ctx:      ctx,
+		cancel:   cancel,
 	}
 }
 
-// Start 启动周期性落库循环，ctx 取消后退出。
-func (s *MonitoringService) Start(ctx context.Context) {
-	ctx, cancel := context.WithCancel(ctx)
+// StartBackground 启动两个后台循环并登记等待计数。
+//
+// 计数必须在这里、也就是协程启动之前同步完成。若把 wg.Add 放进循环体内，
+// Stop 有可能先执行到 wg.Wait 并因计数为 0 立即返回，而循环随后才真正开始运行——
+// 结果是关闭流程结束后仍有协程在写数据库。
+func (s *MonitoringService) StartBackground(cleanupInterval, retention time.Duration) {
+	s.wg.Add(2)
+	go func() {
+		defer s.wg.Done()
+		s.startLoop()
+	}()
+	go func() {
+		defer s.wg.Done()
+		s.runCleanupLoop(cleanupInterval, retention)
+	}()
+}
 
-	s.cancel = cancel
-	defer cancel()
-
+// startLoop 启动周期性落库循环，服务上下文取消后退出。
+func (s *MonitoringService) startLoop() {
 	log.Printf("Starting monitoring service with interval: %v", s.interval)
 
 	ticker := time.NewTicker(s.interval)
@@ -52,7 +76,7 @@ func (s *MonitoringService) Start(ctx context.Context) {
 				log.Printf("Monitoring service interval updated to %v", interval)
 			}
 			s.collectAndSave()
-		case <-ctx.Done():
+		case <-s.ctx.Done():
 			log.Println("Monitoring service stopped")
 			return
 		}
@@ -65,10 +89,13 @@ func (s *MonitoringService) Stop() {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	// 必须等采样与清理循环真正退出后再返回：它们的落库动作会写数据库，
+	// 若只是取消 context 就返回，调用方可能在协程仍在写库时关闭数据库连接。
+	s.wg.Wait()
 }
 
-// RunCleanupLoop 周期清理过期监控记录，直到 ctx 取消。
-func (s *MonitoringService) RunCleanupLoop(ctx context.Context, interval, retention time.Duration) {
+// runCleanupLoop 周期清理过期监控记录，直到服务上下文取消。
+func (s *MonitoringService) runCleanupLoop(interval, retention time.Duration) {
 	if interval <= 0 {
 		interval = 24 * time.Hour
 	}
@@ -83,7 +110,7 @@ func (s *MonitoringService) RunCleanupLoop(ctx context.Context, interval, retent
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-s.ctx.Done():
 			log.Println("Monitoring cleanup loop stopped")
 			return
 		case <-ticker.C:
