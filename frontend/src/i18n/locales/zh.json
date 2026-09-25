@@ -361,6 +361,7 @@
     "basePort": "起始端口",
     "dns": "客户端 DNS",
     "clientAllowedIps": "客户端 AllowedIPs",
+    "mtu": "隧道 MTU",
     "monitoringInterval": "采样间隔（秒）",
     "monitoringRetention": "记录保留时长（小时）",
     "jwtExpireHours": "登录有效期（小时）",

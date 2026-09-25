@@ -88,7 +88,7 @@ func TestAllocationsFromServers(t *testing.T) {
 }
 
 func TestAllocateNetworkAvoidsConflicts(t *testing.T) {
-	service := NewUserNetworkService("/tmp/wg-test", "10.200", 51820, "eth0")
+	service := NewUserNetworkService("/tmp/wg-test", "10.200", 51820, "eth0", 0)
 
 	// 前三个端口与网段已被占用（宿主机端口占用无法在测试中伪造，这里只验证数据库侧避让）
 	existing := []NetworkAllocation{
@@ -110,7 +110,7 @@ func TestAllocateNetworkAvoidsConflicts(t *testing.T) {
 }
 
 func TestAllocateNetworkExhaustion(t *testing.T) {
-	service := NewUserNetworkService("/tmp/wg-test", "10.200", 51820, "eth0")
+	service := NewUserNetworkService("/tmp/wg-test", "10.200", 51820, "eth0", 0)
 
 	// 占满全部可用网段
 	existing := make([]NetworkAllocation, 0, maxSubnetID)

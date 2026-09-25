@@ -47,6 +47,7 @@ type UserNetworkService struct {
 	baseSubnet       string // 旧版 veth 网段前缀，仅用于回收历史规则
 	basePort         int    // WireGuard 监听端口起始值
 	outInterface     string // 出口网卡，仅用于回收历史规则
+	mtu              int    // 隧道接口 MTU；0 表示不干预，沿用内核默认
 }
 
 // NewUserNetworkServiceFromRuntime 用运行时配置构造（config.yaml 仅作初始默认值）。
@@ -57,17 +58,19 @@ func NewUserNetworkServiceFromRuntime() *UserNetworkService {
 	baseSubnet := settings.String(SettingNetworkBaseSubnet, cfg.Network.BaseSubnet)
 	basePort := settings.Int(SettingNetworkBasePort, cfg.Network.BasePort)
 	outInterface := settings.String(SettingNetworkOutInterface, cfg.Network.OutInterface)
+	mtu := settings.Int(SettingNetworkMTU, cfg.Network.MTU)
 
-	return NewUserNetworkService(cfg.Network.ConfigDir, baseSubnet, basePort, outInterface)
+	return NewUserNetworkService(cfg.Network.ConfigDir, baseSubnet, basePort, outInterface, mtu)
 }
 
-func NewUserNetworkService(configDir, baseSubnet string, basePort int, outInterface string) *UserNetworkService {
+func NewUserNetworkService(configDir, baseSubnet string, basePort int, outInterface string, mtu int) *UserNetworkService {
 	return &UserNetworkService{
 		netnsService:     NewNetnsService(),
 		wireguardService: NewWireguardService(configDir),
 		baseSubnet:       baseSubnet,
 		basePort:         basePort,
 		outInterface:     outInterface,
+		mtu:              mtu,
 	}
 }
 
@@ -194,6 +197,13 @@ func (s *UserNetworkService) createNetwork(nsName, wgInterface, userUID, private
 	}
 
 	if err := s.netnsService.AddAddressInNamespace(nsName, wgInterface, wgIP); err != nil {
+		rollback()
+		return err
+	}
+
+	// 在拉起接口之前下发 MTU：接口 up 后再改会让已建立的会话经历一次瞬时中断；
+	// down 状态下设置则完全无感。mtu 为 0 时该调用不做任何改动。
+	if err := s.netnsService.SetLinkMTUInNamespace(nsName, wgInterface, s.mtu); err != nil {
 		rollback()
 		return err
 	}

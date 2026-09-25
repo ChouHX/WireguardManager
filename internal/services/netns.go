@@ -267,6 +267,84 @@ func (s *NetnsService) SetLinkUpInNamespace(nsName, link string) error {
 	return s.SetLinkStateInNamespace(nsName, link, true)
 }
 
+// SetLinkMTUInNamespace 设置命名空间内接口的 MTU。
+//
+// 为什么必须能改：隧道接口的内核默认 MTU（1420）是照着「底层链路 1500」定的。
+// 一旦本机所处链路的实际 MTU 更小（本机自身位于 IPIP/VXLAN/PPPoE 等通道之后
+// 是常见情形），加密封装后的报文就会超出链路容量——握手、探测这类小包照常通过，
+// 满长的数据包却发出即丢，用户看到的是「能连上、却传不动数据」（PMTU 黑洞）。
+// 内核不会因为底层链路 MTU 变小而自动回退隧道 MTU，因此必须显式下发。
+//
+// mtu <= 0 时不改动，沿用内核默认值。
+func (s *NetnsService) SetLinkMTUInNamespace(nsName, link string, mtu int) error {
+	if mtu <= 0 {
+		return nil
+	}
+
+	cmd := exec.Command("ip", "netns", "exec", nsName,
+		"ip", "link", "set", "dev", link, "mtu", strconv.Itoa(mtu))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to set mtu %d on %s in namespace %s: %v, output: %s",
+			mtu, link, nsName, err, string(output))
+	}
+	return nil
+}
+
+// TunnelMTUOverhead 是 WireGuard 封装在隧道载荷之外额外占用、且必须由底层链路
+// 承载的字节数：20 字节外层 IPv4 + 8 字节 UDP + 32 字节 WireGuard 头。
+const TunnelMTUOverhead = 60
+
+// DefaultTunnelMTU 是内核为新建 WireGuard 接口设定的默认 MTU。
+// 它对应「底层链路 1500」这一前提。
+const DefaultTunnelMTU = 1420
+
+// OutInterfaceMTU 读取宿主出口接口的 MTU；读取失败返回 0。
+//
+// 直接读 sysfs 而非调用 ip：无需 fork，且在容器内同样可用。
+func OutInterfaceMTU(name string) int {
+	if name == "" {
+		return 0
+	}
+	raw, err := os.ReadFile("/sys/class/net/" + name + "/mtu")
+	if err != nil {
+		return 0
+	}
+	value, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		return 0
+	}
+	return value
+}
+
+// CheckTunnelMTUFit 检查出口链路的 MTU 是否容得下隧道 MTU，并返回一条人类可读的
+// 不匹配说明；匹配或无判定依据时返回空串。
+//
+// 存在的意义：隧道 MTU 不匹配是「能连上、却传不动数据」这类故障的常见成因，
+// 但它完全静默——握手是小包，能通过；只有满长数据包会被悄悄丢弃。启动时主动
+// 比对一次，把这条最难自己发现的故障提前摆到日志里。
+func CheckTunnelMTUFit(outInterface string, tunnelMTU int) string {
+	outMTU := OutInterfaceMTU(outInterface)
+	if outMTU <= 0 {
+		return ""
+	}
+
+	if tunnelMTU <= 0 {
+		tunnelMTU = DefaultTunnelMTU
+	}
+
+	// 底层链路能承载的隧道载荷上限
+	capacity := outMTU - TunnelMTUOverhead
+	if capacity >= tunnelMTU {
+		return ""
+	}
+
+	return fmt.Sprintf(
+		"出口接口 %s 的 MTU 为 %d，最多只能承载 %d 字节的隧道载荷，小于隧道当前的 MTU %d。"+
+			"此时握手与探测（小包）正常，但满长数据包会被底层丢弃，表现为「能连上却传不动数据」。"+
+			"请把隧道 MTU 调整为 %d 或更小（管理界面「系统设置 → network.mtu」，或设 WM_NETWORK_MTU=%d）。",
+		outInterface, outMTU, capacity, tunnelMTU, capacity, capacity)
+}
+
 // SetLinkStateInNamespace 切换命名空间内隧道接口的启停状态。
 //
 // 这是「启用/禁用账号」的执行手段：把接口 down 会触发内核销毁该设备的加密

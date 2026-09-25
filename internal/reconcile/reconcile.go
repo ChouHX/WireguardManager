@@ -13,7 +13,9 @@
 package reconcile
 
 import (
+	"fmt"
 	"log"
+	"strings"
 
 	"cloud-platform/internal/config"
 	"cloud-platform/internal/database"
@@ -115,28 +117,62 @@ func networkReady(netnsService *services.NetnsService, server *models.WireguardS
 
 // restorePeers 重新下发全部 peer。
 // wg set 对已存在的 peer 是就地更新，因此该过程幂等，可安全重复执行。
+//
+// 单个 peer 失败不会中止其余 peer：这里的每个 peer 都对应一个真实设备，
+// 若一处数据异常就整体退出，该账号剩下的设备会一起失去 allowed-ips，
+// 表现为「只发不收」却没有任何明显线索。因此逐个尝试、最后汇总上报。
 func restorePeers(netnsService *services.NetnsService, wgService *services.WireguardService, server *models.WireguardServer, peers []models.WireguardPeer) error {
+	var failures []string
+
 	for i := range peers {
 		peer := peers[i]
 
-		// allowed-ips 同时承担 cryptokey routing 与内核自动路由，必须与服务端一致
-		if err := wgService.AddPeer(server.Namespace, server.WgInterface, peer.PublicKey, services.ServerAllowedIPs(&peer), ""); err != nil {
+		if err := restorePeer(netnsService, wgService, server, &peer); err != nil {
+			failures = append(failures, fmt.Sprintf("peer %s (addr=%q): %v", shortKey(peer.PublicKey), peer.PeerAddress, err))
+			continue
+		}
+	}
+
+	if len(failures) > 0 {
+		return fmt.Errorf("%d of %d peer(s) failed to restore: %s",
+			len(failures), len(peers), strings.Join(failures, "; "))
+	}
+	return nil
+}
+
+// restorePeer 下发单个 peer 的 allowed-ips、PSK 与下挂网段路由。
+func restorePeer(netnsService *services.NetnsService, wgService *services.WireguardService, server *models.WireguardServer, peer *models.WireguardPeer) error {
+	// PeerAddress 是服务端侧 allowed-ips 的基石。缺失时会拼出非法的 "/32"，
+	// 直接交给 wg set 只会得到一句难以定位的报错，这里提前给出明确原因。
+	if strings.TrimSpace(peer.PeerAddress) == "" {
+		return fmt.Errorf("peer has no tunnel address; its allowed-ips cannot be derived")
+	}
+
+	// allowed-ips 同时承担 cryptokey routing 与内核自动路由，必须与服务端一致
+	if err := wgService.AddPeer(server.Namespace, server.WgInterface, peer.PublicKey, services.ServerAllowedIPs(peer), ""); err != nil {
+		return err
+	}
+
+	if peer.PresharedKey != "" {
+		if err := wgService.SetPeerPresharedKey(server.Namespace, server.WgInterface, peer.PublicKey, peer.PresharedKey); err != nil {
 			return err
 		}
+	}
 
-		if peer.PresharedKey != "" {
-			if err := wgService.SetPeerPresharedKey(server.Namespace, server.WgInterface, peer.PublicKey, peer.PresharedKey); err != nil {
-				return err
-			}
-		}
-
-		// 声明了背后网段的设备补一条兜底路由（内核通常已自动生成）
-		if peer.AllowedIPs != "" && peer.AllowedIPs != peer.PeerAddress+"/32" && peer.AllowedIPs != "0.0.0.0/0" {
-			if err := netnsService.AddRouteForPeer(server.Namespace, server.WgInterface, peer.AllowedIPs); err != nil {
-				return err
-			}
+	// 声明了背后网段的设备补一条兜底路由（内核通常已自动生成）
+	if peer.AllowedIPs != "" && peer.AllowedIPs != peer.PeerAddress+"/32" && peer.AllowedIPs != "0.0.0.0/0" {
+		if err := netnsService.AddRouteForPeer(server.Namespace, server.WgInterface, peer.AllowedIPs); err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+// shortKey 截断公钥用于日志，保留可辨识的前缀。
+func shortKey(key string) string {
+	if len(key) <= 12 {
+		return key
+	}
+	return key[:12] + "..."
 }

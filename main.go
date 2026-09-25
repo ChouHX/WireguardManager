@@ -60,6 +60,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// 隧道 MTU 自检：这类不匹配完全静默（小包能过、满长包被丢），
+	// 只有在启动时主动比对一次，才可能提前发现。
+	warnIfTunnelMTUMismatch()
+
 	monitoringCfg := config.AppConfig.Monitoring
 
 	// 后台指标采集：所有监控接口读内存快照，不再在请求内阻塞采样
@@ -216,6 +220,25 @@ func main() {
 	}
 
 	log.Println("Server stopped")
+}
+
+// warnIfTunnelMTUMismatch 在启动时比对出口链路 MTU 与隧道 MTU，不匹配则告警。
+//
+// 这类故障的症状是「隧道能建立，却传不动数据」，而且不会产生任何错误日志：
+// 握手与探测都是小包，能顺利通过；只有满长的数据包被底层静默丢弃。
+// 正因为静默，它常被误判成服务端问题——这里主动比对一次，把它摆到日志里。
+func warnIfTunnelMTUMismatch() {
+	settings := services.GetSettings()
+	if settings == nil {
+		return
+	}
+
+	outInterface := settings.String(services.SettingNetworkOutInterface, config.AppConfig.Network.OutInterface)
+	tunnelMTU := settings.Int(services.SettingNetworkMTU, config.AppConfig.Network.MTU)
+
+	if advice := services.CheckTunnelMTUFit(outInterface, tunnelMTU); advice != "" {
+		log.Printf("WARNING: %s", advice)
+	}
 }
 
 // setupTrustedProxies 配置 Gin 的可信反向代理。

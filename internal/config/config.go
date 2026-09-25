@@ -103,6 +103,17 @@ type NetworkConfig struct {
 	// 但明文包在命名空间内查不到下一跳，访问不了公网。要保持原有转发语义需另行
 	// 提供出口通路。
 	ClientAllowedIPs string `yaml:"client_allowed_ips"`
+
+	// MTU 隧道接口的 MTU。0 表示不显式设置，沿用内核默认值（当前内核为 1420）。
+	//
+	// 需要设置它的场合：本机所处链路的 MTU 小于约 1480。此时默认的 1420
+	// 会让加密封装后的报文超出链路容量——小包（握手、探测）能过，满长的数据包
+	// 一发出就被丢弃，表现为「能连上却传不动数据」，也就是 PMTU 黑洞。
+	// 常见于本机自身位于 IPIP / VXLAN / PPPoE 等通道之后的场景。
+	//
+	// 取值经验：链路 MTU 减去 60（20 字节 IP + 8 字节 UDP + 32 字节 WireGuard）。
+	// 例如链路 1300 则填 1240，链路 1492 则填 1432。
+	MTU int `yaml:"mtu"`
 }
 
 type MonitoringConfig struct {
@@ -178,6 +189,8 @@ func defaultConfig() *Config {
 			OutInterface: "eth0",
 			ServerIP:     "",
 			DNS:          "1.1.1.1, 8.8.8.8",
+			// 0 = 不显式设置接口 MTU，沿用内核默认，保持既有部署行为不变
+			MTU: 0,
 		},
 		Monitoring: MonitoringConfig{
 			IntervalSeconds:      10,
@@ -384,6 +397,7 @@ func applyEnvOverrides(c *Config) {
 	setString(&c.Network.ServerIP, "WM_NETWORK_SERVER_IP")
 	setString(&c.Network.DNS, "WM_NETWORK_DNS")
 	setString(&c.Network.ClientAllowedIPs, "WM_NETWORK_CLIENT_ALLOWED_IPS")
+	setInt(&c.Network.MTU, "WM_NETWORK_MTU")
 
 	setInt(&c.Monitoring.IntervalSeconds, "WM_MONITORING_INTERVAL_SECONDS")
 	setInt(&c.Monitoring.RetentionHours, "WM_MONITORING_RETENTION_HOURS")
@@ -502,6 +516,12 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(c.Network.DNS) == "" {
 		problems = append(problems, "network.dns must not be empty")
+	}
+	// MTU 0 表示「不干预」，其余取值必须落在 IPv4 允许的最小值之上，
+	// 否则会下发出接口无法承载的值。
+	if c.Network.MTU != 0 && (c.Network.MTU < 576 || c.Network.MTU > 65535) {
+		problems = append(problems,
+			fmt.Sprintf("network.mtu must be 0 (leave untouched) or within 576..65535, got %d", c.Network.MTU))
 	}
 	if v := strings.TrimSpace(c.Network.ClientAllowedIPs); v != "" {
 		for _, item := range strings.Split(v, ",") {

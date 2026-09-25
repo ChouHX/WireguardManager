@@ -361,6 +361,7 @@
     "basePort": "Base port",
     "dns": "Client DNS",
     "clientAllowedIps": "Client AllowedIPs",
+    "mtu": "Tunnel MTU",
     "monitoringInterval": "Sample interval (s)",
     "monitoringRetention": "Retention (hours)",
     "jwtExpireHours": "Token lifetime (hours)",

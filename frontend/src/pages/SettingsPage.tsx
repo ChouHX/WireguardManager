@@ -34,6 +34,7 @@ const LABEL_KEY: Record<string, string> = {
   'network.base_port': 'basePort',
   'network.dns': 'dns',
   'network.client_allowed_ips': 'clientAllowedIps',
+  'network.mtu': 'mtu',
   'monitoring.interval_seconds': 'monitoringInterval',
   'monitoring.retention_hours': 'monitoringRetention',
   'liveness.probe_port': 'livenessProbePort',

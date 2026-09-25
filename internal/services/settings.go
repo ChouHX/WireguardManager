@@ -22,6 +22,7 @@ const (
 	SettingNetworkBasePort         = "network.base_port"
 	SettingNetworkDNS              = "network.dns"
 	SettingNetworkClientAllowedIPs = "network.client_allowed_ips"
+	SettingNetworkMTU              = "network.mtu"
 
 	SettingMonitoringInterval  = "monitoring.interval_seconds"
 	SettingMonitoringRetention = "monitoring.retention_hours"
@@ -63,6 +64,7 @@ var SettingDefs = []SettingDef{
 	{Key: SettingNetworkBasePort, Type: "int", Group: "network", Min: 1, Max: 65535},
 	{Key: SettingNetworkDNS, Type: "string", Group: "network"},
 	{Key: SettingNetworkClientAllowedIPs, Type: "string", Group: "network"},
+	{Key: SettingNetworkMTU, Type: "int", Group: "network", Min: 0, Max: 65535},
 
 	{Key: SettingMonitoringInterval, Type: "int", Group: "monitoring", Min: 1, Max: 3600},
 	{Key: SettingMonitoringRetention, Type: "int", Group: "monitoring", Min: 1, Max: 8760},
