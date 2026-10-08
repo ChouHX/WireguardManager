@@ -10,6 +10,7 @@
   "dependencies": {
     "@mantine/core": "^8.3.18",
     "@mantine/hooks": "^8.3.18",
+    "@mantine/notifications": "^8.3.18",
     "@tabler/icons-react": "^3.47.0",
     "react": "19.3.0",
     "react-dom": "19.3.0"

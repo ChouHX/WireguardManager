@@ -101,6 +101,18 @@ func build(archive, serverURL string) error {
 		return err
 	}
 	rs := winres.ResourceSet{}
+	iconBytes, err := os.ReadFile("build/windows/icon.ico")
+	if err != nil {
+		return err
+	}
+	icon, err := winres.LoadICO(bytes.NewReader(iconBytes))
+	if err != nil {
+		return err
+	}
+	// Wails loads its window/taskbar icon from group resource ID 3.
+	if err = rs.SetIcon(winres.ID(3), icon); err != nil {
+		return err
+	}
 	if err = rs.Set(winres.RT_RCDATA, driverResourceName, winres.LCIDNeutral, files["driver"]); err != nil {
 		return err
 	}
@@ -132,7 +144,7 @@ func build(archive, serverURL string) error {
 	if err = cmd.Run(); err != nil {
 		return err
 	}
-	if err = verify(exe, manifest, files["driver"]); err != nil {
+	if err = verify(exe, manifest, files["driver"], icon); err != nil {
 		return err
 	}
 	if err = os.WriteFile(filepath.Join(out, "WireGuardNT-LICENSE.txt"), files["license"], 0644); err != nil {
@@ -174,7 +186,7 @@ func build(archive, serverURL string) error {
 	fmt.Println("Created", archivePath)
 	return nil
 }
-func verify(exe string, manifest, driver []byte) error {
+func verify(exe string, manifest, driver []byte, expectedIcon *winres.Icon) error {
 	f, err := os.Open(exe)
 	if err != nil {
 		return err
@@ -189,6 +201,20 @@ func verify(exe string, manifest, driver []byte) error {
 	}
 	if !bytes.Equal(rs.Get(winres.RT_MANIFEST, winres.ID(1), winres.LCIDDefault), manifest) {
 		return errors.New("administrator manifest verification failed")
+	}
+	icon, err := rs.GetIcon(winres.ID(3))
+	if err != nil {
+		return fmt.Errorf("application icon missing: %w", err)
+	}
+	var actual, expected bytes.Buffer
+	if err = icon.SaveICO(&actual); err != nil {
+		return err
+	}
+	if err = expectedIcon.SaveICO(&expected); err != nil {
+		return err
+	}
+	if !bytes.Equal(actual.Bytes(), expected.Bytes()) {
+		return errors.New("application icon verification failed")
 	}
 	return nil
 }

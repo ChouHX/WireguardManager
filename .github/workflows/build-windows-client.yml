@@ -65,6 +65,19 @@ jobs:
           if (-not $check.apiCallable -or $check.resourceBytes -le 0) { throw 'Embedded driver is not callable' }
           $expectedServer = $env:WGM_SERVER_URL.Trim().TrimEnd('/') -creplace '/api$', ''
           if ($check.serverURL -ne $expectedServer) { throw 'Embedded management server URL does not match build configuration' }
+      - name: Verify packaged application icon and native tray lifecycle
+        working-directory: client
+        run: |
+          $report = Join-Path $env:RUNNER_TEMP 'wgm-shell-check.json'
+          $process = Start-Process -FilePath '.\build\bin\WireguardManagerDesktop.exe' -ArgumentList @('--check-shell', $report) -PassThru
+          if (-not $process.WaitForExit(30000)) {
+            Stop-Process -Id $process.Id -Force
+            throw 'Packaged shell self-check timed out'
+          }
+          if (-not (Test-Path $report)) { throw 'Shell self-check did not create a report' }
+          Get-Content $report
+          $check = Get-Content $report -Raw | ConvertFrom-Json
+          if ($process.ExitCode -ne 0 -or -not $check.iconLoaded -or -not $check.trayReady -or -not $check.trayStopped) { throw 'Packaged icon or tray lifecycle check failed' }
       - uses: actions/upload-artifact@v7
         with:
           name: WireguardManagerDesktop-windows-amd64

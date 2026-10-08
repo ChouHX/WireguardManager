@@ -23,12 +23,15 @@ type NetworkDetails struct {
 }
 type networkSession interface{ NetworkDetails() NetworkDetails }
 type Counters struct {
-	Rx        uint64
-	Tx        uint64
-	Handshake time.Time
-	LatencyMS float64
+	ListenPort uint16
+	Endpoint   string
+	Rx         uint64
+	Tx         uint64
+	Handshake  time.Time
+	LatencyMS  float64
 }
 type Status struct {
+	Details   *TunnelDetails `json:"details,omitempty"`
 	Network   NetworkDetails `json:"network"`
 	ProfileID string         `json:"profileID"`
 	State     string         `json:"state"`
@@ -58,6 +61,7 @@ type Manager struct {
 	previous Counters
 	sampled  time.Time
 	fault    string
+	details  *TunnelDetails
 }
 
 func NewManager(b Backend) *Manager { return &Manager{backend: b} }
@@ -74,6 +78,7 @@ func (m *Manager) Connect(ctx context.Context, p Profile) error {
 	m.session = session
 	if session != nil {
 		m.active = p.ID
+		m.details = publicDetails(p)
 	}
 	if err != nil {
 		m.fault = err.Error()
@@ -100,6 +105,7 @@ func (m *Manager) disconnect() error {
 	}
 	m.session = nil
 	m.active = ""
+	m.details = nil
 	m.sampled = time.Time{}
 	m.previous = Counters{}
 	m.fault = ""
@@ -110,6 +116,10 @@ func (m *Manager) Status(ctx context.Context) Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	status := Status{State: "disconnected", LatencyMS: -1, Error: m.fault, ProfileID: m.active}
+	if m.details != nil {
+		detail := *m.details
+		status.Details = &detail
+	}
 	if m.session == nil {
 		return status
 	}
@@ -128,6 +138,12 @@ func (m *Manager) Status(ctx context.Context) Status {
 		return status
 	}
 	now := time.Now()
+	if status.Details != nil {
+		status.Details.ListenPort = c.ListenPort
+		if c.Endpoint != "" {
+			status.Details.Endpoint = c.Endpoint
+		}
+	}
 	status.RxBytes = c.Rx
 	status.TxBytes = c.Tx
 	status.LatencyMS = c.LatencyMS

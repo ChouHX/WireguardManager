@@ -16,7 +16,7 @@ import {
   ScrollArea,
   Stack,
   Text,
-  Textarea,
+  Tabs,
   TextInput,
   ThemeIcon,
   Title,
@@ -39,6 +39,9 @@ import {
   IconSearch,
   IconWand,
 } from "@tabler/icons-react";
+import { notifications } from "@mantine/notifications";
+import { AddressInput, addressDraft } from "./AddressInput";
+import { TunnelOverview } from "./TunnelOverview";
 import { WireGuardLogo } from "./WireGuardLogo";
 import {
   api,
@@ -137,6 +140,8 @@ export default function App() {
     [remember, setRemember] = useState(true),
     [detection, setDetection] = useState<Detection | null>(null),
     [history, setHistory] = useState<Status[]>([]);
+  const [lanSearch, setLANSearch] = useState(""),
+    [targetSearch, setTargetSearch] = useState("");
   const activeID = useRef("");
   const selectedRef = useRef("");
   const device = state.devices.find((d) => d.id === selected);
@@ -148,6 +153,8 @@ export default function App() {
     selectedRef.current = id;
     setSelected(id);
     setLANs(d?.lans ?? "");
+    setLANSearch("");
+    setTargetSearch("");
     setTargets(d?.targets ?? "");
     setDetection(null);
     setNotice("");
@@ -223,6 +230,28 @@ export default function App() {
       clearTimeout(timer);
     };
   }, []);
+  useEffect(() => {
+    if (notice && state.user)
+      notifications.show({
+        id: "operation-notice",
+        title: "操作完成",
+        message: notice,
+        color: "teal",
+        autoClose: 4500,
+      });
+  }, [notice]);
+  useEffect(() => {
+    const offError = window.runtime?.EventsOn("desktop:error", (message) =>
+      setError(message),
+    );
+    const offNotice = window.runtime?.EventsOn("desktop:notice", (message) =>
+      setNotice(message),
+    );
+    return () => {
+      offError?.();
+      offNotice?.();
+    };
+  }, []);
   const refresh = () =>
     void run(async () => {
       const next = await api().Refresh();
@@ -231,7 +260,11 @@ export default function App() {
     });
   const connect = () =>
     void run(async () => {
-      const next = await api().Connect(selected, lans, targets);
+      const next = await api().Connect(
+        selected,
+        addressDraft(lans, lanSearch),
+        addressDraft(targets, targetSearch),
+      );
       apply(next, true);
     });
   const disconnect = () =>
@@ -241,7 +274,11 @@ export default function App() {
     });
   const save = () =>
     void run(async () => {
-      const next = await api().SaveDevice(selected, lans, targets);
+      const next = await api().SaveDevice(
+        selected,
+        addressDraft(lans, lanSearch),
+        addressDraft(targets, targetSearch),
+      );
       apply(next, true);
       setNotice(next.message);
     });
@@ -251,6 +288,7 @@ export default function App() {
       setDetection(result);
       if (result.suggestedLANs) {
         setLANs(result.suggestedLANs);
+        setLANSearch("");
         setNotice("已识别本机局域网，可按需改为具体下挂设备 IP");
       } else {
         setNotice("未检测到可用的物理局域网，请连接现场网络后重试");
@@ -543,16 +581,6 @@ export default function App() {
                 {status.error}
               </Alert>
             )}
-            {notice && (
-              <Alert
-                color="teal"
-                mb="md"
-                withCloseButton
-                onClose={() => setNotice("")}
-              >
-                {notice}
-              </Alert>
-            )}
             {status.network.warning && (
               <Alert
                 color="yellow"
@@ -607,144 +635,168 @@ export default function App() {
                 </Group>
                 <div className="detail-grid">
                   <Stack gap="sm">
-                    <Card className="settings-card">
-                      <Group justify="space-between" mb="sm">
-                        <Group gap={8}>
-                          <ThemeIcon variant="light" size={24}>
-                            <IconNetwork size={15} />
-                          </ThemeIcon>
-                          <Text fw={650} size="sm">
-                            网络设置
-                          </Text>
-                        </Group>
-                        <Badge color="teal" variant="light" size="sm">
-                          自动转发
-                        </Badge>
-                      </Group>
-                      <div className="field-section">
-                        <Group justify="space-between" mb={4}>
-                          <Text
-                            component="label"
-                            htmlFor="device-lans"
-                            size="xs"
-                            fw={600}
-                          >
-                            设备局域网
-                          </Text>
-                          <Badge size="xs" color="wg">
-                            同步云端
-                          </Badge>
-                        </Group>
-                        <Textarea
-                          id="device-lans"
-                          aria-describedby="device-lans-help"
-                          placeholder="例如 192.168.1.0/24 或 192.168.1.100"
-                          minRows={2}
-                          maxRows={3}
-                          size="xs"
-                          autosize
-                          value={lans}
-                          onChange={(e) => setLANs(e.currentTarget.value)}
-                          disabled={locked}
-                        />
-                        <Text id="device-lans-help" size="xs" c="dimmed" mt={5}>
-                          本设备后面的真实内网；保存或连接时同步，保留上方 WireGuard
-                          IP。仅访问远端可留空。
-                        </Text>
-                        <Group justify="space-between" mt={4}>
-                          <Text size="xs" c="dimmed">
-                            单个 IP 自动转为 /32
-                          </Text>
-                          <Button
-                            variant="subtle"
-                            size="compact-xs"
-                            leftSection={<IconWand size={14} />}
-                            onClick={detect}
-                            disabled={locked}
-                          >
-                            探测本机局域网
-                          </Button>
-                        </Group>
-                        {detection && (
-                          <Stack gap={5} mt="sm">
-                            {detection.adapters
-                              .filter((a) => a.autoEligible)
-                              .map((a) => (
-                                <Text key={a.id} size="xs" c="dimmed">
-                                  {a.name} · {a.addresses.join("、")}
-                                </Text>
-                              ))}
-                          </Stack>
-                        )}
-                      </div>
-                      <Divider my="sm" />
-                      <div className="field-section">
-                        <Group justify="space-between" mb={4}>
-                          <Text
-                            component="label"
-                            htmlFor="local-targets"
-                            size="xs"
-                            fw={600}
-                          >
-                            本机访问目标
-                          </Text>
-                          <Badge size="xs" color="gray">
-                            仅本机
-                          </Badge>
-                        </Group>
-                        <Textarea
-                          id="local-targets"
-                          aria-describedby="local-targets-help"
-                          placeholder={device.autoTargets || "192.168.0.100"}
-                          minRows={2}
-                          maxRows={3}
-                          size="xs"
-                          autosize
-                          value={targets}
-                          onChange={(e) => setTargets(e.currentTarget.value)}
-                          disabled={locked}
-                        />
-                        <Text
-                          id="local-targets-help"
-                          size="xs"
-                          c="dimmed"
-                          mt={5}
+                    <Tabs defaultValue="overview" keepMounted={false}>
+                      <Tabs.List mb="sm">
+                        <Tabs.Tab
+                          value="overview"
+                          leftSection={<IconInfoCircle size={14} />}
                         >
-                          要访问的远端 IP /
-                          网段，不修改云端。留空使用同账号其他设备的局域网；与本机网段重叠时填写具体
-                          IP。
-                        </Text>
-                        <Text
-                          size="xs"
-                          c="dimmed"
-                          mt={4}
-                          className="network-prefixes"
+                          隧道详情
+                        </Tabs.Tab>
+                        <Tabs.Tab
+                          value="network"
+                          leftSection={<IconNetwork size={14} />}
                         >
-                          自动目标：
-                          {device.autoTargets || "仅 WireGuard 内设备"}
-                        </Text>
-                      </div>
-                      <Group
-                        mt="sm"
-                        pt="sm"
-                        justify="space-between"
-                        className="settings-footer"
-                      >
-                        <Text size="xs" c="dimmed">
-                          {connectedHere
-                            ? "断开后可编辑"
-                            : "连接时会保存当前设置"}
-                        </Text>
-                        <Button
-                          variant="light"
-                          size="xs"
-                          disabled={locked}
-                          onClick={save}
-                        >
-                          保存设置
-                        </Button>
-                      </Group>
-                    </Card>
+                          网络设置
+                        </Tabs.Tab>
+                      </Tabs.List>
+                      <Tabs.Panel value="overview">
+                        <TunnelOverview device={device} status={status} />
+                      </Tabs.Panel>
+                      <Tabs.Panel value="network">
+                        <Card className="settings-card">
+                          <Group justify="space-between" mb="sm">
+                            <Group gap={8}>
+                              <ThemeIcon variant="light" size={24}>
+                                <IconNetwork size={15} />
+                              </ThemeIcon>
+                              <Text fw={650} size="sm">
+                                网络设置
+                              </Text>
+                            </Group>
+                            <Badge color="teal" variant="light" size="sm">
+                              自动转发
+                            </Badge>
+                          </Group>
+                          <div className="field-section">
+                            <Group justify="space-between" mb={4}>
+                              <Text
+                                component="label"
+                                htmlFor="device-lans"
+                                size="xs"
+                                fw={600}
+                              >
+                                设备局域网
+                              </Text>
+                              <Badge size="xs" color="wg">
+                                同步云端
+                              </Badge>
+                            </Group>
+                            <AddressInput
+                              id="device-lans"
+                              descriptionID="device-lans-help"
+                              placeholder="例如 192.168.1.0/24 或 192.168.1.100"
+                              value={lans}
+                              onChange={setLANs}
+                              search={lanSearch}
+                              onSearchChange={setLANSearch}
+                              disabled={locked}
+                            />
+                            <Text
+                              id="device-lans-help"
+                              size="xs"
+                              c="dimmed"
+                              mt={5}
+                            >
+                              本设备后面的真实内网；保存或连接时同步，保留上方
+                              WireGuard IP。仅访问远端可留空。
+                            </Text>
+                            <Group justify="space-between" mt={4}>
+                              <Text size="xs" c="dimmed">
+                                回车添加 · 单个 IP 自动转为 /32
+                              </Text>
+                              <Button
+                                variant="subtle"
+                                size="compact-xs"
+                                leftSection={<IconWand size={14} />}
+                                onClick={detect}
+                                disabled={locked}
+                              >
+                                探测本机局域网
+                              </Button>
+                            </Group>
+                            {detection && (
+                              <Stack gap={5} mt="sm">
+                                {detection.adapters
+                                  .filter((a) => a.autoEligible)
+                                  .map((a) => (
+                                    <Text key={a.id} size="xs" c="dimmed">
+                                      {a.name} · {a.addresses.join("、")}
+                                    </Text>
+                                  ))}
+                              </Stack>
+                            )}
+                          </div>
+                          <Divider my="sm" />
+                          <div className="field-section">
+                            <Group justify="space-between" mb={4}>
+                              <Text
+                                component="label"
+                                htmlFor="local-targets"
+                                size="xs"
+                                fw={600}
+                              >
+                                本机访问目标
+                              </Text>
+                              <Badge size="xs" color="gray">
+                                仅本机
+                              </Badge>
+                            </Group>
+                            <AddressInput
+                              id="local-targets"
+                              descriptionID="local-targets-help"
+                              placeholder={
+                                device.autoTargets || "192.168.0.100"
+                              }
+                              value={targets}
+                              onChange={setTargets}
+                              search={targetSearch}
+                              onSearchChange={setTargetSearch}
+                              disabled={locked}
+                            />
+                            <Text
+                              id="local-targets-help"
+                              size="xs"
+                              c="dimmed"
+                              mt={5}
+                            >
+                              要访问的远端 IP /
+                              网段，不修改云端。留空使用同账号其他设备的局域网；与本机网段重叠时填写具体
+                              IP。
+                            </Text>
+                            <Text
+                              size="xs"
+                              c="dimmed"
+                              mt={4}
+                              className="network-prefixes"
+                            >
+                              自动目标：
+                              {device.autoTargets || "仅 WireGuard 内设备"}
+                            </Text>
+                          </div>
+                          <Group
+                            mt="sm"
+                            pt="sm"
+                            justify="space-between"
+                            className="settings-footer"
+                          >
+                            <Text size="xs" c="dimmed">
+                              {connectedHere
+                                ? "断开后可编辑"
+                                : "连接时会保存当前设置"}
+                            </Text>
+                            <Button
+                              variant="light"
+                              size="xs"
+                              disabled={locked}
+                              onClick={save}
+                            >
+                              保存设置
+                            </Button>
+                          </Group>
+                        </Card>
+                      </Tabs.Panel>
+                    </Tabs>
                     <Text size="xs" c="dimmed">
                       自动探测网卡并配置转发，断开后恢复网络。每台电脑使用独立设备配置。
                     </Text>
@@ -900,9 +952,28 @@ export default function App() {
           </div>
         </ScrollArea>
         <footer className="detail-footer">
-          <Text fz={10.5} c="dimmed">
-            配置来自云端 · 关闭窗口自动断开连接
-          </Text>
+          <Group justify="space-between">
+            <Text fz={10.5} c="dimmed">
+              关闭窗口后保留连接 · 双击托盘图标恢复窗口
+            </Text>
+            <Button
+              size="compact-xs"
+              variant="subtle"
+              color="gray"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                void api()
+                  .Quit()
+                  .catch((e) => {
+                    setBusy(false);
+                    setError(String(e));
+                  });
+              }}
+            >
+              退出程序
+            </Button>
+          </Group>
         </footer>
       </section>
     </main>

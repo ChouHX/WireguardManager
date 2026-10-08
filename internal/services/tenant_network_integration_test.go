@@ -151,6 +151,15 @@ func TestMultiInterfaceIntegration(t *testing.T) {
 		if got := fetch(id); got != fmt.Sprintf("tenant%d", id) {
 			t.Fatalf("tenant %d reached wrong LAN: %s", id, got)
 		}
+		run("ip", "netns", "exec", fmt.Sprintf("fixture-client-%d", id), "ping", "-c", "1", "-W", "2", fmt.Sprintf("10.100.%d.1", id))
+		// Ordinary host applications do not bind a source address or interface.
+		// They must still find the uniquely allocated client tunnel address.
+		target := fmt.Sprintf("10.100.%d.3", id)
+		localRoute := run("ip", "-4", "route", "get", target)
+		if !strings.Contains(localRoute, "dev "+TenantInterface(id)) {
+			t.Fatalf("unbound server traffic misses tenant: %s", localRoute)
+		}
+		run("ping", "-c", "1", "-W", "2", target)
 		route := run("ip", "-4", "route", "get", "192.168.0.100", "from", fmt.Sprintf("10.100.%d.3", id), "iif", TenantInterface(id))
 		if !strings.Contains(route, "dev "+TenantInterface(id)) || !strings.Contains(route, fmt.Sprintf("table %d", 20000+id)) {
 			t.Fatalf("wrong route: %s", route)

@@ -361,7 +361,7 @@ func (s *windowsSession) Sample(ctx context.Context) (Counters, error) {
 		return Counters{}, errors.New("隧道 Peer 状态异常")
 	}
 	peer := config.FirstPeer()
-	c := Counters{Rx: peer.RxBytes, Tx: peer.TxBytes, LatencyMS: -1}
+	c := Counters{Rx: peer.RxBytes, Tx: peer.TxBytes, LatencyMS: -1, ListenPort: config.ListenPort, Endpoint: peer.Endpoint.AddrPort().String()}
 	if peer.LastHandshake != 0 {
 		// FILETIME is in 100 ns ticks from 1601-01-01.
 		ticks := peer.LastHandshake - 116444736000000000

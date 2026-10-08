@@ -4,6 +4,7 @@ export interface User {
   email: string;
 }
 export interface Device {
+  publicKey?: string;
   id: string;
   name: string;
   address: string;
@@ -35,6 +36,16 @@ export interface Network {
   warning: string;
 }
 export interface Status {
+  details?: {
+    address: string;
+    publicKey: string;
+    peerPublicKey: string;
+    endpoint: string;
+    allowedIPs: string;
+    listenPort: number;
+    mtu: number;
+    keepalive: number;
+  };
   profileID: string;
   state: string;
   rxBytes: number;
@@ -57,9 +68,16 @@ interface API {
   Connect(id: string, lans: string, targets: string): Promise<Desktop>;
   Disconnect(): Promise<void>;
   Status(): Promise<Status>;
+  Quit(): Promise<void>;
 }
 declare global {
   interface Window {
+    runtime?: {
+      EventsOn: (
+        event: string,
+        callback: (...args: string[]) => void,
+      ) => () => void;
+    };
     go?: { main: { App: API } };
   }
 }

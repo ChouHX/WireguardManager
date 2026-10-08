@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"wireguardmanager/client/cloud"
@@ -16,9 +17,13 @@ import (
 
 type App struct {
 	mu           sync.RWMutex
+	operations   sync.Mutex
 	ctx          context.Context
 	desktop      *service.Desktop
 	startupError error
+	tray         *systemTray
+	exiting      atomic.Bool
+	quitPending  atomic.Bool
 }
 
 func newApp() *App { return &App{} }
@@ -52,6 +57,9 @@ func (a *App) startup(ctx context.Context) {
 func (a *App) ready() error {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
+	if a.quitPending.Load() {
+		return errors.New("客户端正在退出")
+	}
 	if a.startupError != nil {
 		return a.startupError
 	}
@@ -60,20 +68,81 @@ func (a *App) ready() error {
 	}
 	return nil
 }
-func (a *App) beforeClose(ctx context.Context) bool {
+func (a *App) domReady(ctx context.Context) {
+	a.mu.Lock()
+	if a.tray != nil {
+		a.mu.Unlock()
+		return
+	}
+	a.tray = startSystemTray(trayActions{
+		Show: a.showWindow,
+		Disconnect: func() {
+			if err := a.Disconnect(); err != nil {
+				a.notifyError(err)
+				return
+			}
+			wailsruntime.EventsEmit(ctx, "desktop:notice", "连接已断开，网络设置已恢复")
+		},
+		Quit: func() {
+			if err := a.Quit(); err != nil {
+				a.notifyError(err)
+			}
+		},
+	})
+	a.mu.Unlock()
+}
+func (a *App) showWindow() {
+	wailsruntime.WindowShow(a.ctx)
+	wailsruntime.WindowUnminimise(a.ctx)
+}
+func (a *App) notifyError(err error) {
+	a.showWindow()
+	wailsruntime.EventsEmit(a.ctx, "desktop:error", err.Error())
+}
+
+// Quit is the explicit exit action. A normal window close keeps the tunnel alive.
+func (a *App) Quit() error {
+	if !a.quitPending.CompareAndSwap(false, true) {
+		return nil
+	}
+	a.operations.Lock()
+	defer a.operations.Unlock()
 	a.mu.RLock()
-	defer a.mu.RUnlock()
-	if a.desktop != nil {
-		if err := a.desktop.Disconnect(); err != nil {
-			wailsruntime.MessageDialog(ctx, wailsruntime.MessageDialogOptions{Type: wailsruntime.ErrorDialog, Title: "网络恢复未完成", Message: "请保持原网卡启用后再次关闭。\n" + err.Error()})
-			return true
+	desktop := a.desktop
+	a.mu.RUnlock()
+	if desktop != nil {
+		if err := desktop.Disconnect(); err != nil {
+			a.quitPending.Store(false)
+			return err
 		}
 	}
-	return false
+	a.exiting.Store(true)
+	wailsruntime.Quit(a.ctx)
+	return nil
+}
+func (a *App) beforeClose(ctx context.Context) bool {
+	if a.exiting.Load() {
+		return false
+	}
+	a.mu.RLock()
+	available := a.tray.available()
+	a.mu.RUnlock()
+	if available {
+		wailsruntime.WindowHide(ctx)
+		return true
+	}
+	// Never hide an inaccessible app when tray creation failed.
+	go func() {
+		if err := a.Quit(); err != nil {
+			a.notifyError(err)
+		}
+	}()
+	return true
 }
 func (a *App) shutdown(context.Context) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
+	a.tray.stop()
 	if a.desktop != nil {
 		_ = a.desktop.Disconnect()
 	}
@@ -85,12 +154,16 @@ func (a *App) Bootstrap() (service.DesktopView, error) {
 	return a.desktop.Bootstrap(a.ctx)
 }
 func (a *App) Login(email, password string, remember bool) (service.DesktopView, error) {
+	a.operations.Lock()
+	defer a.operations.Unlock()
 	if err := a.ready(); err != nil {
 		return service.DesktopView{}, err
 	}
 	return a.desktop.Login(a.ctx, email, password, remember)
 }
 func (a *App) Logout() (service.DesktopView, error) {
+	a.operations.Lock()
+	defer a.operations.Unlock()
 	if err := a.ready(); err != nil {
 		return service.DesktopView{}, err
 	}
@@ -115,18 +188,24 @@ func (a *App) DetectLANs() (service.LANDetection, error) {
 	return a.desktop.DetectLANs()
 }
 func (a *App) SaveDevice(id, lans, targets string) (service.DesktopView, error) {
+	a.operations.Lock()
+	defer a.operations.Unlock()
 	if err := a.ready(); err != nil {
 		return service.DesktopView{}, err
 	}
 	return a.desktop.SaveDevice(a.ctx, id, lans, targets)
 }
 func (a *App) Connect(id, lans, targets string) (service.DesktopView, error) {
+	a.operations.Lock()
+	defer a.operations.Unlock()
 	if err := a.ready(); err != nil {
 		return service.DesktopView{}, err
 	}
 	return a.desktop.Connect(a.ctx, id, lans, targets)
 }
 func (a *App) Disconnect() error {
+	a.operations.Lock()
+	defer a.operations.Unlock()
 	if err := a.ready(); err != nil {
 		return err
 	}

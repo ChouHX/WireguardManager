@@ -326,3 +326,9 @@ textarea {
     display: none;
   }
 }
+
+.address-input .mantine-TagsInput-input { min-height: 54px; align-items: flex-start; }
+.address-input .mantine-Pill-label { font-family: var(--mantine-font-family-monospace); font-size: 11px; }
+.info-label { width: 84px; color: var(--mantine-color-dimmed); font-size: 12px; white-space: nowrap; }
+.info-value { overflow-wrap: anywhere; font-family: var(--mantine-font-family-monospace); flex: 1; min-width: 0; }
+.tunnel-overview .mantine-ActionIcon-root { flex-shrink: 0; }

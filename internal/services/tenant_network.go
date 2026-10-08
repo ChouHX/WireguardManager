@@ -13,7 +13,7 @@ import (
 const NetworkModeMultiInterface = "multi-interface"
 
 // wgm1..wgm254 and tables 20001..20254 are reserved for this application.
-// Only iif/oif rules select these tables; tenant LAN routes never enter main.
+// Policy rules select these tables; tenant LAN routes never enter main.
 func TenantInterface(subnetID int) string { return fmt.Sprintf("wgm%d", subnetID) }
 
 func TenantTable(link string) (int, error) {
@@ -212,8 +212,10 @@ func (s *InterfaceService) ConfigureRouting(link, address string) error {
 		}
 	}
 	// iif isolates forwarded traffic; oif selects bound probe sockets; the
-	// server-source rule also routes local replies and reverse-path checks.
-	for offset, selector := range [][]string{{"iif", link}, {"oif", link}, {"from", prefix.Addr().String() + "/32"}} {
+	// server-source rule also routes local replies and reverse-path checks. A
+	// loopback-iif destination rule handles unbound host applications before they
+	// have a source address; only the unique tunnel subnet is eligible, never LANs.
+	for offset, selector := range tenantPolicySelectors(link, prefix) {
 		priority := table - 10000 + offset*1000
 		args := append([]string{"priority", strconv.Itoa(priority)}, selector...)
 		args = append(args, "lookup", strconv.Itoa(table))
@@ -229,6 +231,15 @@ func (s *InterfaceService) ConfigureRouting(link, address string) error {
 	}
 
 	return nil
+}
+
+func tenantPolicySelectors(link string, prefix netip.Prefix) [][]string {
+	return [][]string{
+		{"iif", link},
+		{"oif", link},
+		{"from", prefix.Addr().String() + "/32"},
+		{"iif", "lo", "to", prefix.Masked().String()},
+	}
 }
 
 // PeerRoutes rejects unsupported families and canonicalizes routes before any
@@ -324,7 +335,7 @@ func (s *InterfaceService) Destroy(link, address string) error {
 	if err := s.DeleteLinkInHost(link); err != nil {
 		return err
 	}
-	for offset, selector := range [][]string{{"iif", link}, {"oif", link}, {"from", prefix.Addr().String() + "/32"}} {
+	for offset, selector := range tenantPolicySelectors(link, prefix) {
 		priority := table - 10000 + offset*1000
 		args := append([]string{"-4", "rule", "del", "priority", strconv.Itoa(priority)}, selector...)
 		args = append(args, "lookup", strconv.Itoa(table))

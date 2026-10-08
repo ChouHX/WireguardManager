@@ -31,6 +31,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "--check-driver" {
 		os.Exit(checkDriverCommand(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "--check-shell" {
+		os.Exit(checkShellCommand(os.Args[2:]))
+	}
 	release, err := service.AcquireInstance()
 	if err != nil {
 		showError(err)
@@ -43,7 +46,8 @@ func main() {
 		AssetServer:      &assetserver.Options{Assets: assets},
 		BackgroundColour: &options.RGBA{R: 246, G: 248, B: 250, A: 255},
 		OnStartup:        app.startup, OnBeforeClose: app.beforeClose, OnShutdown: app.shutdown, Bind: []interface{}{app},
-		Windows: &windows.Options{WebviewIsTransparent: false, WindowIsTranslucent: false},
+		OnDomReady: app.domReady,
+		Windows:    &windows.Options{WebviewIsTransparent: false, WindowIsTranslucent: false},
 	})
 	if err != nil {
 		showError(err)

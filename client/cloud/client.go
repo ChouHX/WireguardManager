@@ -38,10 +38,11 @@ type User struct {
 
 // Deliberately omit the peer private_key field returned by older server versions.
 type Device struct {
-	ID      uint   `json:"id"`
-	Name    string `json:"comment"`
-	Address string `json:"peer_address"`
-	LANs    string `json:"device_lan"`
+	ID        uint   `json:"id"`
+	Name      string `json:"comment"`
+	Address   string `json:"peer_address"`
+	PublicKey string `json:"public_key"`
+	LANs      string `json:"device_lan"`
 }
 
 // Current servers expose editable LANs separately from full AllowedIPs. Older
@@ -52,13 +53,14 @@ func (d *Device) UnmarshalJSON(raw []byte) error {
 		ID         uint    `json:"id"`
 		Name       string  `json:"comment"`
 		Address    string  `json:"peer_address"`
+		PublicKey  string  `json:"public_key"`
 		AllowedIPs string  `json:"allowed_ips"`
 		LANs       *string `json:"device_lan"`
 	}
 	if err := json.Unmarshal(raw, &wire); err != nil {
 		return err
 	}
-	*d = Device{ID: wire.ID, Name: wire.Name, Address: wire.Address}
+	*d = Device{ID: wire.ID, Name: wire.Name, Address: wire.Address, PublicKey: wire.PublicKey}
 	if wire.LANs != nil {
 		d.LANs = *wire.LANs
 		return nil

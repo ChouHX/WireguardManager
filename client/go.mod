@@ -3,6 +3,7 @@ module wireguardmanager/client
 go 1.25.0
 
 require (
+	github.com/energye/systray v1.0.3
 	github.com/go-ole/go-ole v1.3.0
 	github.com/tc-hib/winres v0.3.1
 	github.com/wailsapp/wails/v2 v2.16.0

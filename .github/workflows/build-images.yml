@@ -9,6 +9,7 @@ on:
       - 'main.go'
       - 'go.mod'
       - 'go.sum'
+      - 'scripts/test_network.sh'
       - 'Dockerfile'
       - 'frontend/**'
       - '.github/workflows/build-images.yml'
@@ -66,6 +67,14 @@ jobs:
             type=ref,event=branch
             type=sha,format=short
             type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Test server and isolated tenant networking
+        run: |
+          go test . ./internal/...
+          bash scripts/test_network.sh
 
       - name: Build and push
         uses: docker/build-push-action@v7

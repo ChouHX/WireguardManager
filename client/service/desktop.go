@@ -22,6 +22,7 @@ type CloudAPI interface {
 	SetLANs(context.Context, uint, string) (cloud.Device, error)
 }
 type DeviceView struct {
+	PublicKey   string `json:"publicKey"`
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Address     string `json:"address"`
@@ -71,7 +72,7 @@ func (d *Desktop) view(message string) DesktopView {
 		if name == "" {
 			name = "设备 " + strconv.Itoa(int(dev.ID))
 		}
-		view.Devices = append(view.Devices, DeviceView{strconv.Itoa(int(dev.ID)), name, dev.Address, dev.LANs, d.data.Targets[d.targetKey(dev.ID)], d.autoTargets(dev.ID)})
+		view.Devices = append(view.Devices, DeviceView{PublicKey: dev.PublicKey, ID: strconv.Itoa(int(dev.ID)), Name: name, Address: dev.Address, LANs: dev.LANs, Targets: d.data.Targets[d.targetKey(dev.ID)], AutoTargets: d.autoTargets(dev.ID)})
 	}
 	return view
 }
