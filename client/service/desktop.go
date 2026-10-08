@@ -308,10 +308,14 @@ func (d *Desktop) SaveDevice(ctx context.Context, id, lans, targets string) (Des
 	if err != nil {
 		return d.view(""), err
 	}
-	if _, err = d.save(ctx, p, dev, targets); err != nil {
+	changed, err := d.save(ctx, p, dev, targets)
+	if err != nil {
 		return d.view(""), err
 	}
-	return d.view("设备局域网已同步到云端"), nil
+	if changed {
+		return d.view("设备局域网已同步到云端，本机访问目标已保存"), nil
+	}
+	return d.view("本机访问目标已保存，云端局域网未修改"), nil
 }
 func (d *Desktop) Connect(ctx context.Context, id, lans, targets string) (DesktopView, error) {
 	d.mu.Lock()

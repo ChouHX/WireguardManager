@@ -158,6 +158,9 @@ func TestCloudStoreIsolatesAccountsAndDeployment(t *testing.T) {
 	if _, err := d.SaveDevice(ctx, "1", "", "192.168.9.100"); err != nil {
 		t.Fatal(err)
 	}
+	if api.mutations != 0 || api.devices[0].LANs != "" || api.devices[1].LANs != "192.168.2.0/24" {
+		t.Fatal("saving a local access target changed cloud LAN declarations")
+	}
 	raw, err := os.ReadFile(store.Path)
 	if err != nil {
 		t.Fatal(err)
