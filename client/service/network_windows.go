@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
+	"unsafe"
 
 	ole "github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
+	"golang.org/x/sys/windows"
 )
 
 const firewallGroup = "WireguardManager Desktop automatic forwarding"
@@ -21,21 +24,107 @@ type firewallRule struct {
 	Direction int    `json:"direction"`
 }
 
+type comWork struct {
+	fn     func() error
+	result chan error
+}
+
+var comWorker struct {
+	once sync.Once
+	jobs chan comWork
+}
+
+// Keep one COM apartment alive for the process lifetime. Tearing down the last
+// MTA between WMI calls races COM server shutdown (CO_E_SERVER_STOPPING).
+// Objects are created and released inside each job, always on this thread.
 func withCOM(fn func() error) error {
+	comWorker.once.Do(func() {
+		comWorker.jobs = make(chan comWork)
+		go func() {
+			runtime.LockOSThread()
+			defer runtime.UnlockOSThread()
+			err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED)
+			var e *ole.OleError
+			if errors.As(err, &e) && e.Code() == 1 {
+				err = nil
+			}
+			if err == nil {
+				defer ole.CoUninitialize()
+			}
+			for job := range comWorker.jobs {
+				if err != nil {
+					job.result <- err
+				} else {
+					job.result <- job.fn()
+				}
+			}
+		}()
+	})
 	result := make(chan error, 1)
-	go func() {
-		runtime.LockOSThread()
-		defer runtime.UnlockOSThread()
-		err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED)
-		var e *ole.OleError
-		if err != nil && (!errors.As(err, &e) || e.Code() != 1) {
-			result <- err
-			return
-		}
-		defer ole.CoUninitialize()
-		result <- fn()
-	}()
+	comWorker.jobs <- comWork{fn, result}
 	return <-result
+}
+
+var oleAutomation = windows.NewLazySystemDLL("oleaut32.dll")
+var safeArrayCreateVector = oleAutomation.NewProc("SafeArrayCreateVector")
+var safeArrayPutElement = oleAutomation.NewProc("SafeArrayPutElement")
+
+// INetFwRule.Interfaces requires SAFEARRAY(VARIANT) containing BSTR elements,
+// not the SAFEARRAY(BSTR) produced by go-ole's []string marshaler.
+func putFirewallInterfaces(rule *ole.IDispatch, name string) error {
+	array, _, _ := safeArrayCreateVector.Call(uintptr(ole.VT_VARIANT), 0, 1)
+	if array == 0 {
+		return errors.New("无法分配防火墙接口数组")
+	}
+	value := ole.NewVariant(ole.VT_ARRAY|ole.VT_VARIANT, int64(array))
+	defer value.Clear()
+	str := ole.SysAllocStringLen(name)
+	if str == nil {
+		return errors.New("无法分配防火墙接口名称")
+	}
+	element := ole.NewVariant(ole.VT_BSTR, int64(uintptr(unsafe.Pointer(str))))
+	defer element.Clear()
+	index := int32(0)
+	hr, _, _ := safeArrayPutElement.Call(array, uintptr(unsafe.Pointer(&index)), uintptr(unsafe.Pointer(&element)))
+	if hr != 0 {
+		return ole.NewError(hr)
+	}
+	return comPut(rule, "Interfaces", &value)
+}
+
+// Unlike oleutil.ForEach, check errors even when Next returns zero elements.
+// A failed NAT query must never be mistaken for an empty list of existing NATs.
+func comEach(objects *ole.IDispatch, visit func(*ole.VARIANT) error) error {
+	newEnum, err := oleutil.GetProperty(objects, "_NewEnum")
+	if err != nil {
+		return err
+	}
+	defer newEnum.Clear()
+	enum, err := newEnum.ToIUnknown().IEnumVARIANT(ole.IID_IEnumVariant)
+	if err != nil {
+		return err
+	}
+	defer enum.Release()
+	for {
+		item, count, err := enum.Next(1)
+		if count == 0 {
+			item.Clear()
+			var e *ole.OleError
+			if errors.As(err, &e) && e.Code() == 1 {
+				return nil
+			}
+			return err
+		}
+		if err != nil {
+			item.Clear()
+			return err
+		}
+		err = visit(&item)
+		item.Clear()
+		if err != nil {
+			return err
+		}
+	}
 }
 func comObject(name string) (*ole.IDispatch, error) {
 	obj, err := oleutil.CreateObject(name)
@@ -96,10 +185,13 @@ func addFirewallRules(defs []firewallRule) error {
 				for _, prop := range []struct {
 					name  string
 					value any
-				}{{"Name", def.Name}, {"Description", "Automatically removed when WireguardManager disconnects"}, {"Grouping", firewallGroup}, {"Protocol", 256}, {"Direction", def.Direction}, {"Action", 1}, {"Profiles", int32(0x7fffffff)}, {"Interfaces", []string{def.Interface}}, {"RemoteAddresses", def.Remote}, {"Enabled", true}} {
+				}{{"Name", def.Name}, {"Description", "Automatically removed when WireguardManager disconnects"}, {"Grouping", firewallGroup}, {"Protocol", 256}, {"Direction", def.Direction}, {"Action", 1}, {"Profiles", int32(0x7fffffff)}, {"RemoteAddresses", def.Remote}, {"Enabled", true}} {
 					if err = comPut(rule, prop.name, prop.value); err != nil {
 						return fmt.Errorf("Windows 防火墙 %s：%w", prop.name, err)
 					}
+				}
+				if err = putFirewallInterfaces(rule, def.Interface); err != nil {
+					return fmt.Errorf("Windows 防火墙 Interfaces：%w", err)
 				}
 				return comCall(rules, "Add", rule)
 			}(); err != nil {
@@ -119,8 +211,7 @@ func removeFirewallRules(defs []firewallRule) error {
 			owned[r.Name] = true
 		}
 		remove := []string{}
-		if err := oleutil.ForEach(rules, func(v *ole.VARIANT) error {
-			defer v.Clear()
+		if err := comEach(rules, func(v *ole.VARIANT) error {
 			r := v.ToIDispatch()
 			if r == nil {
 				return nil
@@ -177,8 +268,7 @@ func listNAT(svc *ole.IDispatch) ([]natEntry, error) {
 	}
 	defer objects.Clear()
 	entries := []natEntry{}
-	err = oleutil.ForEach(objects.ToIDispatch(), func(v *ole.VARIANT) error {
-		defer v.Clear()
+	err = comEach(objects.ToIDispatch(), func(v *ole.VARIANT) error {
 		obj := v.ToIDispatch()
 		if obj == nil {
 			return errors.New("无效的 Windows NAT 对象")
@@ -216,12 +306,12 @@ func createNAT(name, prefix string, beforeCreate func() error) error {
 		}
 		class, err := oleutil.CallMethod(svc, "Get", "MSFT_NetNat")
 		if err != nil {
-			return err
+			return fmt.Errorf("读取 NAT 类：%w", err)
 		}
 		defer class.Clear()
 		object, err := oleutil.CallMethod(class.ToIDispatch(), "SpawnInstance_")
 		if err != nil {
-			return err
+			return fmt.Errorf("初始化 NAT：%w", err)
 		}
 		defer object.Clear()
 		instance := object.ToIDispatch()
@@ -235,7 +325,7 @@ func createNAT(name, prefix string, beforeCreate func() error) error {
 			return err
 		}
 		if err = comCall(instance, "Put_", int32(2)); err != nil {
-			return err
+			return fmt.Errorf("创建 NAT：%w", err)
 		} // wbemChangeFlagCreateOnly
 		entries, err = listNAT(svc)
 		if err != nil {

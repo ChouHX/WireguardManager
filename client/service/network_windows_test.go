@@ -47,6 +47,19 @@ func TestWindowsFirewallLifecycle(t *testing.T) {
 			if err != nil || group != firewallGroup {
 				return fmt.Errorf("incorrect rule ownership: %s %v", group, err)
 			}
+			interfaces, err := oleutil.GetProperty(v.ToIDispatch(), "Interfaces")
+			if err != nil {
+				return err
+			}
+			defer interfaces.Clear()
+			array := interfaces.ToArray()
+			if array == nil {
+				return fmt.Errorf("rule has no interface restriction")
+			}
+			names := array.ToValueArray()
+			if len(names) != 1 || names[0] != def.Interface {
+				return fmt.Errorf("incorrect rule interface restriction: %v", names)
+			}
 		}
 		return nil
 	}); err != nil {
