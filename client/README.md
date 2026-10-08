@@ -42,8 +42,14 @@ go test ./service
 go run ./tools/package
 ```
 
-打包工具校验官方 WireGuardNT 1.1 压缩包 SHA-256，生成包含驱动和管理员清单的 `.syso`，交叉编译 GUI exe，并检查最终 PE 的驱动和清单内容。无需 CGO 或全局 Wails CLI。离线驱动包可用 `go run ./tools/package -driver-zip /path/to/wireguard-nt-1.1.zip` 指定，仍会验证哈希。
+打包工具校验官方 WireGuardNT 1.1 压缩包 SHA-256，生成包含驱动和管理员清单的 `.syso`，交叉编译 GUI exe，并检查最终 PE 的驱动和清单内容。Windows CI 还会直接运行生成的 exe，验证系统能查找嵌入资源、加载 DLL 并调用其 API，成功后才上传安装包。无需 CGO 或全局 Wails CLI。离线驱动包可用 `go run ./tools/package -driver-zip /path/to/wireguard-nt-1.1.zip` 指定，仍会验证哈希。
 
 产物：`client/build/bin/WireguardManagerDesktop-windows-amd64.zip`（含 exe、使用说明和许可）及 `SHA256SUMS`。GitHub Actions 的 **Build Windows Client** 工作流会上传同样的包；exe 未做应用代码签名，正式分发可另加签名步骤。
 
 测试覆盖配置解析、目标校验、现场切换顺序、失败清理、统计重置和加密保存失败保护。Windows CI 还运行 DPAPI 往返测试。Linux 上的交叉编译不能替代 Windows 真机的驱动安装、UAC、路由、转发和 WebView2 验收。现场验收请依次确认握手、目标访问、重叠地址现场切换、断开后原路由和网卡转发状态恢复。
+
+## 驱动加载自检
+
+若启动时报告驱动加载错误，可在 PowerShell 中执行 `Start-Process .\WireguardManagerDesktop.exe -ArgumentList '--check-driver', 'driver-check.json' -Wait`。结果写入 `driver-check.json`，包含 DLL 版本、资源大小和具体加载错误，不含配置或私钥。此检查不会创建隧道或改变路由，也不会要求内核驱动事先安装。
+
+旧版 `8434926` 的嵌入资源名称不符合 Windows 查找规则，会显示“WireGuardNT 驱动资源缺失或加载失败”。请使用后续修复版，无需删除本地配置或另装官方 WireGuard 客户端。

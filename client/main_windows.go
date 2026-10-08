@@ -4,11 +4,16 @@ package main
 
 import (
 	"embed"
+	"encoding/json"
+	"fmt"
+	"os"
+
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 	win "golang.org/x/sys/windows"
+
 	"wireguardmanager/client/service"
 )
 
@@ -21,6 +26,11 @@ func showError(err error) {
 	win.MessageBox(0, body, title, win.MB_OK|win.MB_ICONERROR)
 }
 func main() {
+	// Run the same driver initialization as the application without opening WebView2
+	// or creating an adapter. A report file works for GUI-subsystem executables in CI.
+	if len(os.Args) > 1 && os.Args[1] == "--check-driver" {
+		os.Exit(checkDriverCommand(os.Args[2:]))
+	}
 	release, err := service.AcquireInstance()
 	if err != nil {
 		showError(err)
@@ -38,4 +48,31 @@ func main() {
 	if err != nil {
 		showError(err)
 	}
+}
+
+func checkDriverCommand(args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: WireguardManagerDesktop.exe --check-driver <report.json>")
+		return 2
+	}
+	check, err := service.CheckDriver()
+	report := struct {
+		service.DriverCheck
+		Error string `json:"error,omitempty"`
+	}{DriverCheck: check}
+	if err != nil {
+		report.Error = err.Error()
+	}
+	data, encodeErr := json.MarshalIndent(report, "", "  ")
+	if encodeErr != nil {
+		return 2
+	}
+	if writeErr := os.WriteFile(args[0], data, 0600); writeErr != nil {
+		fmt.Fprintln(os.Stderr, writeErr)
+		return 2
+	}
+	if err != nil {
+		return 1
+	}
+	return 0
 }

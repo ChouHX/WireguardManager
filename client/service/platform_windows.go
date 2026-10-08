@@ -75,8 +75,8 @@ func NewWindowsBackend(dir string) (*WindowsBackend, error) {
 	if !windows.GetCurrentProcessToken().IsElevated() {
 		return nil, errors.New("请以管理员身份运行客户端")
 	}
-	if driver.Version() == "unknown" {
-		return nil, errors.New("WireGuardNT 驱动资源缺失或加载失败，请使用完整发布包")
+	if _, err := CheckDriver(); err != nil {
+		return nil, err
 	}
 	b := &WindowsBackend{journal: filepath.Join(dir, "forwarding-recovery.json")}
 	if err := b.recover(); err != nil {

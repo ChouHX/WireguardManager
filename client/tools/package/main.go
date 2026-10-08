@@ -20,6 +20,11 @@ import (
 )
 
 const driverURL = "https://download.wireguard.com/wireguard-nt/wireguard-nt-1.1.zip"
+
+// Windows resource lookup uppercases names; winres stores the supplied name verbatim.
+// Match the resource emitted by the official WireGuard windres build.
+const driverResourceName = winres.Name("WIREGUARD.DLL")
+
 const driverSHA = "dceb30a9bc4be48cce0f74160fc88a585a2c2627366e8f846fc6658f9038dace"
 
 func main() {
@@ -88,7 +93,7 @@ func build(archive string) error {
 		return err
 	}
 	rs := winres.ResourceSet{}
-	if err = rs.Set(winres.RT_RCDATA, winres.Name("wireguard.dll"), winres.LCIDNeutral, files["driver"]); err != nil {
+	if err = rs.Set(winres.RT_RCDATA, driverResourceName, winres.LCIDNeutral, files["driver"]); err != nil {
 		return err
 	}
 	if err = rs.Set(winres.RT_MANIFEST, winres.ID(1), winres.LCIDDefault, manifest); err != nil {
@@ -171,7 +176,7 @@ func verify(exe string, manifest, driver []byte) error {
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(rs.Get(winres.RT_RCDATA, winres.Name("wireguard.dll"), winres.LCIDNeutral), driver) {
+	if !bytes.Equal(rs.Get(winres.RT_RCDATA, driverResourceName, winres.LCIDNeutral), driver) {
 		return errors.New("embedded driver verification failed")
 	}
 	if !bytes.Equal(rs.Get(winres.RT_MANIFEST, winres.ID(1), winres.LCIDDefault), manifest) {

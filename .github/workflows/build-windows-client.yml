@@ -40,6 +40,20 @@ jobs:
       - name: Build and verify embedded driver and administrator manifest
         working-directory: client
         run: go run ./tools/package
+      - name: Run packaged driver self-check on Windows
+        working-directory: client
+        run: |
+          $report = Join-Path $env:RUNNER_TEMP 'wgm-driver-check.json'
+          $process = Start-Process -FilePath '.\build\bin\WireguardManagerDesktop.exe' -ArgumentList @('--check-driver', $report) -PassThru
+          if (-not $process.WaitForExit(45000)) {
+            Stop-Process -Id $process.Id -Force
+            throw 'Packaged driver self-check timed out'
+          }
+          if (-not (Test-Path $report)) { throw 'Packaged driver self-check did not create a report' }
+          Get-Content $report
+          if ($process.ExitCode -ne 0) { throw "Packaged driver self-check failed: $($process.ExitCode)" }
+          $check = Get-Content $report -Raw | ConvertFrom-Json
+          if (-not $check.apiCallable -or $check.resourceBytes -le 0) { throw 'Embedded driver is not callable' }
       - uses: actions/upload-artifact@v7
         with:
           name: WireguardManagerDesktop-windows-amd64
