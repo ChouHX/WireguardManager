@@ -203,6 +203,7 @@ export default function SettingsPage() {
           className="wm-mono"
         />
       ),
+      hint: def.key === 'network.server_ip' ? t('settings.serverIpHint') : undefined,
     };
   };
 

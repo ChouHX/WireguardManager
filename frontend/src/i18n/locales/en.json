@@ -351,7 +351,8 @@
       "auth": "Authentication",
       "wireguard": "Device defaults"
     },
-    "serverIp": "Public server IP",
+    "serverIp": "WireGuard public IP / host",
+    "serverIpHint": "Enter the relay's direct public IP or a DNS-only hostname without a CDN proxy, scheme or port. Clients use UDP to reach it; the management URL may be different.",
     "outInterface": "Outbound interface",
     "baseSubnet": "Tunnel subnet prefix",
     "basePort": "Base port",

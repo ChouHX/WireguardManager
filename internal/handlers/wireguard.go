@@ -1209,11 +1209,12 @@ func GetPeerConfig(c *gin.Context) {
 		dns = "1.1.1.1, 8.8.8.8"
 	}
 
-	// 生成服务器端点地址：优先使用服务器记录的 endpoint，缺失时回退到运行时设置的 ServerIP:端口
-	serverEndpoint := strings.TrimSpace(wgServer.ServerEndpoint)
-	if serverEndpoint == "" {
-		serverIP := runtimeSettings.String(services.SettingNetworkServerIP, config.AppConfig.Network.ServerIP)
-		serverEndpoint = fmt.Sprintf("%s:%d", serverIP, wgServer.WgPort)
+	// Do not export unusable port-only endpoints when the deployment host is unset.
+	serverIP := runtimeSettings.String(services.SettingNetworkServerIP, config.AppConfig.Network.ServerIP)
+	serverEndpoint, err := services.ClientEndpoint(wgServer.ServerEndpoint, serverIP, wgServer.WgPort)
+	if err != nil {
+		response.ServiceUnavailable(c, err.Error())
+		return
 	}
 
 	allowedIPs := clientAllowedIPs(wgServer.WgAddress, peer.PeerAddress)

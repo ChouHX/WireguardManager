@@ -49,6 +49,8 @@ go run ./tools/package -server-url https://remote.opcuu.com
 
 ## 验证
 
+连接时若提示 `Endpoint` 缺少公网地址，管理员需在平台「系统设置 → WireGuard 公网 IP / 域名」填写中继直连地址。管理平台 HTTPS 地址和 WireGuard UDP 地址可以不同；普通 Cloudflare / CDN 代理域名不能作为 WireGuard UDP 中继地址。修正设置后重新连接即可拉取新配置。
+
 测试覆盖 API 鉴权与拒绝重定向、登录过期、令牌加密、跨账号 / 服务端数据隔离、LAN 自动探测、云端声明与配置重新拉取、切换顺序、并发断开和失败清理。Windows CI 额外执行 DPAPI、防火墙创建 / 删除、NAT 创建 / 删除（provider 可用且没有现有 NAT 时），以及**最终发布 exe 的驱动资源加载与 API 调用自检**，通过后才上传包。
 
 原生网络集成测试仅在隔离、已提权的 Windows runner 设置 `WGM_TEST_WINDOWS_NETWORK=1` 时启用，普通 `go test` 不修改机器网络。CI 的创建 / 删除测试不等同于真实 PLC 双向流量验收。现场还应验证登录、握手、目标访问、重叠地址切换，以及断开后的网络恢复。

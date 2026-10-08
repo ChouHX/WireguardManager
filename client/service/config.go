@@ -146,14 +146,14 @@ func ParseConfig(raw string) (Config, error) {
 			c.PrivateKey, err = parseKey(value)
 		case "[Interface]Address":
 			c.Address, err = netip.ParsePrefix(value)
-			if err == nil && (!c.Address.Addr().Is4() || !c.Address.Addr().IsPrivate() || c.Address.Bits() != 32) {
+			if err != nil || !c.Address.Addr().Is4() || !c.Address.Addr().IsPrivate() || c.Address.Bits() != 32 {
 				err = errors.New("隧道地址必须是 IPv4 私有地址 /32，请重新从平台导出配置")
 			}
 		case "[Interface]MTU":
 			var n uint64
 			n, err = strconv.ParseUint(value, 10, 32)
-			if err == nil && (n < 576 || n > 9000) {
-				err = errors.New("MTU 应在 576–9000 之间")
+			if err != nil || n < 576 || n > 9000 {
+				err = errors.New("MTU 必须是 576–9000 之间的整数")
 			}
 			c.MTU = uint32(n)
 		case "[Interface]DNS": // Preserve the machine's DNS for split tunnel use; no global DNS override.
@@ -164,26 +164,36 @@ func ParseConfig(raw string) (Config, error) {
 		case "[Peer]Endpoint":
 			var host, port string
 			host, port, err = net.SplitHostPort(value)
-			if err == nil {
+			if err != nil || strings.ContainsAny(host, "/\\?#@ \t\r\n") {
+				err = errors.New("应为中继公网 IP 或域名加 UDP 端口（例如 wg.example.com:51820），不能包含 http/https 或路径")
+			} else if host == "" {
+				err = errors.New("服务端未配置 WireGuard 公网 IP / 域名，请管理员在系统设置中填写中继的直连公网地址；管理后台的 CDN 地址不能用于普通 WireGuard UDP")
+			} else {
 				var n uint64
 				n, err = strconv.ParseUint(port, 10, 16)
-				if host == "" || n == 0 {
-					err = errors.New("Endpoint 必须包含主机和有效 UDP 端口")
+				if err != nil || n == 0 {
+					err = errors.New("中继 UDP 端口必须是 1–65535 之间的整数")
 				}
 			}
 			c.Endpoint = value
 		case "[Peer]AllowedIPs":
 			c.BaseRoutes, err = ParsePrefixes(value)
+			if err != nil {
+				err = errors.New("应为有效的 IPv4 隧道网段，不支持默认路由")
+			}
 		case "[Peer]PersistentKeepalive":
 			var n uint64
 			n, err = strconv.ParseUint(value, 10, 16)
+			if err != nil {
+				err = errors.New("保活间隔必须是 0–65535 之间的整数（秒）")
+			}
 			c.Keepalive = uint16(n)
 		default:
 			return c, fmt.Errorf("不支持配置项 %s；请使用平台新导出的配置（不支持脚本钩子）", field)
 		}
 		if err != nil {
-			return c, fmt.Errorf("%s：配置值无效", field)
-		} // Never echo secret values.
+			return c, fmt.Errorf("%s：%w", field, err)
+		} // Reasons above are controlled messages; never echo raw configuration values.
 	}
 	if err := scanner.Err(); err != nil {
 		return c, errors.New("读取配置失败")

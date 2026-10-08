@@ -69,3 +69,38 @@ func TestLocalTargets(t *testing.T) {
 		}
 	}
 }
+
+func TestMissingEndpointHostExplainsServerSetting(t *testing.T) {
+	raw := strings.Replace(fixtureConfig(), "relay.example:51821", ":51820", 1)
+	_, err := ParseConfig(raw)
+	if err == nil || !strings.Contains(err.Error(), "Endpoint") || !strings.Contains(err.Error(), "系统设置") || !strings.Contains(err.Error(), "公网") {
+		t.Fatalf("missing actionable error: %v", err)
+	}
+}
+
+func TestFieldErrorsExplainCauseWithoutExposingValues(t *testing.T) {
+	for _, tc := range []struct{ field, original, replacement, reason string }{
+		{"Endpoint", "relay.example:51821", "https://sensitive-value.example:51820", "UDP"},
+		{"Endpoint", "relay.example:51821", "relay.example:sensitive-value", "端口"},
+		{"Address", "10.100.1.3/32", "sensitive-value", "/32"},
+		{"AllowedIPs", "10.100.1.0/24", "sensitive-value", "IPv4"},
+		{"PersistentKeepalive", "PersistentKeepalive = 25", "PersistentKeepalive = sensitive-value", "保活"},
+	} {
+		t.Run(tc.field+tc.reason, func(t *testing.T) {
+			_, err := ParseConfig(strings.Replace(fixtureConfig(), tc.original, tc.replacement, 1))
+			if err == nil || !strings.Contains(err.Error(), tc.field) || !strings.Contains(err.Error(), tc.reason) {
+				t.Fatalf("missing reason: %v", err)
+			}
+			if strings.Contains(err.Error(), "sensitive-value") {
+				t.Fatal("raw configuration value leaked")
+			}
+		})
+	}
+	for _, field := range []string{"PrivateKey", "PublicKey"} {
+		key := strings.Split(strings.Split(fixtureConfig(), field+" = ")[1], "\n")[0]
+		_, err := ParseConfig(strings.Replace(fixtureConfig(), field+" = "+key, field+" = sensitive-value", 1))
+		if err == nil || !strings.Contains(err.Error(), "密钥") || strings.Contains(err.Error(), "sensitive-value") {
+			t.Fatalf("unsafe key error: %v", err)
+		}
+	}
+}

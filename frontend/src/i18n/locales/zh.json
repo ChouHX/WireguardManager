@@ -351,7 +351,8 @@
       "auth": "鉴权",
       "wireguard": "设备默认值"
     },
-    "serverIp": "服务器公网 IP",
+    "serverIp": "WireGuard 公网 IP / 域名",
+    "serverIpHint": "填写中继的直连公网 IP 或未启用 CDN 代理的域名，不含 http/https 和端口。客户端通过 UDP 连接此地址，与管理后台网址可以不同。",
     "outInterface": "出口网卡",
     "baseSubnet": "隧道网段前缀",
     "basePort": "起始端口",

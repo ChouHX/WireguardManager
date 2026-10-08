@@ -73,6 +73,9 @@ func UpdateRuntimeSettings(c *gin.Context) {
 // normalizeSettingValue 按定义校验并规范化取值。
 func normalizeSettingValue(def services.SettingDef, raw string) (string, error) {
 	value := strings.TrimSpace(raw)
+	if def.Key == services.SettingNetworkServerIP {
+		return services.NormalizeWireGuardHost(value)
+	}
 
 	switch def.Type {
 	case "int":
