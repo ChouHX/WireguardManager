@@ -370,7 +370,7 @@ func (s *windowsSession) Sample(ctx context.Context) (Counters, error) {
 	runtime.KeepAlive(config)
 	// This probe is source-bound to the active tunnel. A timeout is displayed as no latency,
 	// not zero and not a successful connection. The driver handshake determines connection state.
-	if ctx.Err() == nil {
+	if ctx.Err() == nil && !c.Handshake.IsZero() {
 		c.LatencyMS = icmpLatency(s.source, s.probe)
 	}
 	return c, nil

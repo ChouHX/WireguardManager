@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -53,6 +54,57 @@ type APIError struct {
 
 func (e *APIError) Error() string   { return e.Message }
 func IsUnauthorized(err error) bool { var e *APIError; return errors.As(err, &e) && e.Status == 401 }
+
+// Keep diagnostic context without exposing response bodies, credentials or
+// transport errors that may contain proxy credentials.
+type RequestError struct {
+	Operation string
+	Stage     string
+	Elapsed   time.Duration
+	Attempts  int
+	Cause     error
+}
+
+func (e *RequestError) Unwrap() error { return e.Cause }
+func (e *RequestError) Error() string {
+	reason := "网络连接失败"
+	var networkError net.Error
+	switch {
+	case errors.Is(e.Cause, context.Canceled):
+		reason = "请求已取消"
+	case errors.Is(e.Cause, context.DeadlineExceeded) || errors.As(e.Cause, &networkError) && networkError.Timeout():
+		if e.Stage == "read" {
+			reason = "读取响应超时"
+		} else {
+			reason = "等待服务端响应超时"
+		}
+	case e.Stage == "read":
+		reason = "服务端响应传输中断"
+	}
+	retry := ""
+	if e.Attempts > 1 {
+		retry = "，已重试一次"
+	}
+	hint := "请重试"
+	if e.Operation == "保存设备局域网" {
+		hint = "设置可能已保存，请刷新设备确认"
+	}
+	return fmt.Sprintf("%s失败：%s（%.1f 秒%s）；%s", e.Operation, reason, e.Elapsed.Seconds(), retry, hint)
+}
+func operationName(method, path string) string {
+	switch {
+	case path == "/api/login":
+		return "登录"
+	case path == "/api/me":
+		return "恢复登录"
+	case strings.HasSuffix(path, "/config"):
+		return "获取设备配置"
+	case method == "PATCH":
+		return "保存设备局域网"
+	default:
+		return "获取设备列表"
+	}
+}
 
 type Client struct {
 	base  string
@@ -116,6 +168,31 @@ func (c *Client) SetLANs(ctx context.Context, id uint, lans string) (Device, err
 }
 func devicePath(id uint) string { return "/api/wireguard/peers/" + strconv.FormatUint(uint64(id), 10) }
 func (c *Client) request(ctx context.Context, method, path string, input, output any) error {
+	started := time.Now()
+	// A retry shares the original time budget. Never replay a login or mutation:
+	// a dropped PATCH response does not mean the server failed to save it.
+	timeout := c.http.Timeout
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for attempt := 1; ; attempt++ {
+		err := c.requestOnce(ctx, method, path, input, output)
+		var failure *RequestError
+		if !errors.As(err, &failure) {
+			return err
+		}
+		failure.Operation, failure.Elapsed, failure.Attempts = operationName(method, path), time.Since(started), attempt
+		var networkError net.Error
+		timedOut := errors.Is(err, context.DeadlineExceeded) || errors.As(err, &networkError) && networkError.Timeout()
+		if method != "GET" || attempt >= 2 || ctx.Err() != nil || timedOut || errors.Is(err, context.Canceled) {
+			return failure
+		}
+		// Only retry transport failures, not authorization / validation responses.
+	}
+}
+func (c *Client) requestOnce(ctx context.Context, method, path string, input, output any) error {
 	var body io.Reader
 	if input != nil {
 		raw, err := json.Marshal(input)
@@ -136,14 +213,18 @@ func (c *Client) request(ctx context.Context, method, path string, input, output
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("无法连接服务端：%w", err)
+		return &RequestError{Stage: "connect", Cause: err}
 	}
 	defer res.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(res.Body, 2*1024*1024+1))
-	if err != nil {
-		return errors.New("读取服务端响应失败")
-	}
 	defer clear(raw)
+	if err != nil {
+		// Authorization failure is actionable even if its explanatory body was cut off.
+		if res.StatusCode == http.StatusUnauthorized {
+			return &APIError{Status: 401, Message: "登录已失效，请重新登录"}
+		}
+		return &RequestError{Stage: "read", Cause: err}
+	}
 	if len(raw) > 2*1024*1024 {
 		return errors.New("服务端响应过大")
 	}
@@ -157,6 +238,9 @@ func (c *Client) request(ctx context.Context, method, path string, input, output
 		} `json:"error"`
 	}
 	decodeErr := json.Unmarshal(raw, &envelope)
+	if res.StatusCode >= 200 && res.StatusCode < 300 && decodeErr != nil {
+		return errors.New("服务端响应不是有效的 JSON，请确认管理后台 API 可用")
+	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 || !envelope.Success {
 		message := fmt.Sprintf("服务端请求失败（HTTP %d）", res.StatusCode)
 		code := ""
@@ -183,9 +267,6 @@ func (c *Client) request(ctx context.Context, method, path string, input, output
 			message = "服务端地址发生重定向，请使用最终的管理后台地址重新构建客户端"
 		}
 		return &APIError{res.StatusCode, code, message}
-	}
-	if decodeErr != nil {
-		return errors.New("服务端响应不是有效的 JSON，请确认构建时指定的是管理后台地址")
 	}
 	if err = json.Unmarshal(envelope.Data, output); err != nil {
 		return errors.New("无法解析服务端数据")

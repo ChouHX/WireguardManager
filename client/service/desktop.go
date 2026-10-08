@@ -177,6 +177,14 @@ func (d *Desktop) Refresh(ctx context.Context) (DesktopView, error) {
 	defer d.mu.Unlock()
 	return d.refresh(ctx)
 }
+
+// Snapshot lets the UI reflect a cleared login or partial save after an error
+// without starting another network request on an already failing connection.
+func (d *Desktop) Snapshot() DesktopView {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.view("")
+}
 func (d *Desktop) DetectLANs() (LANDetection, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -206,9 +214,18 @@ func (d *Desktop) prepare(ctx context.Context, id, lans, targets string) (Profil
 	if err != nil {
 		return Profile{}, dev, d.apiError(err)
 	}
+	return d.prepareConfig(raw, dev, lans, targets)
+}
+func (d *Desktop) prepareConfig(raw string, dev cloud.Device, lans, targets string) (Profile, cloud.Device, error) {
 	cfg, err := ParseConfig(raw)
 	if err != nil {
 		return Profile{}, dev, err
+	}
+	dev.LANs = JoinPrefixes(cfg.DeviceLANs)
+	for i := range d.devices {
+		if d.devices[i].ID == dev.ID {
+			d.devices[i].LANs = dev.LANs
+		}
 	}
 	cfg.DeviceLANs, err = ParsePrefixes(lans)
 	if err != nil {
@@ -217,7 +234,7 @@ func (d *Desktop) prepare(ctx context.Context, id, lans, targets string) (Profil
 	for _, lan := range cfg.DeviceLANs {
 		for _, vpn := range cfg.BaseRoutes {
 			if lan.Overlaps(vpn) {
-				return Profile{}, dev, errors.New("下挂设备 / 局域网不能与 WireGuard 网段重叠")
+				return Profile{}, dev, fmt.Errorf("填写的局域网 %s 与 WireGuard 虚拟网段 %s 重叠。这里应填写本机连接的真实现场局域网；仅访问远端时请留空", lan, vpn)
 			}
 		}
 	}
@@ -233,7 +250,7 @@ func (d *Desktop) prepare(ctx context.Context, id, lans, targets string) (Profil
 	if err != nil {
 		return Profile{}, dev, err
 	}
-	p := Profile{ID: id, Name: dev.Name, Config: cfg, Targets: JoinPrefixes(all)}
+	p := Profile{ID: strconv.FormatUint(uint64(dev.ID), 10), Name: dev.Name, Config: cfg, Targets: JoinPrefixes(all)}
 	if _, err = p.Routes(); err != nil {
 		return p, dev, err
 	}
@@ -249,12 +266,13 @@ func (d *Desktop) prepare(ctx context.Context, id, lans, targets string) (Profil
 	}
 	return p, dev, nil
 }
-func (d *Desktop) save(ctx context.Context, p Profile, dev cloud.Device, targets string) error {
+func (d *Desktop) save(ctx context.Context, p Profile, dev cloud.Device, targets string) (bool, error) {
 	lans := JoinPrefixes(p.Config.DeviceLANs)
-	if lans != dev.LANs {
+	changed := lans != dev.LANs
+	if changed {
 		updated, err := d.api.SetLANs(ctx, dev.ID, lans)
 		if err != nil {
-			return d.apiError(err)
+			return false, d.apiError(err)
 		}
 		for i := range d.devices {
 			if d.devices[i].ID == dev.ID {
@@ -265,16 +283,20 @@ func (d *Desktop) save(ctx context.Context, p Profile, dev cloud.Device, targets
 	extra, _ := ParsePrefixes(targets)
 	key := d.targetKey(dev.ID)
 	old, existed := d.data.Targets[key]
-	d.data.Targets[key] = JoinPrefixes(extra)
+	normalized := JoinPrefixes(extra)
+	if old == normalized {
+		return changed, nil
+	}
+	d.data.Targets[key] = normalized
 	if err := d.store.Save(d.data); err != nil {
 		if existed {
 			d.data.Targets[key] = old
 		} else {
 			delete(d.data.Targets, key)
 		}
-		return fmt.Errorf("云端局域网已保存，但本机访问目标保存失败：%w", err)
+		return changed, fmt.Errorf("本机访问目标保存失败（云端局域网可能已更新）：%w", err)
 	}
-	return nil
+	return changed, nil
 }
 func (d *Desktop) SaveDevice(ctx context.Context, id, lans, targets string) (DesktopView, error) {
 	d.mu.Lock()
@@ -286,7 +308,7 @@ func (d *Desktop) SaveDevice(ctx context.Context, id, lans, targets string) (Des
 	if err != nil {
 		return d.view(""), err
 	}
-	if err = d.save(ctx, p, dev, targets); err != nil {
+	if _, err = d.save(ctx, p, dev, targets); err != nil {
 		return d.view(""), err
 	}
 	return d.view("设备局域网已同步到云端"), nil
@@ -297,25 +319,64 @@ func (d *Desktop) Connect(ctx context.Context, id, lans, targets string) (Deskto
 	if d.user == nil {
 		return d.view(""), errors.New("请先登录")
 	}
-	// Recheck authorization and route ownership on every connection; cached credentials
-	// are never used to bypass server-side device removal or tenant disablement.
-	if _, err := d.refresh(ctx); err != nil {
-		return d.view(""), err
-	}
-	p, dev, err := d.prepare(ctx, id, lans, targets)
+	dev, err := d.find(id)
 	if err != nil {
 		return d.view(""), err
 	}
-	if err = d.save(ctx, p, dev, targets); err != nil {
+	// Validate syntax before any remote request. Route ownership is checked against
+	// fresh server data below; private configurations are never cached offline.
+	if _, err = ParsePrefixes(lans); err != nil {
 		return d.view(""), err
 	}
-	raw, err := d.api.Config(ctx, dev.ID)
-	if err != nil {
-		return d.view(""), d.apiError(err)
+	if _, err = ParsePrefixes(targets); err != nil {
+		return d.view(""), err
 	}
-	p.Config, err = ParseConfig(raw)
+	// These authenticated reads are independent. Both complete before handling a
+	// possible 401, so clearing the shared API token cannot race an active request.
+	var raw string
+	var devices []cloud.Device
+	var configErr, listErr error
+	var reads sync.WaitGroup
+	reads.Add(2)
+	go func() { defer reads.Done(); raw, configErr = d.api.Config(ctx, dev.ID) }()
+	go func() { defer reads.Done(); devices, listErr = d.api.Devices(ctx) }()
+	reads.Wait()
+	if cloud.IsUnauthorized(configErr) {
+		return d.view(""), d.apiError(configErr)
+	}
+	if listErr != nil {
+		return d.view(""), d.apiError(listErr)
+	}
+	if configErr != nil {
+		return d.view(""), d.apiError(configErr)
+	}
+	d.devices = devices
+	dev, err = d.find(id)
 	if err != nil {
 		return d.view(""), err
+	}
+	p, dev, err := d.prepareConfig(raw, dev, lans, targets)
+	if err != nil {
+		return d.view(""), err
+	}
+	changed, err := d.save(ctx, p, dev, targets)
+	if err != nil {
+		return d.view(""), err
+	}
+	// Only a cloud LAN mutation invalidates the configuration just fetched.
+	if changed {
+		raw, err = d.api.Config(ctx, dev.ID)
+		if err != nil {
+			return d.view(""), d.apiError(err)
+		}
+		updated, err := ParseConfig(raw)
+		if err != nil {
+			return d.view(""), err
+		}
+		if JoinPrefixes(updated.DeviceLANs) != JoinPrefixes(p.Config.DeviceLANs) {
+			return d.view(""), errors.New("云端局域网配置已发生变化，请刷新设备后重试")
+		}
+		p.Config = updated
 	}
 	if err = d.manager.Connect(ctx, p); err != nil {
 		return d.view(""), err

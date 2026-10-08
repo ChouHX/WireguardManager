@@ -22,6 +22,8 @@ Windows 10/11 x64 客户端，使用 Go + Wails v2 + React + Mantine。经典左
 
 ## 权限、本地数据与恢复
 
+客户端由同一个 EXE 内的 Go 模块直接请求云端 HTTPS API，Wails 负责界面和 Go 方法之间的调用，不额外运行本地代理中转。连接时并行获取设备列表与配置；局域网未修改时不重复下载配置。失败后界面仅同步本机状态，不再自动追加后台刷新。只读请求遇到传输中断最多重试一次，共用原来的 15 秒请求时限；保存操作不自动重放，响应中断时应刷新确认是否已经保存。错误会显示失败的操作、超时 / 传输中断及实际耗时。
+
 - 使用系统 WebView2；缺失时先安装 Microsoft Edge WebView2 Runtime。可执行文件带 `requireAdministrator` 清单，启动触发 UAC。
 - 仅允许单实例，连接期间需保持程序运行，不提供后台 Windows 服务。
 - 密码不保存。勾选保持登录后，令牌使用当前 Windows 用户 DPAPI 加密保存在 `%APPDATA%\WireguardManagerDesktop\cloud.dpapi`；本机访问目标按服务端 / 账号 / 设备隔离。JWT 和 WireGuard 私钥不返回 React，不写浏览器存储；每次连接重新鉴权并从服务器取配置。旧版 `profiles.dpapi` 保留但不再用于新界面。

@@ -3,11 +3,15 @@ package cloud
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestAPIAuthenticationAndDeviceOperations(t *testing.T) {
@@ -114,5 +118,82 @@ func TestUnauthorizedAndInvalidURL(t *testing.T) {
 		if _, err := New(raw); err == nil {
 			t.Errorf("accepted %q", raw)
 		}
+	}
+}
+
+func TestInterruptedReadRetriesGETOnce(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.Header().Set("Content-Length", "200")
+			w.Write([]byte(`{"success":true,"data":`))
+			return
+		}
+		w.Write([]byte(`{"success":true,"data":[{"id":3}]}`))
+	}))
+	defer server.Close()
+	c, _ := New(server.URL)
+	devices, err := c.Devices(context.Background())
+	if err != nil || len(devices) != 1 || calls.Load() != 2 {
+		t.Fatal("GET recovery failed", err, calls.Load())
+	}
+}
+
+func TestInterruptedMutationIsNotReplayedOrExposed(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Length", "200")
+		w.Write([]byte(`private-config-must-not-appear`))
+	}))
+	defer server.Close()
+	c, _ := New(server.URL)
+	_, err := c.SetLANs(context.Background(), 3, "")
+	var detail *RequestError
+	if !errors.As(err, &detail) || !errors.Is(err, io.ErrUnexpectedEOF) || detail.Stage != "read" || detail.Attempts != 1 {
+		t.Fatal("lost network failure detail", err)
+	}
+	if calls.Load() != 1 || !strings.Contains(err.Error(), "设置可能已保存") || !strings.Contains(err.Error(), "保存设备局域网") {
+		t.Fatal("mutation replayed or ambiguous save not explained", err)
+	}
+	if strings.Contains(err.Error(), "private-config") {
+		t.Fatal("error leaked response")
+	}
+}
+
+func TestSlowBodyReportsTimeoutWithoutRetry(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Write([]byte(`{"success":`))
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	c, _ := New(server.URL)
+	c.http.Timeout = 80 * time.Millisecond
+	_, err := c.Config(context.Background(), 3)
+	var detail *RequestError
+	if !errors.As(err, &detail) || detail.Stage != "read" || !strings.Contains(err.Error(), "读取响应超时") || !strings.Contains(err.Error(), "获取设备配置") {
+		t.Fatal("unhelpful timeout", err)
+	}
+	if detail.Elapsed <= 0 || calls.Load() != 1 {
+		t.Fatal("timeout budget reset by retry")
+	}
+}
+
+func TestTruncatedUnauthorizedResponseStillExpiresLogin(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Length", "200")
+		w.WriteHeader(401)
+		w.Write([]byte(`{"success":false`))
+	}))
+	defer server.Close()
+	c, _ := New(server.URL)
+	_, err := c.Devices(context.Background())
+	if !IsUnauthorized(err) || calls.Load() != 1 {
+		t.Fatal("unauthorized response retried or hidden", err)
 	}
 }

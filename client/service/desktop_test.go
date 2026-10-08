@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"wireguardmanager/client/cloud"
 )
@@ -19,6 +20,8 @@ type mockCloud struct {
 	configCalls, mutations int
 	denied                 bool
 	onConfig               func()
+	onDevices              func()
+	listCalls              int
 }
 
 func (m *mockCloud) BaseURL() string       { return m.base }
@@ -34,6 +37,10 @@ func (m *mockCloud) Me(context.Context) (cloud.User, error) {
 	return m.user, nil
 }
 func (m *mockCloud) Devices(context.Context) ([]cloud.Device, error) {
+	m.listCalls++
+	if m.onDevices != nil {
+		m.onDevices()
+	}
 	if m.denied {
 		return nil, &cloud.APIError{Status: 401}
 	}
@@ -221,5 +228,58 @@ func TestDisconnectWaitsForInFlightConnect(t *testing.T) {
 	}
 	if d.manager.Active() != "" {
 		t.Fatal("shutdown raced with in-flight connection")
+	}
+}
+
+func TestUnchangedConnectionLoadsConfigOnceAndReadsInParallel(t *testing.T) {
+	d, api, _, _ := desktopFixture(t)
+	configStarted, listStarted := make(chan struct{}), make(chan struct{})
+	api.onConfig = func() {
+		close(configStarted)
+		select {
+		case <-listStarted:
+		case <-time.After(time.Second):
+			t.Error("device list did not start while config was loading")
+		}
+	}
+	api.onDevices = func() {
+		close(listStarted)
+		select {
+		case <-configStarted:
+		case <-time.After(time.Second):
+			t.Error("configuration did not start while device list was loading")
+		}
+	}
+	if _, err := d.Connect(context.Background(), "1", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if api.configCalls != 1 || api.mutations != 0 {
+		t.Fatal("unchanged connection repeated config download or cloud mutation")
+	}
+	before := api.listCalls
+	if snapshot := d.Snapshot(); snapshot.User == nil || len(snapshot.Devices) != 2 {
+		t.Fatal("missing local state")
+	}
+	if api.listCalls != before || api.configCalls != 1 {
+		t.Fatal("error recovery triggered another API request")
+	}
+}
+
+func TestLANOverlapExplainsBothNetworks(t *testing.T) {
+	d, _, _, _ := desktopFixture(t)
+	_, err := d.Connect(context.Background(), "1", "10.100.1.2", "")
+	if err == nil || !strings.Contains(err.Error(), "10.100.1.2/32") || !strings.Contains(err.Error(), "10.100.1.0/24") || !strings.Contains(err.Error(), "留空") {
+		t.Fatal("LAN conflict is not actionable", err)
+	}
+}
+
+func TestBadInputDoesNotWaitForNetwork(t *testing.T) {
+	d, api, _, _ := desktopFixture(t)
+	before := api.listCalls
+	if _, err := d.Connect(context.Background(), "1", "invalid", ""); err == nil {
+		t.Fatal("invalid LAN accepted")
+	}
+	if api.configCalls != 0 || api.listCalls != before {
+		t.Fatal("invalid syntax caused a network request")
 	}
 }

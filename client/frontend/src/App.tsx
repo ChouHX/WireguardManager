@@ -172,7 +172,7 @@ export default function App() {
     } catch (e) {
       setError(String(e));
       try {
-        const next = await api().Bootstrap();
+        const next = await api().Snapshot();
         apply(next);
       } catch {
         /* Keep the original actionable error. */
@@ -621,7 +621,7 @@ export default function App() {
                       </Group>
                       <Textarea
                         label="本设备下挂设备 / 局域网"
-                        description="现场网关填写下挂 IP 或网段；仅访问远端的电脑可留空。保存后同步云端路由。"
+                        description="填写这台电脑连接的真实现场局域网，例如 192.168.1.0/24。仅访问远端时留空。"
                         placeholder={"192.168.0.100\n192.168.1.0/24"}
                         minRows={3}
                         autosize
@@ -629,6 +629,9 @@ export default function App() {
                         onChange={(e) => setLANs(e.currentTarget.value)}
                         disabled={locked}
                       />
+                      <Text size="xs" c="dimmed" mt={6}>
+                        WireGuard 虚拟地址 {device.address} 由云端分配，无需填入局域网。
+                      </Text>
                       <Group justify="space-between" mt="sm">
                         <Text size="xs" c="dimmed">
                           单个 IP 自动转为 /32

@@ -51,6 +51,7 @@ interface API {
   Login(email: string, password: string, remember: boolean): Promise<Desktop>;
   Logout(): Promise<Desktop>;
   Refresh(): Promise<Desktop>;
+  Snapshot(): Promise<Desktop>;
   DetectLANs(): Promise<Detection>;
   SaveDevice(id: string, lans: string, targets: string): Promise<Desktop>;
   Connect(id: string, lans: string, targets: string): Promise<Desktop>;

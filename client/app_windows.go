@@ -102,6 +102,12 @@ func (a *App) Refresh() (service.DesktopView, error) {
 	}
 	return a.desktop.Refresh(a.ctx)
 }
+func (a *App) Snapshot() (service.DesktopView, error) {
+	if err := a.ready(); err != nil {
+		return service.DesktopView{}, err
+	}
+	return a.desktop.Snapshot(), nil
+}
 func (a *App) DetectLANs() (service.LANDetection, error) {
 	if err := a.ready(); err != nil {
 		return service.LANDetection{}, err
