@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"unsafe"
 
 	ole "github.com/go-ole/go-ole"
@@ -69,6 +70,16 @@ var oleAutomation = windows.NewLazySystemDLL("oleaut32.dll")
 var safeArrayCreateVector = oleAutomation.NewProc("SafeArrayCreateVector")
 var safeArrayPutElement = oleAutomation.NewProc("SafeArrayPutElement")
 
+var netFwRuleIID = &ole.GUID{Data1: 0xaf230d27, Data2: 0xbaba, Data3: 0x4e42, Data4: [8]byte{0xac, 0xed, 0xf5, 0x24, 0xf2, 0x2c, 0xfc, 0xe2}}
+
+// INetFwRule layout from netfw.h. The 11 property getter/setter pairs before
+// Interfaces run from Name through Direction.
+type netFwRuleVTable struct {
+	ole.IDispatchVtbl
+	propertiesBeforeInterfaces   [22]uintptr
+	getInterfaces, putInterfaces uintptr
+}
+
 // INetFwRule.Interfaces requires SAFEARRAY(VARIANT) containing BSTR elements,
 // not the SAFEARRAY(BSTR) produced by go-ole's []string marshaler.
 func putFirewallInterfaces(rule *ole.IDispatch, name string) error {
@@ -89,7 +100,24 @@ func putFirewallInterfaces(rule *ole.IDispatch, name string) error {
 	if hr != 0 {
 		return ole.NewError(hr)
 	}
-	return comPut(rule, "Interfaces", &value)
+	// go-ole marshals *VARIANT as VT_BYREF, which this setter rejects. Call the
+	// typed INetFwRule API directly. The Windows x64 ABI passes a 24-byte VARIANT
+	// by value through a pointer to its caller-owned copy.
+	if runtime.GOARCH != "amd64" {
+		return errors.New("当前客户端仅支持 Windows x64")
+	}
+	native, err := rule.QueryInterface(netFwRuleIID)
+	if err != nil {
+		return err
+	}
+	defer native.Release()
+	vtable := (*netFwRuleVTable)(unsafe.Pointer(native.RawVTable))
+	hr, _, _ = syscall.SyscallN(vtable.putInterfaces, uintptr(unsafe.Pointer(native)), uintptr(unsafe.Pointer(&value)))
+	runtime.KeepAlive(value)
+	if hr != 0 {
+		return fmt.Errorf("接口 %s (HRESULT 0x%08x)：%w", name, uint32(hr), ole.NewError(hr))
+	}
+	return nil
 }
 
 // Unlike oleutil.ForEach, check errors even when Next returns zero elements.
