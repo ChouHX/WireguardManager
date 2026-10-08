@@ -66,3 +66,6 @@ postgres_data
 # config files
 config.yaml
 wg_config
+!client/build/
+!client/build/windows/
+!client/build/windows/app.manifest

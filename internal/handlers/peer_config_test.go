@@ -149,18 +149,18 @@ func TestClientAllowedIPs(t *testing.T) {
 			want:          "10.100.0.2/32",
 		},
 		{
-			name:             "显式配置覆盖默认推导",
+			name:             "旧目标设置不再覆盖租户网段",
 			clientAllowedIPs: "10.0.0.0/8",
 			serverAddress:    "10.100.0.1/24",
 			peerAddress:      "10.100.0.2",
-			want:             "10.0.0.0/8",
+			want:             "10.100.0.0/24",
 		},
 		{
-			name:             "显式配置全局代理",
+			name:             "旧全局代理设置被忽略",
 			clientAllowedIPs: "0.0.0.0/0, ::/0",
 			serverAddress:    "10.100.0.1/24",
 			peerAddress:      "10.100.0.2",
-			want:             "0.0.0.0/0, ::/0",
+			want:             "10.100.0.0/24",
 		},
 		{
 			name:          "IPv6 peer 不使用 IPv4 掩码",
@@ -223,7 +223,7 @@ func TestTenantClientTargetConfig(t *testing.T) {
 		t.Fatal(fixture.recorder.Body.String())
 	}
 	configText := body.Data["config"]
-	if got := allowedIPsLine(configText); got != "10.100.2.0/24, 192.168.0.100/32" {
+	if got := allowedIPsLine(configText); got != "10.100.2.0/24" {
 		t.Fatalf("wrong target routes: %s", got)
 	}
 	if !strings.Contains(configText, "Endpoint = 203.0.113.10:51821") {
@@ -234,14 +234,20 @@ func TestTenantClientTargetConfig(t *testing.T) {
 	}
 }
 
-func TestGatewayExportEnablesIPForwarding(t *testing.T) {
+func TestExportDeviceLANWithoutShellHooks(t *testing.T) {
 	fixture := setupPeerConfigFixture(t, "", "10.100.1.1/24", "10.100.1.2")
-	if err := database.DB.Model(&fixture.peer).Update("enable_forwarding", true).Error; err != nil {
+	if err := database.DB.Model(&fixture.peer).Updates(map[string]interface{}{"allowed_ips": "10.100.1.2/32, 192.168.0.0/24", "enable_forwarding": true, "forward_interface": "eth0"}).Error; err != nil {
 		t.Fatal(err)
 	}
 	GetPeerConfig(fixture.context)
-	if !strings.Contains(fixture.recorder.Body.String(), "sysctl -w net.ipv4.ip_forward=1") {
-		t.Fatal("gateway export must enable IP forwarding")
+	body := fixture.recorder.Body.String()
+	if !strings.Contains(body, "# WGM-Device-LAN = 192.168.0.0/24") {
+		t.Fatal("missing LAN metadata")
+	}
+	for _, hook := range []string{"PostUp", "PreDown", "iptables", "sysctl", "eth0"} {
+		if strings.Contains(body, hook) {
+			t.Fatalf("export contains obsolete hook %s", hook)
+		}
 	}
 }
 
@@ -302,5 +308,50 @@ case "$*" in '-o link show dev wgm2') printf '1: wgm2: <POINTOPOINT,UP>\n';; esa
 	}
 	if saved.AllowedIPs != "192.168.0.0/24" || saved.PresharedKey != "" {
 		t.Fatal("failed update changed persisted peer")
+	}
+}
+
+func TestClearDeviceLANRetainsTunnelAddress(t *testing.T) {
+	fixture := setupPeerConfigFixture(t, "", "10.100.2.1/24", "10.100.2.3")
+	if err := database.DB.Model(&fixture.server).Update("wg_interface", "wgm2").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Model(&fixture.peer).Updates(map[string]interface{}{"allowed_ips": "192.168.0.0/24", "enable_forwarding": false}).Error; err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "commands")
+	t.Setenv("WGM_COMMAND_LOG", logPath)
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	for _, name := range []string{"wg", "ip"} {
+		script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$WGM_COMMAND_LOG\"\ncase \"$*\" in '-o link show dev wgm2') printf '1: wgm2: <UP>\\n';; esac\n"
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixture.context.Request = httptest.NewRequest("PATCH", "/api/wireguard/peers/1", strings.NewReader(`{"allowed_ips":"","enable_forwarding":false,"client_allowed_ips":"0.0.0.0/0","forward_interface":"eth0"}`))
+	fixture.context.Request.Header.Set("Content-Type", "application/json")
+	UpdatePeer(fixture.context)
+	if fixture.recorder.Code != 200 {
+		t.Fatal(fixture.recorder.Body.String())
+	}
+	var saved models.WireguardPeer
+	if err := database.DB.First(&saved, fixture.peer.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved.AllowedIPs != "10.100.2.3/32" || !saved.EnableForwarding {
+		t.Fatal("clearing LAN removed tunnel route or disabled forwarding")
+	}
+	if saved.ToResponse().AllowedIPs != "" {
+		t.Fatal("response must hide tunnel /32")
+	}
+	log, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"allowed-ips 10.100.2.3/32", "route del 192.168.0.0/24"} {
+		if !strings.Contains(string(log), want) {
+			t.Fatalf("missing %s in %s", want, log)
+		}
 	}
 }

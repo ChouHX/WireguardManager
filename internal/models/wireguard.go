@@ -1,6 +1,8 @@
 package models
 
 import (
+	"net/netip"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -58,7 +60,7 @@ func (s *WireguardServer) ToResponse() WireguardServerResponse {
 
 // WireguardPeer WireGuard peer信息
 type WireguardPeer struct {
-	ClientAllowedIPs    string          `json:"client_allowed_ips" gorm:"default:''"`
+	ClientAllowedIPs    string          `json:"-" gorm:"default:''"`
 	ID                  uint            `json:"id" gorm:"primaryKey"`
 	ServerID            uint            `json:"server_id" gorm:"index;not null"`
 	Server              WireguardServer `json:"server,omitempty" gorm:"foreignKey:ServerID;constraint:OnDelete:CASCADE"`
@@ -66,23 +68,19 @@ type WireguardPeer struct {
 	PrivateKey          string          `json:"-" gorm:"not null"`            // peer私钥，不返回给客户端
 	PresharedKey        string          `json:"-" gorm:""`                    // 不返回给客户端
 	PeerAddress         string          `json:"peer_address" gorm:"not null"` // peer在WireGuard网段中的IP地址
-	AllowedIPs          string          `json:"allowed_ips" gorm:"not null"`  // 此设备背后的现场网段
+	AllowedIPs          string          `json:"allowed_ips" gorm:"not null"`  // 设备局域网及兼容旧版的隧道地址
 	Endpoint            string          `json:"endpoint" gorm:""`
 	PersistentKeepalive int             `json:"persistent_keepalive" gorm:"default:0"`
 	Comment             string          `json:"comment" gorm:""` // 备注，如设备名称
-	// EnableForwarding 是否让该设备充当网关。开启后会在【客户端配置】中注入
-	// iptables NAT 规则（PostUp/PreDown），使其他设备能经它访问 VPN。
-	EnableForwarding bool `json:"enable_forwarding" gorm:"default:false"`
-	// ForwardInterface 客户端设备自己的物理网卡名（如 eth0、wlan0），
-	// 用于客户端侧的 iptables MASQUERADE —— 注意不是服务器的出口网卡。
-	ForwardInterface string    `json:"forward_interface" gorm:""`
+	// Legacy columns retained for database compatibility; all devices forward locally.
+	EnableForwarding bool      `json:"-" gorm:"default:true"`
+	ForwardInterface string    `json:"-" gorm:""`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // WireguardPeerResponse Peer响应结构
 type WireguardPeerResponse struct {
-	ClientAllowedIPs    string `json:"client_allowed_ips"`
 	ID                  uint   `json:"id"`
 	PublicKey           string `json:"public_key"`
 	PrivateKey          string `json:"private_key"`  // 返回私钥供客户端配置使用
@@ -91,8 +89,6 @@ type WireguardPeerResponse struct {
 	Endpoint            string `json:"endpoint,omitempty"`
 	PersistentKeepalive int    `json:"persistent_keepalive"`
 	Comment             string `json:"comment,omitempty"`
-	EnableForwarding    bool   `json:"enable_forwarding"`
-	ForwardInterface    string `json:"forward_interface,omitempty"`
 	// UsePresharedKey 仅表示是否启用，密钥本身不下发到管理端
 	UsePresharedKey bool      `json:"use_preshared_key"`
 	CreatedAt       time.Time `json:"created_at"`
@@ -100,6 +96,7 @@ type WireguardPeerResponse struct {
 
 // WireguardPeerStats Peer实时统计信息
 type WireguardPeerStats struct {
+	DeviceLAN           string    `json:"device_lan"`
 	PublicKey           string    `json:"public_key"`
 	Endpoint            string    `json:"endpoint,omitempty"`
 	AllowedIPs          string    `json:"allowed_ips"`
@@ -169,17 +166,14 @@ type AdminUserTraffic struct {
 // ToResponse 转换为响应格式
 func (p *WireguardPeer) ToResponse() WireguardPeerResponse {
 	return WireguardPeerResponse{
-		ClientAllowedIPs:    p.ClientAllowedIPs,
 		ID:                  p.ID,
 		PublicKey:           p.PublicKey,
 		PrivateKey:          p.PrivateKey,
 		PeerAddress:         p.PeerAddress,
-		AllowedIPs:          p.AllowedIPs,
+		AllowedIPs:          p.DeviceLANs(),
 		Endpoint:            p.Endpoint,
 		PersistentKeepalive: p.PersistentKeepalive,
 		Comment:             p.Comment,
-		EnableForwarding:    p.EnableForwarding,
-		ForwardInterface:    p.ForwardInterface,
 		UsePresharedKey:     p.PresharedKey != "",
 		CreatedAt:           p.CreatedAt,
 	}
@@ -187,8 +181,40 @@ func (p *WireguardPeer) ToResponse() WireguardPeerResponse {
 
 // BeforeCreate Hook
 func (p *WireguardPeer) BeforeCreate(tx *gorm.DB) error {
+	p.EnableForwarding = true
+	p.ClientAllowedIPs = ""
+	p.ForwardInterface = ""
 	if p.PersistentKeepalive == 0 {
 		p.PersistentKeepalive = 25 // 默认25秒
 	}
 	return nil
+}
+
+// DeviceLANs omits WireGuard addresses from the editable LAN declaration.
+// ServerAllowedIPs still adds the device's tunnel /32 when configuring WireGuard.
+func (p *WireguardPeer) DeviceLANs() string {
+	var result []string
+	seen := map[string]bool{}
+	peerIP, _ := netip.ParseAddr(p.PeerAddress)
+	reserved := netip.MustParsePrefix("10.100.0.0/16")
+	for _, raw := range strings.Split(p.AllowedIPs, ",") {
+		raw = strings.TrimSpace(raw)
+		prefix, err := netip.ParsePrefix(raw)
+		if err != nil {
+			ip, err := netip.ParseAddr(raw)
+			if err != nil {
+				continue
+			}
+			prefix = netip.PrefixFrom(ip, ip.BitLen())
+		}
+		prefix = prefix.Masked()
+		if prefix.Contains(peerIP) || prefix.Overlaps(reserved) {
+			continue
+		}
+		if !seen[prefix.String()] {
+			result = append(result, prefix.String())
+			seen[prefix.String()] = true
+		}
+	}
+	return strings.Join(result, ", ")
 }

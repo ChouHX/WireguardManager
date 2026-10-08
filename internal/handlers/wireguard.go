@@ -132,14 +132,17 @@ func GetMyTrafficStats(c *gin.Context) {
 
 	// 创建peer公钥到备注的映射
 	peerComments := make(map[string]string)
+	peerLANs := make(map[string]string)
 	for _, peer := range peers {
 		peerComments[peer.PublicKey] = peer.Comment
+		peerLANs[peer.PublicKey] = peer.DeviceLANs()
 	}
 
 	// 添加备注到统计信息
 	for i := range stats.Peers {
 		if comment, ok := peerComments[stats.Peers[i].PublicKey]; ok {
 			stats.Peers[i].Comment = comment
+			stats.Peers[i].DeviceLAN = peerLANs[stats.Peers[i].PublicKey]
 		}
 	}
 
@@ -186,8 +189,10 @@ func GetMyTrafficSummary(c *gin.Context) {
 
 	// 创建peer公钥到备注的映射
 	peerComments := make(map[string]string)
+	peerLANs := make(map[string]string)
 	for _, peer := range peers {
 		peerComments[peer.PublicKey] = peer.Comment
+		peerLANs[peer.PublicKey] = peer.DeviceLANs()
 	}
 
 	// 构建流量摘要
@@ -315,13 +320,16 @@ func GetUserTrafficStats(c *gin.Context) {
 	database.DB.Where("server_id = ?", wgServer.ID).Find(&peers)
 
 	peerComments := make(map[string]string)
+	peerLANs := make(map[string]string)
 	for _, peer := range peers {
 		peerComments[peer.PublicKey] = peer.Comment
+		peerLANs[peer.PublicKey] = peer.DeviceLANs()
 	}
 
 	for i := range stats.Peers {
 		if comment, ok := peerComments[stats.Peers[i].PublicKey]; ok {
 			stats.Peers[i].Comment = comment
+			stats.Peers[i].DeviceLAN = peerLANs[stats.Peers[i].PublicKey]
 		}
 	}
 
@@ -369,12 +377,9 @@ func GetMyPeers(c *gin.Context) {
 
 // AddPeerRequest 添加peer请求
 type AddPeerRequest struct {
-	ClientAllowedIPs    string `json:"client_allowed_ips"`
-	AllowedIPs          string `json:"allowed_ips"` // peer可以访问的IP地址或网段，留空则默认为peer自己的IP
+	AllowedIPs          string `json:"allowed_ips"` // 设备局域网；留空表示仅保留设备隧道地址
 	PersistentKeepalive int    `json:"persistent_keepalive"`
 	Comment             string `json:"comment"`
-	EnableForwarding    bool   `json:"enable_forwarding"` // 是否启用转发（作为网关）
-	ForwardInterface    string `json:"forward_interface"` // 转发接口名称（如 eth0）
 	// UsePresharedKey 是否启用预共享密钥；留空则取运行时配置中的默认值
 	UsePresharedKey *bool `json:"use_preshared_key"`
 }
@@ -406,12 +411,6 @@ func AddPeer(c *gin.Context) {
 		return
 	}
 
-	clientRoutes, err := services.NormalizeClientRoutes(req.ClientAllowedIPs)
-	if err != nil {
-		response.ValidationError(c, err.Error())
-		return
-	}
-	req.ClientAllowedIPs = clientRoutes
 	if _, err := services.PeerRoutes(req.AllowedIPs); err != nil {
 		response.ValidationError(c, err.Error())
 		return
@@ -501,7 +500,7 @@ func createPeerRecord(wgService *services.WireguardService, wgServer *models.Wir
 		// 5. 创建peer记录
 		peer := models.WireguardPeer{
 			ServerID:            wgServer.ID,
-			ClientAllowedIPs:    req.ClientAllowedIPs,
+			EnableForwarding:    true,
 			PublicKey:           publicKey,
 			PrivateKey:          privateKey,
 			PresharedKey:        presharedKey,
@@ -509,8 +508,6 @@ func createPeerRecord(wgService *services.WireguardService, wgServer *models.Wir
 			AllowedIPs:          allowedIPs,
 			PersistentKeepalive: req.PersistentKeepalive,
 			Comment:             req.Comment,
-			EnableForwarding:    req.EnableForwarding,
-			ForwardInterface:    req.ForwardInterface,
 		}
 
 		var others []models.WireguardPeer
@@ -706,12 +703,9 @@ func DeletePeer(c *gin.Context) {
 
 // UpdatePeerRequest 更新peer请求
 type UpdatePeerRequest struct {
-	ClientAllowedIPs    *string `json:"client_allowed_ips"`
-	AllowedIPs          string  `json:"allowed_ips"`
+	AllowedIPs          *string `json:"allowed_ips"`
 	PersistentKeepalive *int    `json:"persistent_keepalive"`
 	Comment             string  `json:"comment"`
-	EnableForwarding    *bool   `json:"enable_forwarding"`
-	ForwardInterface    string  `json:"forward_interface"`
 	// UsePresharedKey 切换预共享密钥（启用时自动生成并下发，关闭时重新建立已无密钥的 peer）
 	UsePresharedKey *bool `json:"use_preshared_key"`
 }
@@ -758,19 +752,16 @@ func UpdatePeer(c *gin.Context) {
 		return
 	}
 
-	updates := make(map[string]interface{})
-	if req.ClientAllowedIPs != nil {
-		routes, err := services.NormalizeClientRoutes(*req.ClientAllowedIPs)
-		if err != nil {
-			response.ValidationError(c, err.Error())
-			return
+	updates := map[string]interface{}{"enable_forwarding": true}
+	requestedAllowedIPs := peer.AllowedIPs
+	if req.AllowedIPs != nil {
+		requestedAllowedIPs = strings.TrimSpace(*req.AllowedIPs)
+		if requestedAllowedIPs == "" {
+			requestedAllowedIPs = peer.PeerAddress + "/32"
 		}
-		updates["client_allowed_ips"] = routes
 	}
 	candidate := peer
-	if req.AllowedIPs != "" {
-		candidate.AllowedIPs = req.AllowedIPs
-	}
+	candidate.AllowedIPs = requestedAllowedIPs
 	var others []models.WireguardPeer
 	if err := database.DB.Where("server_id = ?", wgServer.ID).Find(&others).Error; err != nil {
 		response.InternalError(c, "Failed to read tenant routes")
@@ -782,8 +773,8 @@ func UpdatePeer(c *gin.Context) {
 	}
 
 	needWgUpdate := false
-	if req.AllowedIPs != "" && req.AllowedIPs != peer.AllowedIPs {
-		updates["allowed_ips"] = req.AllowedIPs
+	if requestedAllowedIPs != "" && requestedAllowedIPs != peer.AllowedIPs {
+		updates["allowed_ips"] = requestedAllowedIPs
 		needWgUpdate = true
 	}
 
@@ -795,14 +786,6 @@ func UpdatePeer(c *gin.Context) {
 		updates["comment"] = req.Comment
 	}
 
-	if req.EnableForwarding != nil {
-		updates["enable_forwarding"] = *req.EnableForwarding
-	}
-
-	if req.ForwardInterface != "" {
-		updates["forward_interface"] = req.ForwardInterface
-	}
-
 	originalPeer := peer
 	kernelChanged, routesChanged, committed := false, false, false
 	defer func() {
@@ -810,7 +793,7 @@ func UpdatePeer(c *gin.Context) {
 			return
 		}
 		if routesChanged {
-			if err := services.NewInterfaceService().ChangePeerRoutes(wgServer.WgInterface, req.AllowedIPs, originalPeer.AllowedIPs); err != nil {
+			if err := services.NewInterfaceService().ChangePeerRoutes(wgServer.WgInterface, requestedAllowedIPs, originalPeer.AllowedIPs); err != nil {
 				log.Printf("Peer %d route rollback failed: %v", peer.ID, err)
 			}
 		}
@@ -875,7 +858,7 @@ func UpdatePeer(c *gin.Context) {
 		// 1. 先同步服务端 allowed-ips（cryptokey routing 的依据），
 		//    否则改了网段也转发不到该设备——只调整路由是无效的。
 		updatedPeer := peer
-		updatedPeer.AllowedIPs = req.AllowedIPs
+		updatedPeer.AllowedIPs = requestedAllowedIPs
 		kernelChanged = true
 		if err := wgService.SetPeerAllowedIPs(
 			wgServer.WgInterface, peer.PublicKey, buildServerAllowedIPs(&updatedPeer),
@@ -884,7 +867,7 @@ func UpdatePeer(c *gin.Context) {
 			return
 		}
 
-		if err := interfaceService.ChangePeerRoutes(wgServer.WgInterface, peer.AllowedIPs, req.AllowedIPs); err != nil {
+		if err := interfaceService.ChangePeerRoutes(wgServer.WgInterface, peer.AllowedIPs, requestedAllowedIPs); err != nil {
 			response.InternalError(c, "Failed to update tenant routes: "+err.Error())
 			return
 		}
@@ -1136,21 +1119,8 @@ func GetNetworkInterfaces(c *gin.Context) {
 	})
 }
 
-// clientAllowedIPs 计算下发给客户端的 AllowedIPs（客户端把哪些流量送进隧道）。
-//
-// 取值优先级：
-//  1. network.client_allowed_ips 显式配置（需要全局代理时写 "0.0.0.0/0, ::/0"）；
-//  2. 按 peer 所在网段推导：以 peer 地址配合服务端接口掩码求网络地址，
-//     例如服务端 10.100.0.1/24、该 peer 分配到 10.100.0.2 → 10.100.0.0/24；
-//  3. 推导失败时回退为 peer 自身地址（/32 或 /128），始终避免下发全流量。
+// clientAllowedIPs exports only the tenant tunnel network. Targets belong to the desktop client.
 func clientAllowedIPs(serverAddress, peerAddress string) string {
-	configured := strings.TrimSpace(
-		services.GetSettings().String(services.SettingNetworkClientAllowedIPs, config.AppConfig.Network.ClientAllowedIPs),
-	)
-	if configured != "" {
-		return configured
-	}
-
 	if derived, ok := deriveNetworkCIDR(serverAddress, peerAddress); ok {
 		return derived
 	}
@@ -1246,19 +1216,7 @@ func GetPeerConfig(c *gin.Context) {
 		serverEndpoint = fmt.Sprintf("%s:%d", serverIP, wgServer.WgPort)
 	}
 
-	// 客户端 AllowedIPs：优先取 network.client_allowed_ips 配置，
-	// 未配置时按 peer 所在网段推导（不再默认放行全部流量）
 	allowedIPs := clientAllowedIPs(wgServer.WgAddress, peer.PeerAddress)
-	if strings.TrimSpace(peer.ClientAllowedIPs) != "" {
-		routes, err := services.NormalizeClientRoutes(peer.ClientAllowedIPs)
-		if err != nil {
-			response.InternalError(c, "Invalid client target routes: "+err.Error())
-			return
-		}
-		// Keep tunnel addresses reachable for peer communication and monitoring.
-		subnet, _ := deriveNetworkCIDR(wgServer.WgAddress, peer.PeerAddress)
-		allowedIPs = strings.Trim(strings.Join([]string{subnet, routes}, ", "), ", ")
-	}
 
 	// 基础配置内容
 	configContent := fmt.Sprintf(`[Interface]
@@ -1271,24 +1229,9 @@ DNS = %s
 		dns,
 	)
 
-	// 启用转发时注入客户端侧的 NAT 规则。
-	// 这段脚本在【客户端设备】上执行，因此网卡指的是该设备自己的物理网卡；
-	// 未指定时使用取反匹配 `! -o %i`（%i 由 wg-quick 展开为接口名），
-	// 即"只要不是从隧道出去的流量就做 NAT"，从而无需知道对端网卡叫什么。
-	// 注意 iptables 要求感叹号写在选项之前：`! -o wg0` 合法，`-o ! wg0` 会报错。
-	if peer.EnableForwarding {
-		match := "! -o %i"
-		if iface := strings.TrimSpace(peer.ForwardInterface); iface != "" {
-			match = "-o " + iface
-		}
-
-		postUp := fmt.Sprintf(`PostUp = sysctl -w net.ipv4.ip_forward=1; iptables -t nat -A POSTROUTING %s -j MASQUERADE; iptables -A FORWARD -i %%i -j ACCEPT; iptables -A FORWARD -o %%i -j ACCEPT
-PreDown = iptables -t nat -D POSTROUTING %s -j MASQUERADE; iptables -D FORWARD -i %%i -j ACCEPT; iptables -D FORWARD -o %%i -j ACCEPT
-`,
-			match,
-			match,
-		)
-		configContent += postUp
+	// Metadata is consumed locally; no OS-specific hooks or user target routes are exported.
+	if lan := peer.DeviceLANs(); lan != "" {
+		configContent = "# WGM-Device-LAN = " + lan + "\n" + configContent
 	}
 
 	// 添加 Peer 配置；启用预共享密钥时写入 [Peer] 段内

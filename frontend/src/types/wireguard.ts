@@ -14,7 +14,6 @@ export interface WireguardServerInfo {
 }
 
 export interface WireguardPeer {
-  client_allowed_ips: string;
   id: number;
   public_key: string;
   private_key: string;
@@ -23,14 +22,13 @@ export interface WireguardPeer {
   endpoint?: string;
   persistent_keepalive: number;
   comment?: string;
-  enable_forwarding: boolean;
-  forward_interface?: string;
   /** 是否启用预共享密钥（密钥本身不下发到前端） */
   use_preshared_key: boolean;
   created_at: string;
 }
 
 export interface WireguardPeerStats {
+  device_lan: string;
   public_key: string;
   endpoint?: string;
   allowed_ips: string;
@@ -176,21 +174,15 @@ export interface AdminLivenessResponse {
 
 export interface AddPeerRequest {
   allowed_ips?: string;
-  client_allowed_ips?: string;
   persistent_keepalive?: number;
   comment?: string;
-  enable_forwarding?: boolean;
-  forward_interface?: string;
   /** 是否启用预共享密钥；留空则取运行时默认值 */
   use_preshared_key?: boolean;
 }
 
 export interface UpdatePeerRequest {
   allowed_ips?: string;
-  client_allowed_ips?: string;
   persistent_keepalive?: number;
   comment?: string;
-  enable_forwarding?: boolean;
-  forward_interface?: string;
   use_preshared_key?: boolean;
 }

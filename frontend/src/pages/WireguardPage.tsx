@@ -73,22 +73,16 @@ const LIVENESS_INTERVAL_MS = 2000;
 
 interface PeerFormValues {
   allowed_ips: string[];
-  client_allowed_ips: string[];
   persistent_keepalive: number;
   comment: string;
-  enable_forwarding: boolean;
-  forward_interface: string;
   /** 是否启用预共享密钥 */
   use_preshared_key: boolean;
 }
 
 const EMPTY_FORM: PeerFormValues = {
   allowed_ips: [],
-  client_allowed_ips: [],
   persistent_keepalive: 10,
   comment: '',
-  enable_forwarding: false,
-  forward_interface: '',
   use_preshared_key: false,
 };
 
@@ -308,7 +302,7 @@ export default function WireguardPage() {
   );
 
   const handleAdd = async () => {
-    const invalid = [...addValues.allowed_ips, ...addValues.client_allowed_ips].some((ip) => !isValidIPOrCIDR(ip));
+    const invalid = addValues.allowed_ips.some((ip) => !isValidIPOrCIDR(ip));
     if (invalid) {
       setAddIpError(t('wireguard.invalidIPFormat'));
       return;
@@ -318,14 +312,11 @@ export default function WireguardPage() {
     setError(null);
     try {
       const payload: AddPeerRequest = {
-        client_allowed_ips: addValues.client_allowed_ips.map(normalizeIPToCIDR).join(', '),
         allowed_ips: addValues.allowed_ips.length
           ? addValues.allowed_ips.map(normalizeIPToCIDR).join(', ')
           : undefined,
         persistent_keepalive: addValues.persistent_keepalive,
         comment: addValues.comment,
-        enable_forwarding: addValues.enable_forwarding,
-        forward_interface: addValues.enable_forwarding ? addValues.forward_interface : undefined,
         use_preshared_key: addValues.use_preshared_key,
       };
 
@@ -347,7 +338,7 @@ export default function WireguardPage() {
   const handleEdit = async () => {
     if (!selected) return;
 
-    const invalid = [...editValues.allowed_ips, ...editValues.client_allowed_ips].some((ip) => !isValidIPOrCIDR(ip));
+    const invalid = editValues.allowed_ips.some((ip) => !isValidIPOrCIDR(ip));
     if (invalid) {
       setEditIpError(t('wireguard.invalidIPFormat'));
       return;
@@ -357,14 +348,11 @@ export default function WireguardPage() {
     setError(null);
     try {
       const payload: UpdatePeerRequest = {
-        client_allowed_ips: editValues.client_allowed_ips.map(normalizeIPToCIDR).join(', '),
         allowed_ips: editValues.allowed_ips.length
           ? editValues.allowed_ips.map(normalizeIPToCIDR).join(', ')
-          : `${selected.peer_address}/32`,
+          : '',
         persistent_keepalive: editValues.persistent_keepalive,
         comment: editValues.comment,
-        enable_forwarding: editValues.enable_forwarding,
-        forward_interface: editValues.enable_forwarding ? editValues.forward_interface : undefined,
         use_preshared_key: editValues.use_preshared_key,
       };
 
@@ -434,12 +422,9 @@ export default function WireguardPage() {
     setSelected(peer);
     setEditIpError(null);
     setEditValues({
-      client_allowed_ips: peer.client_allowed_ips ? peer.client_allowed_ips.split(/,\s*/).filter(Boolean) : [],
       allowed_ips: peer.allowed_ips ? peer.allowed_ips.split(/,\s*/).filter(Boolean) : [],
       persistent_keepalive: peer.persistent_keepalive,
       comment: peer.comment ?? '',
-      enable_forwarding: peer.enable_forwarding,
-      forward_interface: peer.forward_interface ?? '',
       use_preshared_key: peer.use_preshared_key,
     });
     editModal.open();
@@ -492,17 +477,6 @@ export default function WireguardPage() {
         splitChars={[',', ' ']}
       />
 
-      <TagsInput
-        label={t('wireguard.clientTargetIPs')}
-        description={t('wireguard.clientTargetIPsHelp')}
-        placeholder="192.168.0.100"
-        value={values.client_allowed_ips}
-        onChange={(next) => setValues({ ...values, client_allowed_ips: next })}
-        error={ipError}
-        disabled={disabled}
-        splitChars={[',', ' ']}
-      />
-
       <NumberInput
         label={t('wireguard.persistentKeepalive')}
         value={values.persistent_keepalive}
@@ -521,40 +495,6 @@ export default function WireguardPage() {
         onChange={(event) => setValues({ ...values, comment: event.currentTarget.value })}
         disabled={disabled}
       />
-
-      <Card withBorder radius="xs" p="md">
-        <Group justify="space-between" align="flex-start" wrap="nowrap">
-          <Box>
-            <Text size="sm" fw={600}>
-              {t('wireguard.enableForwarding')}
-            </Text>
-            <Text size="xs" c="dimmed" mt={4} maw={380}>
-              {t('wireguard.forwardingHelp')}
-            </Text>
-          </Box>
-          <Switch
-            checked={values.enable_forwarding}
-            onChange={(event) =>
-              setValues({ ...values, enable_forwarding: event.currentTarget.checked })
-            }
-            color="wg"
-            disabled={disabled}
-          />
-        </Group>
-
-        {values.enable_forwarding ? (
-          <TextInput
-            mt="md"
-            label={t('wireguard.forwardInterface')}
-            placeholder={t('wireguard.forwardInterfaceOptional')}
-            description={t('wireguard.forwardInterfaceHelp')}
-            value={values.forward_interface}
-            onChange={(event) => setValues({ ...values, forward_interface: event.currentTarget.value })}
-            disabled={disabled}
-            className="wm-mono"
-          />
-        ) : null}
-      </Card>
 
       <Card withBorder radius="xs" p="md">
         <Group justify="space-between" align="flex-start" wrap="nowrap">
@@ -746,13 +686,6 @@ export default function WireguardPage() {
                             <Text size="sm" fw={600}>
                               {peer.comment || t('wireguard.unnamed')}
                             </Text>
-                            {peer.enable_forwarding ? (
-                              <Tooltip label={t('wireguard.forwardingEnabled')}>
-                                <Badge size="xs" color="teal" variant="light">
-                                  GW
-                                </Badge>
-                              </Tooltip>
-                            ) : null}
                             {peer.use_preshared_key ? (
                               <Tooltip label={t('wireguard.usePresharedKey')}>
                                 <Badge size="xs" color="wg" variant="light">

@@ -33,7 +33,6 @@ const LABEL_KEY: Record<string, string> = {
   'network.base_subnet': 'baseSubnet',
   'network.base_port': 'basePort',
   'network.dns': 'dns',
-  'network.client_allowed_ips': 'clientAllowedIps',
   'network.mtu': 'mtu',
   'monitoring.interval_seconds': 'monitoringInterval',
   'monitoring.retention_hours': 'monitoringRetention',
@@ -202,9 +201,6 @@ export default function SettingsPage() {
           value={value}
           onChange={(event) => set(def.key, event.currentTarget.value)}
           className="wm-mono"
-          placeholder={
-            def.key === 'network.client_allowed_ips' ? t('settings.allowedIpsPlaceholder') : undefined
-          }
         />
       ),
     };

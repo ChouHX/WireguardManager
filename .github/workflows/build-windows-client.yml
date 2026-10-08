@@ -1,0 +1,50 @@
+name: Build Windows Client
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'client/**'
+      - '.github/workflows/build-windows-client.yml'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'client/**'
+      - '.github/workflows/build-windows-client.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  client:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: client/go.mod
+          cache-dependency-path: client/go.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: client/frontend/package-lock.json
+      - name: Build frontend
+        run: |
+          npm --prefix client/frontend ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix client/frontend run build
+      - name: Test client and Windows DPAPI
+        working-directory: client
+        run: go test ./service
+      - name: Build and verify embedded driver and administrator manifest
+        working-directory: client
+        run: go run ./tools/package
+      - uses: actions/upload-artifact@v7
+        with:
+          name: WireguardManagerDesktop-windows-amd64
+          path: |
+            client/build/bin/WireguardManagerDesktop-windows-amd64.zip
+            client/build/bin/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30

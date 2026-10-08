@@ -742,7 +742,7 @@ export default function AdminWireguardPage() {
                           </Table.Td>
                           <Table.Td>
                             <Text size="xs" c="dimmed" className="wm-mono">
-                              {peer.allowed_ips || t('wireguard.noAllowedIPs')}
+                              {peer.device_lan || t('wireguard.noAllowedIPs')}
                             </Text>
                           </Table.Td>
                           <Table.Td>

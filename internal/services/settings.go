@@ -63,7 +63,6 @@ var SettingDefs = []SettingDef{
 	{Key: SettingNetworkBaseSubnet, Type: "string", Group: "network"},
 	{Key: SettingNetworkBasePort, Type: "int", Group: "network", Min: 1, Max: 65535},
 	{Key: SettingNetworkDNS, Type: "string", Group: "network"},
-	{Key: SettingNetworkClientAllowedIPs, Type: "string", Group: "network"},
 	{Key: SettingNetworkMTU, Type: "int", Group: "network", Min: 0, Max: 65535},
 
 	{Key: SettingMonitoringInterval, Type: "int", Group: "monitoring", Min: 1, Max: 3600},

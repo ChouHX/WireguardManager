@@ -88,6 +88,13 @@ func InitDB() error {
 		return fmt.Errorf("failed to migrate database: %w", err)
 	}
 
+	// Forwarding is automatic; keep obsolete preference columns for downgrade compatibility.
+	if err := db.Model(&models.WireguardPeer{}).Where("1 = 1").Updates(map[string]interface{}{
+		"enable_forwarding": true,
+	}).Error; err != nil {
+		return fmt.Errorf("failed to migrate device forwarding defaults: %w", err)
+	}
+
 	// Create default platform admin if not exists
 	if err := createDefaultPlatformAdmin(); err != nil {
 		return fmt.Errorf("failed to create default platform admin: %w", err)

@@ -39,3 +39,6 @@ main
 
 # Test files
 *_test.go
+
+# Independent Windows desktop module
+client/
