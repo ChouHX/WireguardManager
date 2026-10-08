@@ -4,6 +4,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,10 +67,19 @@ func AcquireInstance() (func(), error) {
 }
 
 type WindowsBackend struct{ journal string }
+type forwardingState struct {
+	AdapterID  string `json:"adapterID"`
+	Forwarding bool   `json:"forwarding"`
+}
 type forwardingJournal struct {
-	Version    int
-	AdapterID  string
-	Forwarding bool
+	Version int
+	// Version 1 compatibility: restore the old manually selected interface once.
+	AdapterID  string            `json:",omitempty"`
+	Forwarding bool              `json:",omitempty"`
+	Interfaces []forwardingState `json:",omitempty"`
+	Rules      []firewallRule    `json:",omitempty"`
+	NATName    string            `json:",omitempty"`
+	NATPrefix  string            `json:",omitempty"`
 }
 
 func NewWindowsBackend(dir string) (*WindowsBackend, error) {
@@ -92,6 +103,13 @@ func adapterLUID(id string) (winipcfg.LUID, error) {
 	}
 	return winipcfg.LUIDFromGUID(&guid)
 }
+func (b *WindowsBackend) saveJournal(journal forwardingJournal) error {
+	data, err := json.Marshal(journal)
+	if err != nil {
+		return err
+	}
+	return AtomicWrite(b.journal, data)
+}
 func (b *WindowsBackend) recover() error {
 	raw, err := os.ReadFile(b.journal)
 	if errors.Is(err, os.ErrNotExist) {
@@ -101,20 +119,48 @@ func (b *WindowsBackend) recover() error {
 		return err
 	}
 	var journal forwardingJournal
-	if err = json.Unmarshal(raw, &journal); err != nil || journal.Version != 1 {
+	if err = json.Unmarshal(raw, &journal); err != nil || (journal.Version != 1 && journal.Version != 2) {
 		return errors.New("恢复记录无效")
 	}
-	luid, err := adapterLUID(journal.AdapterID)
-	if err != nil {
-		return fmt.Errorf("找不到原局域网卡，请重新启用该网卡后再运行：%w", err)
+	if journal.Version == 1 {
+		journal.Interfaces = []forwardingState{{journal.AdapterID, journal.Forwarding}}
+		journal.Version = 2
+		journal.AdapterID = ""
 	}
-	row, err := luid.IPInterface(windows.AF_INET)
-	if err != nil {
-		return err
+	var result error
+	if err = removeFirewallRules(journal.Rules); err != nil {
+		result = errors.Join(result, err)
+	} else {
+		journal.Rules = nil
 	}
-	row.ForwardingEnabled = journal.Forwarding
-	if err = row.Set(); err != nil {
-		return err
+	if err = removeNAT(journal.NATName, journal.NATPrefix); err != nil {
+		result = errors.Join(result, err)
+	} else {
+		journal.NATName = ""
+		journal.NATPrefix = ""
+	}
+	remaining := []forwardingState{}
+	for _, state := range journal.Interfaces {
+		err := func() error {
+			luid, err := adapterLUID(state.AdapterID)
+			if err != nil {
+				return fmt.Errorf("请重新启用原局域网卡后重试恢复：%w", err)
+			}
+			row, err := luid.IPInterface(windows.AF_INET)
+			if err != nil {
+				return err
+			}
+			row.ForwardingEnabled = state.Forwarding
+			return row.Set()
+		}()
+		if err != nil {
+			result = errors.Join(result, err)
+			remaining = append(remaining, state)
+		}
+	}
+	journal.Interfaces = remaining
+	if result != nil {
+		return errors.Join(result, b.saveJournal(journal))
 	}
 	return os.Remove(b.journal)
 }
@@ -133,7 +179,10 @@ func (b *WindowsBackend) Adapters() ([]AdapterInfo, error) {
 		if err != nil {
 			continue
 		}
-		info := AdapterInfo{ID: guid.String(), Name: a.FriendlyName(), Addresses: []string{}}
+		info := AdapterInfo{ID: guid.String(), Name: a.FriendlyName(), Addresses: []string{}, Metric: a.Ipv4Metric}
+		if row, err := a.LUID.Interface(); err == nil {
+			info.AutoEligible = (a.IfType == winipcfg.IfTypeEthernetCSMACD || a.IfType == winipcfg.IfTypeIEEE80211) && row.InterfaceAndOperStatusFlags&winipcfg.IAOSFHardwareInterface != 0
+		}
 		for u := a.FirstUnicastAddress; u != nil; u = u.Next {
 			ip, ok := netip.AddrFromSlice(u.Address.IP())
 			if !ok || !ip.Unmap().Is4() {
@@ -172,11 +221,7 @@ func (b *WindowsBackend) Open(ctx context.Context, p Profile) (Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	var selected *AdapterInfo
 	for i := range adapters {
-		if adapters[i].ID == p.AdapterID {
-			selected = &adapters[i]
-		}
 		for _, raw := range adapters[i].Addresses {
 			addr, _ := netip.ParsePrefix(raw)
 			for _, route := range routes {
@@ -186,22 +231,9 @@ func (b *WindowsBackend) Open(ctx context.Context, p Profile) (Session, error) {
 			}
 		}
 	}
-	if len(p.Config.DeviceLANs) > 0 {
-		if selected == nil {
-			return nil, errors.New("此设备声明了局域网，请选择本机的局域网网卡")
-		}
-		for _, lan := range p.Config.DeviceLANs {
-			matched := false
-			for _, raw := range selected.Addresses {
-				addr, _ := netip.ParsePrefix(raw)
-				if addr.Masked() == lan || lan.Contains(addr.Addr()) {
-					matched = true
-				}
-			}
-			if !matched {
-				return nil, fmt.Errorf("网卡 %s 不在设备局域网 %s 内", selected.Name, lan)
-			}
-		}
+	selected, err := DetectLANAdapters(p.Config.DeviceLANs, adapters)
+	if err != nil {
+		return nil, err
 	}
 	// Only adapters created by this process are owned and removed. Never adopt an unknown interface.
 	if old, openErr := driver.OpenAdapter(adapterName); openErr == nil {
@@ -270,26 +302,10 @@ func (b *WindowsBackend) Open(ctx context.Context, p Profile) (Session, error) {
 			return fail(fmt.Errorf("添加路由 %s 失败：%w", route, err))
 		}
 	}
-	if selected != nil {
-		lan, err := adapterLUID(selected.ID)
-		if err != nil {
-			return fail(err)
-		}
-		row, err := lan.IPInterface(windows.AF_INET)
-		if err != nil {
-			return fail(err)
-		}
-		data, _ := json.Marshal(forwardingJournal{1, selected.ID, row.ForwardingEnabled})
-		// Journal before mutation: after a crash the next launch restores the original value.
-		if err = AtomicWrite(b.journal, data); err != nil {
-			return fail(err)
-		}
-		session.restore = true
-		row.ForwardingEnabled = true
-		if err = row.Set(); err != nil {
-			return fail(err)
-		}
+	if err = b.applyAutomaticNetwork(session, p, selected); err != nil {
+		return fail(err)
 	}
+
 	return session, nil
 }
 
@@ -298,6 +314,7 @@ type windowsSession struct {
 	luid          winipcfg.LUID
 	backend       *WindowsBackend
 	restore       bool
+	details       NetworkDetails
 	source, probe netip.Addr
 }
 
@@ -357,4 +374,82 @@ func (s *windowsSession) Sample(ctx context.Context) (Counters, error) {
 		c.LatencyMS = icmpLatency(s.source, s.probe)
 	}
 	return c, nil
+}
+
+func (s *windowsSession) NetworkDetails() NetworkDetails { return s.details }
+
+func (b *WindowsBackend) applyAutomaticNetwork(session *windowsSession, p Profile, selected []AdapterInfo) error {
+	var nonce [8]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return err
+	}
+	name := "WGM-Desktop-" + hex.EncodeToString(nonce[:])
+	journal := forwardingJournal{Version: 2}
+	routes, err := p.Routes()
+	if err != nil {
+		return err
+	}
+	for _, direction := range []int{1, 2} {
+		journal.Rules = append(journal.Rules, firewallRule{fmt.Sprintf("%s-tunnel-%d", name, direction), adapterName, JoinPrefixes(routes), direction})
+	}
+	session.details.Adapters = []string{}
+	for i, a := range selected {
+		luid, err := adapterLUID(a.ID)
+		if err != nil {
+			return err
+		}
+		row, err := luid.IPInterface(windows.AF_INET)
+		if err != nil {
+			return err
+		}
+		journal.Interfaces = append(journal.Interfaces, forwardingState{a.ID, row.ForwardingEnabled})
+		session.details.Adapters = append(session.details.Adapters, a.Name)
+		for _, direction := range []int{1, 2} {
+			journal.Rules = append(journal.Rules, firewallRule{fmt.Sprintf("%s-lan-%d-%d", name, i, direction), a.Name, JoinPrefixes(p.Config.DeviceLANs), direction})
+		}
+	}
+	// Write all intended mutations before changing forwarding or adding any rules.
+	if err = b.saveJournal(journal); err != nil {
+		return err
+	}
+	session.restore = true
+	for _, a := range selected {
+		luid, err := adapterLUID(a.ID)
+		if err != nil {
+			return err
+		}
+		row, err := luid.IPInterface(windows.AF_INET)
+		if err != nil {
+			return err
+		}
+		row.ForwardingEnabled = true
+		if err = row.Set(); err != nil {
+			return err
+		}
+	}
+	session.details.Forwarding = true
+	if err = addFirewallRules(journal.Rules); err != nil {
+		return fmt.Errorf("自动放行局域网连接失败：%w", err)
+	}
+	session.details.Firewall = true
+	if len(selected) > 0 {
+		prefix := JoinPrefixes(p.Config.BaseRoutes)
+		err = createNAT(name, prefix, func() error { journal.NATName = name; journal.NATPrefix = prefix; return b.saveJournal(journal) })
+		if err == nil {
+			session.details.NAT = true
+		} else {
+			if journal.NATName != "" {
+				if cleanup := removeNAT(journal.NATName, journal.NATPrefix); cleanup != nil {
+					return errors.Join(err, cleanup)
+				}
+				journal.NATName = ""
+				journal.NATPrefix = ""
+				if saveErr := b.saveJournal(journal); saveErr != nil {
+					return saveErr
+				}
+			}
+			session.details.Warning = "已启用路由转发；自动 NAT 不可用，现场设备仍需返回 VPN 网段的路由。" + err.Error()
+		}
+	}
+	return nil
 }

@@ -66,9 +66,41 @@ func collectLicenses(out string) ([]string, error) {
 			}
 		}
 	}
-	for _, pkg := range []string{"react", "react-dom", "scheduler"} {
-		if err = copyNotice(filepath.Join("frontend", "node_modules", pkg, "LICENSE"), pkg+"-LICENSE"); err != nil {
+	lockData, err := os.ReadFile(filepath.Join("frontend", "package-lock.json"))
+	if err != nil {
+		return nil, err
+	}
+	var lock struct {
+		Packages map[string]struct {
+			Dev      bool
+			Optional bool
+			Version  string
+		}
+	}
+	if err = json.Unmarshal(lockData, &lock); err != nil {
+		return nil, err
+	}
+	for pkg, meta := range lock.Packages {
+		if pkg == "" || meta.Dev {
+			continue
+		}
+		dir := filepath.Join("frontend", filepath.FromSlash(pkg))
+		entries, err := os.ReadDir(dir)
+		if errors.Is(err, os.ErrNotExist) && meta.Optional {
+			continue
+		}
+		if err != nil {
 			return nil, err
+		}
+		for _, entry := range entries {
+			upper := strings.ToUpper(entry.Name())
+			if entry.IsDir() || (!strings.HasPrefix(upper, "LICENSE") && !strings.HasPrefix(upper, "LICENCE") && !strings.HasPrefix(upper, "COPYING") && !strings.HasPrefix(upper, "NOTICE")) {
+				continue
+			}
+			name := "npm_" + strings.ReplaceAll(strings.TrimPrefix(pkg, "node_modules/"), "/", "_") + "@" + meta.Version + "_" + entry.Name()
+			if err = copyNotice(filepath.Join(dir, entry.Name()), name); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if err = copyNotice(filepath.Join(runtime.GOROOT(), "LICENSE"), "Go-LICENSE"); err != nil {

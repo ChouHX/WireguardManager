@@ -7,6 +7,11 @@ on:
       - 'client/**'
       - '.github/workflows/build-windows-client.yml'
   workflow_dispatch:
+    inputs:
+      server_url:
+        description: Management server URL (defaults to repository WGM_SERVER_URL variable)
+        required: false
+        type: string
   pull_request:
     paths:
       - 'client/**'
@@ -18,6 +23,8 @@ permissions:
 jobs:
   client:
     runs-on: windows-latest
+    env:
+      WGM_SERVER_URL: ${{ inputs.server_url || vars.WGM_SERVER_URL }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
@@ -34,9 +41,11 @@ jobs:
           npm --prefix client/frontend ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm --prefix client/frontend run build
-      - name: Test client and Windows DPAPI
+      - name: Test client, DPAPI and native Windows firewall/NAT lifecycle
         working-directory: client
-        run: go test ./service
+        env:
+          WGM_TEST_WINDOWS_NETWORK: '1'
+        run: go test -v ./cloud ./service
       - name: Build and verify embedded driver and administrator manifest
         working-directory: client
         run: go run ./tools/package
@@ -54,6 +63,8 @@ jobs:
           if ($process.ExitCode -ne 0) { throw "Packaged driver self-check failed: $($process.ExitCode)" }
           $check = Get-Content $report -Raw | ConvertFrom-Json
           if (-not $check.apiCallable -or $check.resourceBytes -le 0) { throw 'Embedded driver is not callable' }
+          $expectedServer = $env:WGM_SERVER_URL.Trim().TrimEnd('/') -creplace '/api$', ''
+          if ($check.serverURL -ne $expectedServer) { throw 'Embedded management server URL does not match build configuration' }
       - uses: actions/upload-artifact@v7
         with:
           name: WireguardManagerDesktop-windows-amd64

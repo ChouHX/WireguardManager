@@ -39,9 +39,9 @@ func main() {
 	defer release()
 	app := newApp()
 	err = wails.Run(&options.App{
-		Title: "WireGuard Manager · 现场连接", Width: 1060, Height: 820, MinWidth: 850, MinHeight: 700,
+		Title: "WireGuard Manager · 现场连接", Width: 1180, Height: 820, MinWidth: 850, MinHeight: 700,
 		AssetServer:      &assetserver.Options{Assets: assets},
-		BackgroundColour: &options.RGBA{R: 13, G: 20, B: 32, A: 255},
+		BackgroundColour: &options.RGBA{R: 246, G: 248, B: 250, A: 255},
 		OnStartup:        app.startup, OnBeforeClose: app.beforeClose, OnShutdown: app.shutdown, Bind: []interface{}{app},
 		Windows: &windows.Options{WebviewIsTransparent: false, WindowIsTranslucent: false},
 	})
@@ -58,8 +58,10 @@ func checkDriverCommand(args []string) int {
 	check, err := service.CheckDriver()
 	report := struct {
 		service.DriverCheck
-		Error string `json:"error,omitempty"`
+		Error     string `json:"error,omitempty"`
+		ServerURL string `json:"serverURL"`
 	}{DriverCheck: check}
+	report.ServerURL, _ = deploymentServerURL()
 	if err != nil {
 		report.Error = err.Error()
 	}

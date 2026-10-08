@@ -8,10 +8,20 @@ import (
 )
 
 type AdapterInfo struct {
-	ID        string   `json:"id"`
-	Name      string   `json:"name"`
-	Addresses []string `json:"addresses"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Addresses    []string `json:"addresses"`
+	Metric       uint32   `json:"-"`
+	AutoEligible bool     `json:"autoEligible"`
 }
+type NetworkDetails struct {
+	Adapters   []string `json:"adapters"`
+	Forwarding bool     `json:"forwarding"`
+	Firewall   bool     `json:"firewall"`
+	NAT        bool     `json:"nat"`
+	Warning    string   `json:"warning"`
+}
+type networkSession interface{ NetworkDetails() NetworkDetails }
 type Counters struct {
 	Rx        uint64
 	Tx        uint64
@@ -19,15 +29,16 @@ type Counters struct {
 	LatencyMS float64
 }
 type Status struct {
-	ProfileID string  `json:"profileID"`
-	State     string  `json:"state"`
-	RxBytes   uint64  `json:"rxBytes"`
-	TxBytes   uint64  `json:"txBytes"`
-	RxBPS     float64 `json:"rxBps"`
-	TxBPS     float64 `json:"txBps"`
-	LatencyMS float64 `json:"latencyMS"`
-	Handshake string  `json:"handshake"`
-	Error     string  `json:"error"`
+	Network   NetworkDetails `json:"network"`
+	ProfileID string         `json:"profileID"`
+	State     string         `json:"state"`
+	RxBytes   uint64         `json:"rxBytes"`
+	TxBytes   uint64         `json:"txBytes"`
+	RxBPS     float64        `json:"rxBps"`
+	TxBPS     float64        `json:"txBps"`
+	LatencyMS float64        `json:"latencyMS"`
+	Handshake string         `json:"handshake"`
+	Error     string         `json:"error"`
 }
 type Session interface {
 	Close() error
@@ -105,6 +116,9 @@ func (m *Manager) Status(ctx context.Context) Status {
 	if m.fault != "" {
 		status.State = "error"
 		return status
+	}
+	if details, ok := m.session.(networkSession); ok {
+		status.Network = details.NetworkDetails()
 	}
 	status.State = "handshaking"
 	c, err := m.session.Sample(ctx)

@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"flag"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/tc-hib/winres"
+	"wireguardmanager/client/cloud"
 )
 
 const driverURL = "https://download.wireguard.com/wireguard-nt/wireguard-nt-1.1.zip"
@@ -29,13 +31,19 @@ const driverSHA = "dceb30a9bc4be48cce0f74160fc88a585a2c2627366e8f846fc6658f9038d
 
 func main() {
 	archive := flag.String("driver-zip", "", "optional cached official wireguard-nt-1.1.zip")
+	serverURL := flag.String("server-url", os.Getenv("WGM_SERVER_URL"), "management server URL embedded into the client (required)")
 	flag.Parse()
-	if err := build(*archive); err != nil {
+	if err := build(*archive, *serverURL); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
-func build(archive string) error {
+func build(archive, serverURL string) error {
+	normalizedURL, urlErr := cloud.NormalizeURL(serverURL)
+	if urlErr != nil {
+		return fmt.Errorf("-server-url / WGM_SERVER_URL: %w", urlErr)
+	}
+	encodedURL := base64.StdEncoding.EncodeToString([]byte(normalizedURL))
 	if _, err := os.Stat("wails.json"); err != nil {
 		return errors.New("run from client/: go run ./tools/package")
 	}
@@ -117,7 +125,7 @@ func build(archive string) error {
 	}
 	exe := filepath.Join(out, "WireguardManagerDesktop.exe")
 	fmt.Println("Building Windows amd64 with embedded WireGuardNT and administrator manifest")
-	cmd := exec.Command("go", "build", "-trimpath", "-tags", "desktop,production,load_wgnt_from_rsrc", "-ldflags", "-s -w -H=windowsgui", "-o", exe, ".")
+	cmd := exec.Command("go", "build", "-trimpath", "-tags", "desktop,production,load_wgnt_from_rsrc", "-ldflags", "-s -w -H=windowsgui -X main.serverURLBase64="+encodedURL, "-o", exe, ".")
 	cmd.Env = append(os.Environ(), "GOOS=windows", "GOARCH=amd64", "CGO_ENABLED=0")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

@@ -1,55 +1,62 @@
 # WireGuard Manager Desktop
 
-Windows 10/11 x64 客户端，Go + Wails v2 + React。使用官方 WireGuardNT 内核驱动和 `winipcfg`，隧道、IP 地址、路由、网卡转发和 ICMP 探测均通过原生 API 完成，不调用外部 `wireguard.exe`、`route.exe` 或 PowerShell。
+Windows 10/11 x64 客户端，使用 Go + Wails v2 + React + Mantine。经典左右分栏：左侧账号与设备列表，右侧设备局域网、访问目标、连接状态和实时图表。内置官方 WireGuardNT 驱动；隧道、路由、转发、防火墙和 NAT 通过原生 API 完成，不调用外部 `wireguard.exe`、`route.exe`、PowerShell 或 netsh。
 
 ## 使用
 
-1. 在云端为每个客户分配独立账号 / 租户。每台设备创建独立的设备配置，同一份私钥不要同时用于两台机器。
-2. 现场网关设备在平台填写 **设备局域网**，如 `192.168.0.0/24`；远程操作电脑的设备局域网留空。转发默认启用，平台不再保存客户端网卡和访问目标。
-3. 下载对应设备的新 `.conf` 配置。在客户端点击“导入配置”，可同时导入多个客户的配置，然后设置现场名称。
-4. 现场网关：选择处于其设备局域网中的本机网卡。访问远端的电脑：填写目标 `192.168.0.100`（自动变为 `/32`）或网段。目标只存本机；平台导出仅包含租户隧道网段。
-5. 点击“连接现场”。等待握手成功后访问目标。切换下拉框会先断开旧现场，再点击“连接现场”建立新隧道。关闭窗口会断开连接。
+1. 管理员在构建时指定管理平台地址。本次部署为 **https://remote.opcuu.com**。打开客户端，直接使用平台账号密码登录，无需手动导入 `.conf`。
+2. 左侧选择**当前电脑要使用的设备配置**。每台机器必须有自己的配置；不要与正在运行的现场网关复用私钥。列表属于当前登录账号 / 租户，跨客户时退出登录后使用对应账号。
+3. 现场网关在“本设备下挂设备 / 局域网”填写 `192.168.0.100` 或 `192.168.0.0/24`，也可点击“探测本机局域网”。声明同步到云端，WireGuard 地址自动保留，不在设备局域网中显示。仅访问远端的电脑可留空。
+4. “访问目标”留空时，自动使用同账号下其他设备声明的局域网。填写时覆盖自动目标，单个 IP 自动转成 `/32`。这些目标仅存本机，不写服务端。同一租户中设备局域网声明不能重叠；不同租户可以重复。
+5. 点击连接，客户端重新获取配置、自动选择 LAN 网卡并配置网络，等待握手后访问目标。选择其他设备再点击“切换到此设备”，会先断开旧连接、恢复网络后建立新连接。已连接配置需先断开才能编辑。关闭窗口、退出登录均会断开。
 
-若客户 A 和 B 都有 `192.168.0.100`，分别导入 A 和 B 下为此操作电脑创建的设备配置，两份配置各自填写相同目标地址。不同客户有不同云端端口和隧道子网；同一时刻只有一个现场连接。云端仍需专用策略路由表和防火墙隔离，单靠多个 WireGuard 网卡不能解决重叠 LAN 路由。
+两端现场网段相同，仍需要云端独立接口 / 端口、专用策略路由表和防火墙共同隔离，单靠多网卡不能解决 Linux 的重叠路由。操作电脑本地与远端网段重叠时，访问目标请填写具体 `/32`。目标不能恰好是本机自身 IP，也不能覆盖云端 Endpoint、隧道网段或本设备声明的 LAN。
 
-## 现场网络要求
+## 自动配置与现场网络
 
-IP 转发 **不等于 NAT**。此版本默认打开隧道接口以及所选 LAN 网卡的 IPv4 转发，不自动启用 ICS / WinNAT，也不修改局域网设备地址、默认网关或其他防火墙规则。
+- 自动探测已启用的物理 Ethernet / Wi-Fi 网卡，通过下挂 IP 的最长直连前缀及接口 metric 选择，无需网卡下拉框。支持多 LAN 网卡。不会将默认路由或 Docker / WSL / VPN 虚拟网卡作为现场出口。优先级完全相同时会提示断开不使用的网络，避免静默选错。
+- 默认启用隧道和匹配 LAN 接口的 IPv4 转发；添加仅作用于这些接口、VPN / 声明网段的入站与出站允许规则，不关闭 Windows 防火墙。企业策略中的强制阻断仍可能优先于这些规则。
+- 系统支持 WinNAT 且没有现有 NAT 时，自动为租户 VPN 网段创建 NAT。VPN 电脑访问下挂设备时，现场设备通过网关 LAN 地址回复，通常无需单独配置返回路由。
+- 系统已有 NAT（例如 Docker / WSL）或没有可用的 WinNAT provider 时，不改动既有 NAT；界面明确显示路由模式和原因。此时 PLC 或现场路由器仍需返回路由，例如 `10.100.1.0/24 → 192.168.0.10`（Windows 网关 LAN IP）。
+- **LAN 设备主动连接 VPN**仍需把流量送到这台 Windows 网关，例如设置其为默认网关或添加 VPN / 远端网段路由。客户端不能替另一台 PLC 或现场路由器改默认网关；跨现场 LAN 到 LAN 访问也需正确的双向路由。握手成功不代表所有现场设备已具备路由。
 
-例如租户隧道为 `10.100.1.0/24`，现场 Windows 网关 LAN IP 为 `192.168.0.10`，PLC 为 `192.168.0.100`：PLC 或其默认路由器需要一条 `10.100.1.0/24 → 192.168.0.10` 的返回路由。若设备不能配置路由，可在现场路由器设置，或使用有 NAT 功能的现场网关。按现场策略允许必要的转发流量和目标端口。没有返回路由且没有 NAT 时，握手正常也无法访问 PLC。
+## 权限、本地数据与恢复
 
-访问电脑的本地网络若也与现场重叠，优先填写具体 `/32` 目标。目标若恰好是本机自身 IP，Windows 会本地接收，不能用隧道路由覆盖；客户端会拒绝该配置。也拒绝覆盖云端 Endpoint、隧道子网、本设备 LAN 的目标。IPv6、全流量代理、多云端 Peer、脚本钩子和任意第三方 WireGuard 配置暂不支持。
-
-## 权限与本地数据
-
-- 使用系统 WebView2，通常 Windows 11 已安装；缺失时须先安装 Microsoft Edge WebView2 Runtime。不是每台 Windows 10 都预装。
-- 可执行文件带 `requireAdministrator` 清单，启动触发 UAC。只支持一个运行实例；连接期间需保持程序运行，不提供后台 Windows 服务。
-- 正式打包使用官方 `wireguard.dll`（WireGuardNT），不是 `wintun.dll`。DLL 原样嵌入 PE 资源，通过官方 `load_wgnt_from_rsrc` 加载，无需旁置驱动 DLL 或安装官方 WireGuard 客户端。
-- 配置保存在 `%APPDATA%\WireguardManagerDesktop\profiles.dpapi`，用当前 Windows 用户的 DPAPI 加密。私钥不返回 React，不写浏览器存储。导入的原始 `.conf` 仍由用户保管；客户端不删除源文件。
-- 网卡转发原值写入恢复记录，断开时恢复；异常退出后，下次用原 Windows 用户启动时恢复。异常退出后请尽快重新打开程序，保持原网卡存在且启用；不要手工删恢复记录。程序不保证进程被强制终止后能立即恢复物理网卡状态。
-- 连接过程中创建的隧道由本进程持有，关闭时移除该接口及路由；清理失败会阻止切换，允许重试断开。
-- DNS 保持本机设置。图表显示驱动字节计数差值与到云端隧道 IP 的 ICMP 延迟；握手过期、ICMP 超时会分别显示，无模拟数据。
+- 使用系统 WebView2；缺失时先安装 Microsoft Edge WebView2 Runtime。可执行文件带 `requireAdministrator` 清单，启动触发 UAC。
+- 仅允许单实例，连接期间需保持程序运行，不提供后台 Windows 服务。
+- 密码不保存。勾选保持登录后，令牌使用当前 Windows 用户 DPAPI 加密保存在 `%APPDATA%\WireguardManagerDesktop\cloud.dpapi`；本机访问目标按服务端 / 账号 / 设备隔离。JWT 和 WireGuard 私钥不返回 React，不写浏览器存储；每次连接重新鉴权并从服务器取配置。旧版 `profiles.dpapi` 保留但不再用于新界面。
+- 正式包将官方 `wireguard.dll`（WireGuardNT，非 `wintun.dll`）嵌入 PE 资源，通过官方 `load_wgnt_from_rsrc` 加载，无需旁置 DLL 或安装官方客户端。
+- 修改网络前先写恢复记录。断开时移除本程序创建的防火墙规则、NAT、隧道和路由，恢复网卡转发原值；清理失败会阻止切换并允许重试。异常退出后，下次用原 Windows 用户启动时恢复。请保持原网卡存在且启用，不要手工删除恢复记录。进程被强制终止后，物理接口和防火墙恢复需要重新打开程序。
+- DNS 保持本机设置。图表使用实际驱动字节计数和到云端隧道 IP 的 ICMP 延迟；握手超时和 ICMP 超时分别显示。当前仅支持 IPv4 分流，不支持全流量代理、脚本钩子和任意第三方配置。
 
 ## 构建
 
-需要 Go 1.25+、Node.js 22.12+ / npm，Linux 和 Windows 均可构建 Windows x64 包。仓库根目录执行：
+需要 Go 1.25+、Node.js 22.12+ / npm。Linux 和 Windows 均可生成 Windows x64 包。仓库根目录执行：
 
 ```sh
 npm --prefix client/frontend ci
 npm --prefix client/frontend run build
 cd client
-go test ./service
-go run ./tools/package
+go test ./cloud ./service
+go run ./tools/package -server-url https://remote.opcuu.com
 ```
 
-打包工具校验官方 WireGuardNT 1.1 压缩包 SHA-256，生成包含驱动和管理员清单的 `.syso`，交叉编译 GUI exe，并检查最终 PE 的驱动和清单内容。Windows CI 还会直接运行生成的 exe，验证系统能查找嵌入资源、加载 DLL 并调用其 API，成功后才上传安装包。无需 CGO 或全局 Wails CLI。离线驱动包可用 `go run ./tools/package -driver-zip /path/to/wireguard-nt-1.1.zip` 指定，仍会验证哈希。
+也可通过 `WGM_SERVER_URL` 环境变量指定地址。打包工具要求完整 http/https URL，支持反向代理子路径；构建值嵌入程序，不可在登录界面修改。HTTPS 部署推荐使用受系统信任的证书。
 
-产物：`client/build/bin/WireguardManagerDesktop-windows-amd64.zip`（含 exe、使用说明和许可）及 `SHA256SUMS`。GitHub Actions 的 **Build Windows Client** 工作流会上传同样的包；exe 未做应用代码签名，正式分发可另加签名步骤。
+工具校验官方 WireGuardNT 1.1 压缩包 SHA-256，生成内嵌驱动与管理员清单的 `.syso`，编译 GUI exe，检查最终 PE 内容并收集 Go / 前端运行依赖许可。离线驱动可额外指定 `-driver-zip /path/to/wireguard-nt-1.1.zip`，仍校验哈希。无需 CGO 或全局 Wails CLI。
 
-测试覆盖配置解析、目标校验、现场切换顺序、失败清理、统计重置和加密保存失败保护。Windows CI 还运行 DPAPI 往返测试。Linux 上的交叉编译不能替代 Windows 真机的驱动安装、UAC、路由、转发和 WebView2 验收。现场验收请依次确认握手、目标访问、重叠地址现场切换、断开后原路由和网卡转发状态恢复。
+产物为 `client/build/bin/WireguardManagerDesktop-windows-amd64.zip`（exe、说明、许可）及 `SHA256SUMS`。GitHub **Build Windows Client** 使用仓库变量 `WGM_SERVER_URL`，手动触发时可用 `server_url` 输入覆盖。exe 未做应用代码签名。
 
-## 驱动加载自检
+## 验证
 
-若启动时报告驱动加载错误，可在 PowerShell 中执行 `Start-Process .\WireguardManagerDesktop.exe -ArgumentList '--check-driver', 'driver-check.json' -Wait`。结果写入 `driver-check.json`，包含 DLL 版本、资源大小和具体加载错误，不含配置或私钥。此检查不会创建隧道或改变路由，也不会要求内核驱动事先安装。
+测试覆盖 API 鉴权与拒绝重定向、登录过期、令牌加密、跨账号 / 服务端数据隔离、LAN 自动探测、云端声明与配置重新拉取、切换顺序、并发断开和失败清理。Windows CI 额外执行 DPAPI、防火墙创建 / 删除、NAT 创建 / 删除（provider 可用且没有现有 NAT 时），以及**最终发布 exe 的驱动资源加载与 API 调用自检**，通过后才上传包。
 
-旧版 `8434926` 的嵌入资源名称不符合 Windows 查找规则，会显示“WireGuardNT 驱动资源缺失或加载失败”。请使用后续修复版，无需删除本地配置或另装官方 WireGuard 客户端。
+原生网络集成测试仅在隔离、已提权的 Windows runner 设置 `WGM_TEST_WINDOWS_NETWORK=1` 时启用，普通 `go test` 不修改机器网络。CI 的创建 / 删除测试不等同于真实 PLC 双向流量验收。现场还应验证登录、握手、目标访问、重叠地址切换，以及断开后的网络恢复。
+
+若启动时仍报告驱动加载错误，可在 PowerShell 执行：
+
+```powershell
+Start-Process .\WireguardManagerDesktop.exe -ArgumentList '--check-driver', 'driver-check.json' -Wait
+```
+
+报告包含内置服务端、DLL 版本、资源大小和加载错误，不含私钥；此检查不创建隧道，不要求预先安装内核驱动。旧版 `8434926` 的资源名大小写错误已修复，请使用最新完整包。
