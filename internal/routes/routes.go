@@ -16,7 +16,7 @@ func SetupRoutes(r *gin.Engine) {
 	// Public routes
 	//
 	// 这两个接口无需认证，是外部唯一能直接触及的入口，必须限速：
-	// login 不限速即可被无限次猜密码，register 每成功一次都会创建命名空间与隧道，
+	// login 不限速即可被无限次猜密码，register 每成功一次都会创建租户接口与隧道，
 	// 而隧道网段只有 254 个，刷满之后正常用户就注册不进来了。
 	api.POST("/register", middleware.RateLimitByIP(registerLimit()), handlers.Register)
 	api.POST("/login", middleware.RateLimitByIP(loginLimit()), handlers.Login)

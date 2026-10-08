@@ -72,7 +72,7 @@ func Register(c *gin.Context) {
 	// Load user for response
 	database.DB.First(&user, user.ID)
 
-	// 为用户配置网络环境（命名空间 + WireGuard）
+	// 为用户配置网络环境（独立接口 + WireGuard）
 	networkService := services.NewUserNetworkServiceFromRuntime()
 
 	// 分配端口与网段前先取回已被占用的资源，避免与既有账号冲突。

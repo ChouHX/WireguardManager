@@ -346,21 +346,21 @@ func TestLivenessCounts(t *testing.T) {
 	}
 }
 
-// 探测函数：参数缺失或不存在的命名空间应快速失败，不阻塞判定循环。
-func TestProbeTCPInNamespaceFailurePaths(t *testing.T) {
-	if ok, _, _ := ProbeTCPInNamespace("", "10.0.0.1:49151", time.Second); ok {
-		t.Fatal("命名空间为空时不应判定可达")
+// 探测函数：参数缺失或不存在的网卡应快速失败，不阻塞判定循环。
+func TestProbeTCPOnInterfaceFailurePaths(t *testing.T) {
+	if ok, _, _ := ProbeTCPOnInterface("", "10.0.0.1:49151", time.Second); ok {
+		t.Fatal("网卡为空时不应判定可达")
 	}
-	if ok, _, _ := ProbeTCPInNamespace("wg_missing", "", time.Second); ok {
+	if ok, _, _ := ProbeTCPOnInterface("wg_missing", "", time.Second); ok {
 		t.Fatal("目标为空时不应判定可达")
 	}
 
 	start := time.Now()
-	ok, _, detail := ProbeTCPInNamespace("wg_nonexistent_netns", "10.99.99.99:49151", time.Second)
+	ok, _, detail := ProbeTCPOnInterface("wgm254", "10.99.99.99:49151", time.Second)
 	elapsed := time.Since(start)
 
 	if ok {
-		t.Fatal("不存在的命名空间不应判定可达")
+		t.Fatal("不存在的网卡不应判定可达")
 	}
 	if detail != probeDetailSetupFailed {
 		t.Fatalf("应标记为 %s，实际 %q", probeDetailSetupFailed, detail)

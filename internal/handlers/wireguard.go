@@ -24,7 +24,7 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	// 同一 namespace/interface 的 `wg show dump` 结果在 1 秒内复用，
+	// 同一 interface 的 `wg show dump` 结果在 1 秒内复用，
 	// 覆盖用户页 3 秒轮询 + 并发请求造成的重复进程创建。
 	trafficCacheTTL = time.Second
 
@@ -46,11 +46,11 @@ var (
 	trafficCache   = make(map[string]*trafficCacheEntry)
 )
 
-// getTrafficStatsCached 返回指定命名空间/接口的 WireGuard 统计。
+// getTrafficStatsCached 返回指定接口的 WireGuard 统计。
 // 命中未过期缓存时直接返回；未命中时按 key 加锁抓取，使同一时间窗内的并发请求只执行一次 `wg show`。
 // 返回值始终是副本，调用方可安全改写（例如填充 peer 的 Comment）而不污染缓存。
-func getTrafficStatsCached(wgService *services.WireguardService, namespace, wgInterface string) (*models.WireguardServerStats, error) {
-	key := namespace + "/" + wgInterface
+func getTrafficStatsCached(wgService *services.WireguardService, wgInterface string) (*models.WireguardServerStats, error) {
+	key := wgInterface
 
 	trafficCacheMu.Lock()
 	entry, ok := trafficCache[key]
@@ -71,7 +71,7 @@ func getTrafficStatsCached(wgService *services.WireguardService, namespace, wgIn
 		return cloneServerStats(entry.stats), nil
 	}
 
-	stats, err := wgService.GetDetailedStats(namespace, wgInterface)
+	stats, err := wgService.GetDetailedStats(wgInterface)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +120,7 @@ func GetMyTrafficStats(c *gin.Context) {
 	wgService := services.NewWireguardService(config.AppConfig.Network.ConfigDir)
 
 	// 获取流量统计（走缓存）
-	stats, err := getTrafficStatsCached(wgService, wgServer.Namespace, wgServer.WgInterface)
+	stats, err := getTrafficStatsCached(wgService, wgServer.WgInterface)
 	if err != nil {
 		response.InternalError(c, "Failed to get traffic stats: "+err.Error())
 		return
@@ -174,7 +174,7 @@ func GetMyTrafficSummary(c *gin.Context) {
 	wgService := services.NewWireguardService(config.AppConfig.Network.ConfigDir)
 
 	// 获取流量统计（走缓存，避免每次轮询都 spawn wg 进程）
-	stats, err := getTrafficStatsCached(wgService, wgServer.Namespace, wgServer.WgInterface)
+	stats, err := getTrafficStatsCached(wgService, wgServer.WgInterface)
 	if err != nil {
 		response.InternalError(c, "Failed to get traffic stats: "+err.Error())
 		return
@@ -241,11 +241,11 @@ func GetAdminTrafficStats(c *gin.Context) {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			stats, err := getTrafficStatsCached(wgService, server.Namespace, server.WgInterface)
+			stats, err := getTrafficStatsCached(wgService, server.WgInterface)
 			if err != nil {
 				// 单个用户抓取失败只记录并跳过，不静默吞掉原因，也不影响其他用户
-				log.Printf("Failed to collect traffic stats for server %d (user %d, %s/%s): %v",
-					server.ID, server.UserID, server.Namespace, server.WgInterface, err)
+				log.Printf("Failed to collect traffic stats for server %d (user %d, %s): %v",
+					server.ID, server.UserID, server.WgInterface, err)
 				return
 			}
 
@@ -260,6 +260,8 @@ func GetAdminTrafficStats(c *gin.Context) {
 				WgPort:       server.WgPort,
 				WgAddress:    server.WgAddress,
 				Namespace:    server.Namespace,
+				WgInterface:  server.WgInterface,
+				NetworkMode:  server.NetworkMode,
 				Enabled:      server.Enabled,
 				DownloadRate: server.DownloadRate,
 				UploadRate:   server.UploadRate,
@@ -302,7 +304,7 @@ func GetUserTrafficStats(c *gin.Context) {
 
 	wgService := services.NewWireguardService(config.AppConfig.Network.ConfigDir)
 
-	stats, err := getTrafficStatsCached(wgService, wgServer.Namespace, wgServer.WgInterface)
+	stats, err := getTrafficStatsCached(wgService, wgServer.WgInterface)
 	if err != nil {
 		response.InternalError(c, "Failed to get traffic stats: "+err.Error())
 		return
@@ -367,6 +369,7 @@ func GetMyPeers(c *gin.Context) {
 
 // AddPeerRequest 添加peer请求
 type AddPeerRequest struct {
+	ClientAllowedIPs    string `json:"client_allowed_ips"`
 	AllowedIPs          string `json:"allowed_ips"` // peer可以访问的IP地址或网段，留空则默认为peer自己的IP
 	PersistentKeepalive int    `json:"persistent_keepalive"`
 	Comment             string `json:"comment"`
@@ -376,8 +379,14 @@ type AddPeerRequest struct {
 	UsePresharedKey *bool `json:"use_preshared_key"`
 }
 
+// peerMutationMu protects route ownership checks and kernel/DB updates as one operation.
+var peerMutationMu sync.Mutex
+var errPeerRouteValidation = errors.New("invalid peer routes")
+
 // AddPeer 添加新的peer
 func AddPeer(c *gin.Context) {
+	peerMutationMu.Lock()
+	defer peerMutationMu.Unlock()
 	u, ok := currentUser(c)
 	if !ok {
 		response.Unauthorized(c, "User not found in context")
@@ -397,18 +406,32 @@ func AddPeer(c *gin.Context) {
 		return
 	}
 
+	clientRoutes, err := services.NormalizeClientRoutes(req.ClientAllowedIPs)
+	if err != nil {
+		response.ValidationError(c, err.Error())
+		return
+	}
+	req.ClientAllowedIPs = clientRoutes
+	if _, err := services.PeerRoutes(req.AllowedIPs); err != nil {
+		response.ValidationError(c, err.Error())
+		return
+	}
 	wgService := services.NewWireguardService(config.AppConfig.Network.ConfigDir)
-	netnsService := services.NewNetnsService()
+	interfaceService := services.NewInterfaceService()
 
 	// 1. 生成密钥、分配 IP 并写入数据库（唯一约束冲突时自动重试）
 	peer, err := createPeerRecord(wgService, &wgServer, req)
 	if err != nil {
+		if errors.Is(err, errPeerRouteValidation) {
+			response.ValidationError(c, err.Error())
+			return
+		}
 		response.InternalError(c, err.Error())
 		return
 	}
 
 	// 2. 依次应用 WireGuard 配置、路由、iptables；任一步失败会回滚已生效的外网配置
-	if err := provisionPeerResources(wgService, netnsService, wgServer.Namespace, wgServer.WgInterface, peer); err != nil {
+	if err := provisionPeerResources(wgService, interfaceService, wgServer.WgInterface, peer); err != nil {
 		// 回滚数据库记录（数据库层错误不向客户端暴露细节）
 		if delErr := database.DB.Delete(&peer).Error; delErr != nil {
 			log.Printf("Warning: failed to roll back peer record %d of server %d: %v", peer.ID, wgServer.ID, delErr)
@@ -478,6 +501,7 @@ func createPeerRecord(wgService *services.WireguardService, wgServer *models.Wir
 		// 5. 创建peer记录
 		peer := models.WireguardPeer{
 			ServerID:            wgServer.ID,
+			ClientAllowedIPs:    req.ClientAllowedIPs,
 			PublicKey:           publicKey,
 			PrivateKey:          privateKey,
 			PresharedKey:        presharedKey,
@@ -489,6 +513,13 @@ func createPeerRecord(wgService *services.WireguardService, wgServer *models.Wir
 			ForwardInterface:    req.ForwardInterface,
 		}
 
+		var others []models.WireguardPeer
+		if err := database.DB.Where("server_id = ?", wgServer.ID).Find(&others).Error; err != nil {
+			return nil, err
+		}
+		if err := services.ValidatePeerRoutes(&peer, others); err != nil {
+			return nil, fmt.Errorf("%w: %v", errPeerRouteValidation, err)
+		}
 		if err := database.DB.Create(&peer).Error; err != nil {
 			if !isUniqueViolation(err) {
 				log.Printf("Failed to create peer record for server %d: %v", wgServer.ID, err)
@@ -510,40 +541,39 @@ func createPeerRecord(wgService *services.WireguardService, wgServer *models.Wir
 
 // provisionPeerResources 依次应用 peer 的网络侧配置：WireGuard peer → 路由 → iptables。
 // 任一步失败都会回滚已经生效的步骤，保持原子性；错误文案沿用原有 "Failed to ..." 形式。
-func provisionPeerResources(wgService *services.WireguardService, netnsService *services.NetnsService, namespace, wgInterface string, peer *models.WireguardPeer) error {
+func provisionPeerResources(wgService *services.WireguardService, interfaceService *services.InterfaceService, wgInterface string, peer *models.WireguardPeer) error {
 	peerAllowedIPs := peer.PeerAddress + "/32"
 
 	// 5. 添加到WireGuard配置。allowed-ips 需要包含该设备背后的网段，
-	// 否则命名空间内的转发会失败：WireGuard 依据 allowed-ips 决定把包加密发给哪个
+	// 否则租户内的转发会失败：WireGuard 依据 allowed-ips 决定把包加密发给哪个
 	// peer（cryptokey routing）。
 	serverAllowedIPs := buildServerAllowedIPs(peer)
-	if err := wgService.AddPeer(namespace, wgInterface, peer.PublicKey, serverAllowedIPs, ""); err != nil {
+	if err := wgService.AddPeer(wgInterface, peer.PublicKey, serverAllowedIPs, ""); err != nil {
 		return fmt.Errorf("Failed to add peer to WireGuard: %w", err)
 	}
 
 	// 5.1 若该设备启用了预共享密钥，紧接着下发
 	if peer.PresharedKey != "" {
-		if err := wgService.SetPeerPresharedKey(namespace, wgInterface, peer.PublicKey, peer.PresharedKey); err != nil {
-			wgService.RemovePeer(namespace, wgInterface, peer.PublicKey)
+		if err := wgService.SetPeerPresharedKey(wgInterface, peer.PublicKey, peer.PresharedKey); err != nil {
+			wgService.RemovePeer(wgInterface, peer.PublicKey)
 			return fmt.Errorf("Failed to apply preshared key: %w", err)
 		}
 	}
 
 	// 6. 路由：allowed-ips 只影响 cryptokey routing，内核不会据此写路由表，
-	// 因此对端下挂网段必须显式补一条路由，否则命名空间内的转发会因查不到路由而丢包。
+	// 因此对端下挂网段必须显式补一条路由，否则租户内的转发会因查不到路由而丢包。
 	// 全局代理（0.0.0.0/0）不参与服务端路由，它只是客户端的行为。
 	needExtraRouting := peer.AllowedIPs != peerAllowedIPs && peer.AllowedIPs != "0.0.0.0/0"
 	if !needExtraRouting {
 		return nil
 	}
 
-	if err := netnsService.AddRouteForPeer(namespace, wgInterface, peer.AllowedIPs); err != nil {
-		wgService.RemovePeer(namespace, wgInterface, peer.PublicKey)
+	if err := interfaceService.AddRouteForPeer(wgInterface, peer.AllowedIPs); err != nil {
+		wgService.RemovePeer(wgInterface, peer.PublicKey)
 		return fmt.Errorf("Failed to add route for peer: %w", err)
 	}
 
-	// 7. 不再需要配套的 iptables 规则：命名空间新建时 FORWARD 策略即为 ACCEPT，
-	//    且每个账号独占一个命名空间；转发能力仅依赖命名空间内的 ip_forward。
+	// 转发隔离规则由租户接口生命周期统一管理。
 	return nil
 }
 
@@ -612,6 +642,8 @@ func isUniqueViolation(err error) bool {
 
 // DeletePeer 删除peer
 func DeletePeer(c *gin.Context) {
+	peerMutationMu.Lock()
+	defer peerMutationMu.Unlock()
 	u, ok := currentUser(c)
 	if !ok {
 		response.Unauthorized(c, "User not found in context")
@@ -644,20 +676,27 @@ func DeletePeer(c *gin.Context) {
 		return
 	}
 
-	// 清理路由规则
-	// 转发控制已由命名空间自身的 FORWARD 策略承担，不再需要 peer 级 iptables 规则
-	netnsService := services.NewNetnsService()
-	netnsService.DeleteRouteForPeer(wgServer.Namespace, wgServer.WgInterface, peer.AllowedIPs)
-
-	// 从WireGuard配置中删除
+	interfaceService := services.NewInterfaceService()
 	wgService := services.NewWireguardService(config.AppConfig.Network.ConfigDir)
-	if err := wgService.RemovePeer(wgServer.Namespace, wgServer.WgInterface, peer.PublicKey); err != nil {
+	if err := wgService.RemovePeer(wgServer.WgInterface, peer.PublicKey); err != nil {
 		response.InternalError(c, "Failed to remove peer from WireGuard: "+err.Error())
 		return
 	}
-
-	// 从数据库删除
+	restore := func() {
+		if err := restorePeerWithPresharedKey(wgService, wgServer, &peer, buildServerAllowedIPs(&peer)); err != nil {
+			log.Printf("Failed to restore peer %d: %v", peer.ID, err)
+		}
+		if err := interfaceService.AddRouteForPeer(wgServer.WgInterface, peer.AllowedIPs); err != nil {
+			log.Printf("Failed to restore peer %d routes: %v", peer.ID, err)
+		}
+	}
+	if err := interfaceService.DeleteRouteForPeer(wgServer.WgInterface, peer.AllowedIPs); err != nil {
+		restore()
+		response.InternalError(c, "Failed to delete tenant routes: "+err.Error())
+		return
+	}
 	if err := database.DB.Delete(&peer).Error; err != nil {
+		restore()
 		response.InternalError(c, "Failed to delete peer record")
 		return
 	}
@@ -667,17 +706,20 @@ func DeletePeer(c *gin.Context) {
 
 // UpdatePeerRequest 更新peer请求
 type UpdatePeerRequest struct {
-	AllowedIPs          string `json:"allowed_ips"`
-	PersistentKeepalive *int   `json:"persistent_keepalive"`
-	Comment             string `json:"comment"`
-	EnableForwarding    *bool  `json:"enable_forwarding"`
-	ForwardInterface    string `json:"forward_interface"`
+	ClientAllowedIPs    *string `json:"client_allowed_ips"`
+	AllowedIPs          string  `json:"allowed_ips"`
+	PersistentKeepalive *int    `json:"persistent_keepalive"`
+	Comment             string  `json:"comment"`
+	EnableForwarding    *bool   `json:"enable_forwarding"`
+	ForwardInterface    string  `json:"forward_interface"`
 	// UsePresharedKey 切换预共享密钥（启用时自动生成并下发，关闭时重新建立已无密钥的 peer）
 	UsePresharedKey *bool `json:"use_preshared_key"`
 }
 
 // UpdatePeer 更新peer信息
 func UpdatePeer(c *gin.Context) {
+	peerMutationMu.Lock()
+	defer peerMutationMu.Unlock()
 	u, ok := currentUser(c)
 	if !ok {
 		response.Unauthorized(c, "User not found in context")
@@ -717,6 +759,27 @@ func UpdatePeer(c *gin.Context) {
 	}
 
 	updates := make(map[string]interface{})
+	if req.ClientAllowedIPs != nil {
+		routes, err := services.NormalizeClientRoutes(*req.ClientAllowedIPs)
+		if err != nil {
+			response.ValidationError(c, err.Error())
+			return
+		}
+		updates["client_allowed_ips"] = routes
+	}
+	candidate := peer
+	if req.AllowedIPs != "" {
+		candidate.AllowedIPs = req.AllowedIPs
+	}
+	var others []models.WireguardPeer
+	if err := database.DB.Where("server_id = ?", wgServer.ID).Find(&others).Error; err != nil {
+		response.InternalError(c, "Failed to read tenant routes")
+		return
+	}
+	if err := services.ValidatePeerRoutes(&candidate, others); err != nil {
+		response.ValidationError(c, err.Error())
+		return
+	}
 
 	needWgUpdate := false
 	if req.AllowedIPs != "" && req.AllowedIPs != peer.AllowedIPs {
@@ -740,6 +803,26 @@ func UpdatePeer(c *gin.Context) {
 		updates["forward_interface"] = req.ForwardInterface
 	}
 
+	originalPeer := peer
+	kernelChanged, routesChanged, committed := false, false, false
+	defer func() {
+		if committed {
+			return
+		}
+		if routesChanged {
+			if err := services.NewInterfaceService().ChangePeerRoutes(wgServer.WgInterface, req.AllowedIPs, originalPeer.AllowedIPs); err != nil {
+				log.Printf("Peer %d route rollback failed: %v", peer.ID, err)
+			}
+		}
+		if kernelChanged {
+			wgService := services.NewWireguardService(config.AppConfig.Network.ConfigDir)
+			_ = wgService.RemovePeer(wgServer.WgInterface, peer.PublicKey)
+			if err := restorePeerWithPresharedKey(wgService, wgServer, &originalPeer, buildServerAllowedIPs(&originalPeer)); err != nil {
+				log.Printf("Peer %d rollback failed: %v", peer.ID, err)
+			}
+		}
+	}()
+
 	// 预共享密钥切换：开启时生成并下发；关闭时重建 peer（wg 无法就地清空 PSK）
 	if req.UsePresharedKey != nil {
 		wantPSK := *req.UsePresharedKey
@@ -753,14 +836,16 @@ func UpdatePeer(c *gin.Context) {
 				response.InternalError(c, "Failed to generate preshared key: "+err.Error())
 				return
 			}
-			if err := wgService.SetPeerPresharedKey(wgServer.Namespace, wgServer.WgInterface, peer.PublicKey, generated); err != nil {
+			kernelChanged = true
+			if err := wgService.SetPeerPresharedKey(wgServer.WgInterface, peer.PublicKey, generated); err != nil {
 				response.InternalError(c, "Failed to apply preshared key: "+err.Error())
 				return
 			}
 			updates["preshared_key"] = generated
 
 		case !wantPSK && hasPSK:
-			if err := wgService.RemovePeer(wgServer.Namespace, wgServer.WgInterface, peer.PublicKey); err != nil {
+			kernelChanged = true
+			if err := wgService.RemovePeer(wgServer.WgInterface, peer.PublicKey); err != nil {
 				response.InternalError(c, "Failed to reset peer before disabling preshared key: "+err.Error())
 				return
 			}
@@ -768,13 +853,7 @@ func UpdatePeer(c *gin.Context) {
 			// 只写回 /32 会把下挂网段从加密路由表里摘掉，而数据库仍记着原网段，
 			// 结果是 site-to-site 静默失联且界面显示一切正常。
 			serverAllowedIPs := buildServerAllowedIPs(&peer)
-			if err := wgService.AddPeer(wgServer.Namespace, wgServer.WgInterface, peer.PublicKey, serverAllowedIPs, ""); err != nil {
-				// peer 此刻已从内核移除、数据库仍记着带 PSK 的旧状态：尽力按原样补回，
-				// 避免设备在无人察觉的情况下掉线。
-				if restoreErr := restorePeerWithPresharedKey(wgService, wgServer, &peer, serverAllowedIPs); restoreErr != nil {
-					log.Printf("Failed to restore peer %s on server %d after disabling preshared key: %v",
-						peer.PublicKey, wgServer.ID, restoreErr)
-				}
+			if err := wgService.AddPeer(wgServer.WgInterface, peer.PublicKey, serverAllowedIPs, ""); err != nil {
 				response.InternalError(c, "Failed to re-add peer without preshared key: "+err.Error())
 				return
 			}
@@ -788,35 +867,28 @@ func UpdatePeer(c *gin.Context) {
 	}
 
 	// 如果需要更新WireGuard配置（AllowedIPs变化）
-	// 注意：AllowedIPs 是 peer 可以访问的网段，不影响 WireGuard 配置中的 allowed-ips
-	// WireGuard 配置中的 allowed-ips 始终是 peer 的 IP 地址
+	// AllowedIPs 声明设备背后的网段，需要同步加密路由与租户路由表。
 	if needWgUpdate {
-		netnsService := services.NewNetnsService()
+		interfaceService := services.NewInterfaceService()
 		wgService := services.NewWireguardService(config.AppConfig.Network.ConfigDir)
 
 		// 1. 先同步服务端 allowed-ips（cryptokey routing 的依据），
 		//    否则改了网段也转发不到该设备——只调整路由是无效的。
 		updatedPeer := peer
 		updatedPeer.AllowedIPs = req.AllowedIPs
+		kernelChanged = true
 		if err := wgService.SetPeerAllowedIPs(
-			wgServer.Namespace, wgServer.WgInterface, peer.PublicKey, buildServerAllowedIPs(&updatedPeer),
+			wgServer.WgInterface, peer.PublicKey, buildServerAllowedIPs(&updatedPeer),
 		); err != nil {
 			response.InternalError(c, "Failed to update peer allowed-ips: "+err.Error())
 			return
 		}
 
-		// 2. 清理旧路由（转发控制由命名空间的 FORWARD 策略承担，无 iptables 需同步）
-		clearPeerRoutes(netnsService, wgServer.Namespace, wgServer.WgInterface, peer.AllowedIPs)
-
-		// 3. 添加新的路由
-		if req.AllowedIPs != "" && req.AllowedIPs != "0.0.0.0/0" {
-			if err := netnsService.AddRouteForPeer(wgServer.Namespace, wgServer.WgInterface, req.AllowedIPs); err != nil {
-				// 尝试恢复旧规则
-				restorePeerRoutes(netnsService, wgServer.Namespace, wgServer.WgInterface, peer.AllowedIPs)
-				response.InternalError(c, "Failed to add route for peer: "+err.Error())
-				return
-			}
+		if err := interfaceService.ChangePeerRoutes(wgServer.WgInterface, peer.AllowedIPs, req.AllowedIPs); err != nil {
+			response.InternalError(c, "Failed to update tenant routes: "+err.Error())
+			return
 		}
+		routesChanged = true
 	}
 
 	// 更新数据库
@@ -825,30 +897,11 @@ func UpdatePeer(c *gin.Context) {
 		return
 	}
 
+	committed = true
 	// 重新加载peer
 	database.DB.First(&peer, peer.ID)
 
 	response.Success(c, "Peer updated successfully", peer.ToResponse())
-}
-
-// clearPeerRoutes 删除 peer 现有的路由（尽力而为，错误由 netns 层忽略）。
-func clearPeerRoutes(netnsService *services.NetnsService, namespace, wgInterface, allowedIPs string) {
-	if allowedIPs == "" || allowedIPs == "0.0.0.0/0" {
-		return
-	}
-
-	netnsService.DeleteRouteForPeer(namespace, wgInterface, allowedIPs)
-}
-
-// restorePeerRoutes 尝试恢复 peer 旧的路由，用于新路由写入失败时的回滚。
-func restorePeerRoutes(netnsService *services.NetnsService, namespace, wgInterface, allowedIPs string) {
-	if allowedIPs == "" || allowedIPs == "0.0.0.0/0" {
-		return
-	}
-
-	if err := netnsService.AddRouteForPeer(namespace, wgInterface, allowedIPs); err != nil {
-		log.Printf("Warning: failed to restore route %s in %s/%s: %v", allowedIPs, namespace, wgInterface, err)
-	}
 }
 
 // restorePeerWithPresharedKey 把 peer 恢复成「带预共享密钥」的形态。
@@ -856,13 +909,13 @@ func restorePeerRoutes(netnsService *services.NetnsService, namespace, wgInterfa
 // 关闭 PSK 需要先移除再重建，若重建失败，peer 已经不在内核里而数据库仍记着
 // 带 PSK 的旧状态。这里按原样补回，避免设备在无人察觉的情况下掉线。
 func restorePeerWithPresharedKey(wgService *services.WireguardService, wgServer models.WireguardServer, peer *models.WireguardPeer, serverAllowedIPs string) error {
-	if err := wgService.AddPeer(wgServer.Namespace, wgServer.WgInterface, peer.PublicKey, serverAllowedIPs, ""); err != nil {
+	if err := wgService.AddPeer(wgServer.WgInterface, peer.PublicKey, serverAllowedIPs, ""); err != nil {
 		return err
 	}
 	if peer.PresharedKey == "" {
 		return nil
 	}
-	return wgService.SetPeerPresharedKey(wgServer.Namespace, wgServer.WgInterface, peer.PublicKey, peer.PresharedKey)
+	return wgService.SetPeerPresharedKey(wgServer.WgInterface, peer.PublicKey, peer.PresharedKey)
 }
 
 // AdminRecreateWireguardServer 为账号重新分配一套隧道。
@@ -1196,6 +1249,16 @@ func GetPeerConfig(c *gin.Context) {
 	// 客户端 AllowedIPs：优先取 network.client_allowed_ips 配置，
 	// 未配置时按 peer 所在网段推导（不再默认放行全部流量）
 	allowedIPs := clientAllowedIPs(wgServer.WgAddress, peer.PeerAddress)
+	if strings.TrimSpace(peer.ClientAllowedIPs) != "" {
+		routes, err := services.NormalizeClientRoutes(peer.ClientAllowedIPs)
+		if err != nil {
+			response.InternalError(c, "Invalid client target routes: "+err.Error())
+			return
+		}
+		// Keep tunnel addresses reachable for peer communication and monitoring.
+		subnet, _ := deriveNetworkCIDR(wgServer.WgAddress, peer.PeerAddress)
+		allowedIPs = strings.Trim(strings.Join([]string{subnet, routes}, ", "), ", ")
+	}
 
 	// 基础配置内容
 	configContent := fmt.Sprintf(`[Interface]
@@ -1219,7 +1282,7 @@ DNS = %s
 			match = "-o " + iface
 		}
 
-		postUp := fmt.Sprintf(`PostUp = iptables -t nat -A POSTROUTING %s -j MASQUERADE; iptables -A FORWARD -i %%i -j ACCEPT; iptables -A FORWARD -o %%i -j ACCEPT
+		postUp := fmt.Sprintf(`PostUp = sysctl -w net.ipv4.ip_forward=1; iptables -t nat -A POSTROUTING %s -j MASQUERADE; iptables -A FORWARD -i %%i -j ACCEPT; iptables -A FORWARD -o %%i -j ACCEPT
 PreDown = iptables -t nat -D POSTROUTING %s -j MASQUERADE; iptables -D FORWARD -i %%i -j ACCEPT; iptables -D FORWARD -o %%i -j ACCEPT
 `,
 			match,
@@ -1256,6 +1319,8 @@ PersistentKeepalive = %d
 
 // AdminDeleteWireguardServer 删除用户的 WireGuard 服务器（管理员）
 func AdminDeleteWireguardServer(c *gin.Context) {
+	peerMutationMu.Lock()
+	defer peerMutationMu.Unlock()
 	serverIDStr := c.Param("id")
 	serverID, err := strconv.ParseUint(serverIDStr, 10, 32)
 	if err != nil {
@@ -1271,16 +1336,16 @@ func AdminDeleteWireguardServer(c *gin.Context) {
 
 	// 先回收网络，再进数据库事务。
 	//
-	// 次序很关键：DestroyUserNetwork 内部是一串 fork/exec（ip netns del 等），
+	// 次序很关键：DestroyUserNetwork 内部是一串 fork/exec（ip link del 等），
 	// 而数据库连接池默认只有 1 条连接（config.Database.MaxOpenConns = 1）。
 	// 把外部命令放进事务里，等于让全站请求排在一条被占住的连接后面等待。
 	//
 	// 反过来放在事务之前也有语义上的理由：网络资源不是事务性对象——事务一旦回滚，
-	// 被删掉的命名空间不会回来。先拆网络、成功后再删记录，两边才始终一致。
+	// 被删掉的网络资源不会回来。先拆网络、成功后再删记录，两边才始终一致。
 	networkService := services.NewUserNetworkServiceFromRuntime()
 	if err := networkService.DestroyUserNetwork(&server, server.User.UserUID); err != nil {
 		// 网络回收失败就保留记录：账号保持完整、可以重试，也仍会被启动期收敛流程看到。
-		// 若在这里继续删记录，命名空间就再没有任何线索可以被发现，只能靠人工排查。
+		// 若在这里继续删记录，网络资源就再没有任何线索可以被发现，只能靠人工排查。
 		response.InternalError(c, "Failed to tear down the account network: "+err.Error())
 		return
 	}
@@ -1309,6 +1374,8 @@ func AdminDeleteWireguardServer(c *gin.Context) {
 
 // AdminToggleWireguardServer 启用/禁用用户的 WireGuard 服务器（管理员）
 func AdminToggleWireguardServer(c *gin.Context) {
+	peerMutationMu.Lock()
+	defer peerMutationMu.Unlock()
 	serverIDStr := c.Param("id")
 	serverID, err := strconv.ParseUint(serverIDStr, 10, 32)
 	if err != nil {
@@ -1335,16 +1402,16 @@ func AdminToggleWireguardServer(c *gin.Context) {
 		return
 	}
 
-	// 真正生效的开关：把命名空间内的隧道接口 down/up。
+	// 真正生效的开关：把租户隧道接口 down/up。
 	// 接口 down 会让内核立即销毁加密 UDP socket，客户端随即连不上；up 时 socket
 	// 在设备诞生地（宿主命名空间）重建，端口与握手路径与禁用前一致。
 	//
 	// 顺序刻意是「先动网络、后落库」：反过来会留下一个数据库声称已禁用、
 	// 内核却仍在转发的状态，也就是这次要修掉的那种「界面撒谎」。
-	netnsService := services.NewNetnsService()
+	interfaceService := services.NewInterfaceService()
 
-	// 网络尚未落地（命名空间或接口缺失）时只记录意图，实际状态交给启动期收敛对齐
-	if !netnsService.LinkExistsInNamespace(server.Namespace, server.WgInterface) {
+	// 网络尚未落地（接口缺失）时只记录意图，实际状态交给启动期收敛对齐
+	if !interfaceService.LinkExists(server.WgInterface) {
 		if err := database.DB.Model(&server).Update("enabled", *req.Enabled).Error; err != nil {
 			response.InternalError(c, "Failed to update server status")
 			return
@@ -1355,15 +1422,21 @@ func AdminToggleWireguardServer(c *gin.Context) {
 		return
 	}
 
-	if err := netnsService.SetLinkStateInNamespace(server.Namespace, server.WgInterface, *req.Enabled); err != nil {
+	var peers []models.WireguardPeer
+	if err := database.DB.Where("server_id = ?", server.ID).Find(&peers).Error; err != nil {
+		response.InternalError(c, "Failed to read tenant peers")
+		return
+	}
+	wasEnabled := server.Enabled
+	if err := interfaceService.SetTenantEnabled(&server, peers, *req.Enabled); err != nil {
+		_ = interfaceService.SetTenantEnabled(&server, peers, wasEnabled)
 		response.InternalError(c, "Failed to toggle tunnel interface: "+err.Error())
 		return
 	}
 
 	if err := database.DB.Model(&server).Update("enabled", *req.Enabled).Error; err != nil {
 		// 网络已切换而落库失败：把接口恢复到原状态，避免两边不一致
-		if rollbackErr := netnsService.SetLinkStateInNamespace(
-			server.Namespace, server.WgInterface, !*req.Enabled); rollbackErr != nil {
+		if rollbackErr := interfaceService.SetTenantEnabled(&server, peers, wasEnabled); rollbackErr != nil {
 			log.Printf("Failed to roll back interface state for server %d after a database error: %v",
 				server.ID, rollbackErr)
 		}
@@ -1372,7 +1445,7 @@ func AdminToggleWireguardServer(c *gin.Context) {
 	}
 
 	// 接口状态变化后，缓存里的实时统计已不代表现状
-	services.InvalidateStatsCache(server.Namespace, server.WgInterface)
+	services.InvalidateStatsCache(server.WgInterface)
 
 	message := "Server enabled successfully"
 	if !*req.Enabled {
@@ -1387,6 +1460,8 @@ const maxRateLimitMbps = 100000
 
 // AdminSetRateLimit 设置用户 WireGuard 服务器的速率限制（管理员）
 func AdminSetRateLimit(c *gin.Context) {
+	peerMutationMu.Lock()
+	defer peerMutationMu.Unlock()
 	serverIDStr := c.Param("id")
 	serverID, err := strconv.ParseUint(serverIDStr, 10, 32)
 	if err != nil {
@@ -1420,10 +1495,10 @@ func AdminSetRateLimit(c *gin.Context) {
 
 	// 与启用/禁用同样的次序：先把限速落到内核，成功后再写库，
 	// 否则会出现「界面显示了限速、实际不限速」这种看起来正常的假象。
-	netnsService := services.NewNetnsService()
+	interfaceService := services.NewInterfaceService()
 
-	if netnsService.LinkExistsInNamespace(server.Namespace, server.WgInterface) {
-		if err := netnsService.ApplyRateLimit(server.Namespace, server.WgInterface,
+	if interfaceService.LinkExists(server.WgInterface) {
+		if err := interfaceService.ApplyRateLimit(server.WgInterface,
 			req.DownloadRate, req.UploadRate); err != nil {
 			response.InternalError(c, "Failed to apply rate limit: "+err.Error())
 			return
@@ -1440,7 +1515,7 @@ func AdminSetRateLimit(c *gin.Context) {
 	}
 	if err := database.DB.Model(&server).Updates(updates).Error; err != nil {
 		// 内核已按新值限速而落库失败：把限速恢复成原值，保持两边一致
-		if rollbackErr := netnsService.ApplyRateLimit(server.Namespace, server.WgInterface,
+		if rollbackErr := interfaceService.ApplyRateLimit(server.WgInterface,
 			server.DownloadRate, server.UploadRate); rollbackErr != nil {
 			log.Printf("Failed to roll back rate limit for server %d after a database error: %v",
 				server.ID, rollbackErr)

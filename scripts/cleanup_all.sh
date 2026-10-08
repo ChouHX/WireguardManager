@@ -3,9 +3,9 @@
 # 清理平台在宿主机上创建的网络资源，以及本地数据与配置。
 #
 # ── 为什么需要单独一个脚本 ──
-# 后端以 host 网络 + privileged 运行，账号的网络命名空间、隧道接口、以及宿主机侧
+# 后端以 host 网络 + privileged 运行，账号的独立隧道接口、策略路由、以及宿主机侧
 # 的 iptables 规则都是宿主内核对象。进程退出并不会带走它们，隧道会继续为客户端
-# 服务 —— 这正是热更新 / 滚动重启能做到连接不中断的原因，因此后端刻意不在关闭
+# 服务，因此后端刻意不在关闭
 # 时拆除数据面。需要真正下架、迁移或彻底重置时，用本脚本收敛。
 #
 # 日常升级（docker compose pull && up -d）不要跑这个脚本，它会断开全部在线设备。
@@ -29,9 +29,9 @@ DB_PATH="${WM_DB_PATH:-${REPO_ROOT}/data/cloud_platform.db}"
 # 账号命名空间统一以该前缀命名
 NS_PREFIX="wg_"
 # 宿主命名空间里属于本平台的网卡：旧版 veth 的两端，以及新版编排中途的临时接口
-LINK_PATTERNS=("veth-h-*" "veth-ns-*" "wgx-*")
+LINK_PATTERNS=("wgm[0-9]*" "veth-h-*" "veth-ns-*" "wgx-*")
 # 平台相关 iptables 规则的特征：隧道网段、旧版 veth 网段、旧版 veth 网卡通配
-RULE_PATTERN='10\.(200|100)\.|veth\+'
+RULE_PATTERN='10\.(200|100)\.|veth\+|wgm[0-9+]|WGM-FORWARD'
 
 assume_yes=0
 dry_run=0
@@ -66,7 +66,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "$(id -u)" -ne 0 ]; then
-    echo "需要 root 权限：要操作宿主网络命名空间与 iptables。" >&2
+    echo "需要 root 权限：要操作宿主网卡、策略路由与 iptables。" >&2
     exit 1
 fi
 
@@ -160,6 +160,28 @@ if [ "${link_found}" -eq 0 ]; then
     echo "  （无）"
 fi
 
+# 清理本平台保留范围内的策略规则与路由表（包括接口已删除后的残留）。
+for id in $(seq 1 254); do
+    iface="wgm${id}"
+    table=$((20000 + id))
+    rules="$(ip -4 rule show 2>/dev/null | grep -E "lookup ${table}( |$)" || true)"
+    routes="$(ip -4 route show table "${table}" 2>/dev/null || true)"
+    if [ -z "${rules}${routes}" ]; then continue; fi
+    echo "  - ${iface} 策略规则 / table ${table}"
+    for direction in iif oif from; do
+        selector="${iface}"
+        priority=$((10000 + id))
+        if [ "${direction}" = oif ]; then priority=$((11000 + id)); fi
+        if [ "${direction}" = from ]; then priority=$((12000 + id)); selector="10.100.${id}.1/32"; fi
+        if [ "${dry_run}" -eq 1 ]; then
+            run_quiet ip -4 rule del priority "${priority}" "${direction}" "${selector}" lookup "${table}"
+        else
+            while ip -4 rule del priority "${priority}" "${direction}" "${selector}" lookup "${table}" 2>/dev/null; do :; done
+        fi
+    done
+    run_quiet ip -4 route flush table "${table}"
+done
+
 # ── 3. 宿主机 iptables 规则 ──
 echo "[3/4] 清理宿主机 iptables 规则…"
 rule_found=0
@@ -178,7 +200,7 @@ purge_table() {
         spec="${line#-A }"
 
         case "${spec}" in
-            *10.200.*|*10.100.*|*veth+*) ;;
+            *10.200.*|*10.100.*|*veth+*|*wgm[0-9+]*|*WGM-FORWARD*) ;;
             *) continue ;;
         esac
 
@@ -192,8 +214,10 @@ purge_table() {
     done < <(iptables-save -t "${table}" 2>/dev/null || true)
 }
 
+purge_table raw
 purge_table nat
 purge_table filter
+run_quiet iptables -t filter -X WGM-FORWARD
 
 if [ "${rule_found}" -eq 0 ]; then
     echo "  （无）"
@@ -228,7 +252,7 @@ if [ "${dry_run}" -eq 1 ]; then
 fi
 
 remain_ns="$(ip netns list 2>/dev/null | awk '{print $1}' | grep -c "^${NS_PREFIX}" || true)"
-remain_link="$(list_links | grep -cE '^(veth-h-|veth-ns-|wgx-)' || true)"
+remain_link="$(list_links | grep -cE '^(wgm[0-9]+|veth-h-|veth-ns-|wgx-)'  || true)"
 remain_rule="$(iptables-save 2>/dev/null | grep -cE "^-A .*(${RULE_PATTERN})" || true)"
 
 printf '  账号命名空间  : %s\n' "${remain_ns}"

@@ -2,7 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -200,5 +203,104 @@ func TestClientAllowedIPsDefaultsToSubnetNotFullTunnel(t *testing.T) {
 		if !strings.Contains(configText, want) {
 			t.Fatalf("配置缺少 %q:\n%s", want, configText)
 		}
+	}
+}
+
+func TestTenantClientTargetConfig(t *testing.T) {
+	fixture := setupPeerConfigFixture(t, "0.0.0.0/0", "10.100.2.1/24", "10.100.2.3")
+	if err := database.DB.Model(&fixture.peer).Update("client_allowed_ips", "192.168.0.100").Error; err != nil {
+		t.Fatal(err)
+	}
+	GetPeerConfig(fixture.context)
+	var body struct {
+		Success bool              `json:"success"`
+		Data    map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(fixture.recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Success {
+		t.Fatal(fixture.recorder.Body.String())
+	}
+	configText := body.Data["config"]
+	if got := allowedIPsLine(configText); got != "10.100.2.0/24, 192.168.0.100/32" {
+		t.Fatalf("wrong target routes: %s", got)
+	}
+	if !strings.Contains(configText, "Endpoint = 203.0.113.10:51821") {
+		t.Fatal("tenant UDP port lost")
+	}
+	if strings.Contains(configText, "PostUp") {
+		t.Fatal("ordinary client must not receive Linux gateway scripts")
+	}
+}
+
+func TestGatewayExportEnablesIPForwarding(t *testing.T) {
+	fixture := setupPeerConfigFixture(t, "", "10.100.1.1/24", "10.100.1.2")
+	if err := database.DB.Model(&fixture.peer).Update("enable_forwarding", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	GetPeerConfig(fixture.context)
+	if !strings.Contains(fixture.recorder.Body.String(), "sysctl -w net.ipv4.ip_forward=1") {
+		t.Fatal("gateway export must enable IP forwarding")
+	}
+}
+
+// A combined PSK + route edit must restore both when persistence fails.
+func TestPeerUpdateRollsBackKernelAfterDatabaseFailure(t *testing.T) {
+	fixture := setupPeerConfigFixture(t, "", "10.100.2.1/24", "10.100.2.3")
+	if err := database.DB.Model(&fixture.server).Update("wg_interface", "wgm2").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Model(&fixture.peer).Update("allowed_ips", "192.168.0.0/24").Error; err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	commandLog := filepath.Join(dir, "commands")
+	t.Setenv("WGM_COMMAND_LOG", commandLog)
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	fakeWG := `#!/bin/sh
+printf 'wg %s\n' "$*" >> "$WGM_COMMAND_LOG"
+if [ "$1" = genpsk ]; then printf 'test-preshared-key\n'; fi
+`
+	fakeIP := `#!/bin/sh
+printf 'ip %s\n' "$*" >> "$WGM_COMMAND_LOG"
+case "$*" in '-o link show dev wgm2') printf '1: wgm2: <POINTOPOINT,UP>\n';; esac
+`
+	for name, script := range map[string]string{"wg": fakeWG, "ip": fakeIP} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.DB.Callback().Update().Before("gorm:update").Register("test:fail", func(tx *gorm.DB) { tx.AddError(errors.New("injected persistence failure")) }); err != nil {
+		t.Fatal(err)
+	}
+	defer database.DB.Callback().Update().Remove("test:fail")
+	fixture.context.Request = httptest.NewRequest("PATCH", "/api/wireguard/peers/1", strings.NewReader(`{"allowed_ips":"192.168.2.0/24","use_preshared_key":true}`))
+	fixture.context.Request.Header.Set("Content-Type", "application/json")
+	UpdatePeer(fixture.context)
+	if fixture.recorder.Code != 500 {
+		t.Fatalf("wanted failure, got %d: %s", fixture.recorder.Code, fixture.recorder.Body.String())
+	}
+	log, err := os.ReadFile(commandLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := string(log)
+	for _, expected := range []string{
+		"ip -4 route del 192.168.2.0/24 dev wgm2 table 20002",
+		"ip -4 route add 192.168.0.0/24 dev wgm2 table 20002",
+		"allowed-ips 10.100.2.3/32,192.168.0.0/24",
+		"peer " + fixture.peer.PublicKey + " remove",
+	} {
+		if !strings.Contains(commands, expected) {
+			t.Fatalf("rollback missing %q: %s", expected, commands)
+		}
+	}
+	var saved models.WireguardPeer
+	if err := database.DB.First(&saved, fixture.peer.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved.AllowedIPs != "192.168.0.0/24" || saved.PresharedKey != "" {
+		t.Fatal("failed update changed persisted peer")
 	}
 }

@@ -47,7 +47,7 @@ type Config struct {
 // RateLimitConfig 公开接口的访问限速。
 //
 // 这两个接口都不需要认证，却各自有实际代价：login 可被用来无限次猜密码，
-// register 每成功一次就创建一个命名空间与一条隧道。限速表以来源地址为键，
+// register 每成功一次就创建一个租户接口与一条隧道。限速表以来源地址为键，
 // 因此必须配合 server.trusted_proxies 收窄可信代理，否则可被伪造来源绕过。
 type RateLimitConfig struct {
 	Enabled bool `yaml:"enabled"` // 总开关，默认开启
@@ -56,7 +56,7 @@ type RateLimitConfig struct {
 	LoginPerMinute int `yaml:"login_per_minute"`
 	// RegisterPerHour 单个来源每小时允许的注册次数。
 	//
-	// 比登录严格得多：注册要占用一个隧道网段（上限 254 个）并创建命名空间，
+	// 比登录严格得多：注册要占用一个隧道网段（上限 254 个）并创建独立接口，
 	// 属于典型的低频操作，正常用户不会在短时间内反复注册。
 	RegisterPerHour int `yaml:"register_per_hour"`
 }
@@ -99,9 +99,7 @@ type NetworkConfig struct {
 	// 留空表示按 peer 所在网段自动推导：例如服务端接口 10.100.0.1/24、分配到该 peer 的
 	// 地址为 10.100.0.2，则下发 10.100.0.0/24。
 	//
-	// 注意：账号命名空间内没有公网出口，写成 "0.0.0.0/0, ::/0" 时隧道能建立，
-	// 但明文包在命名空间内查不到下一跳，访问不了公网。要保持原有转发语义需另行
-	// 提供出口通路。
+	// 此中继不提供公网出口，全流量 AllowedIPs 不会启用公网转发。
 	ClientAllowedIPs string `yaml:"client_allowed_ips"`
 
 	// MTU 隧道接口的 MTU。0 表示不显式设置，沿用内核默认值（当前内核为 1420）。
@@ -124,12 +122,7 @@ type MonitoringConfig struct {
 
 // LivenessConfig 客户端在线判定。
 //
-// 判据来自 WireGuard 自身的握手状态：peer 的 last handshake 在阈值时间内
-// 持续更新，即说明隧道处于活跃状态。
-//
-// 早期版本曾用「向 peer 隧道地址发 TCP SYN」的方式探测，但后端进程运行在
-// 宿主机命名空间，而隧道网段只在各账号的 netns 内可达，探测包根本到不了
-// 对端，导致设备明明在线却被判离线。
+// TCP 探测绑定租户接口，通过 oif 策略规则选择专属路由表。
 type LivenessConfig struct {
 	// Enabled 是否启用在线判定。属于部署决策（探测会产生 TCP 连接），
 	// 用 liveness.enabled / WM_LIVENESS_ENABLED 控制，不在管理界面暴露。

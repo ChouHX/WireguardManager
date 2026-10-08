@@ -1,0 +1,6 @@
+# 仅从 namespace 版本首次升级时叠加；迁移完成后移除此 override。
+# docker compose -f docker-compose.build.yml -f docker-compose.legacy-migration.yml up -d --build
+services:
+  app:
+    volumes:
+      - /var/run/netns:/var/run/netns:shared

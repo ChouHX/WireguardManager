@@ -166,9 +166,9 @@
     "unnamed": "Unnamed Device",
     "publicKey": "Public Key",
     "peerAddress": "Peer IP",
-    "allowedIPs": "Allowed IPs",
-    "allowedIPsHelp": "IP addresses or networks that this peer can access through the VPN (Press Enter, comma, or space to add). Single IPs will auto-add /32 suffix. Leave empty to only allow peer's own IP.",
-    "noAllowedIPs": "No restrictions",
+    "allowedIPs": "LANs behind this device",
+    "allowedIPsHelp": "For gateways only, e.g. 192.168.0.0/24. Leave empty for ordinary clients. LANs may overlap across tenants, but not within a tenant.",
+    "noAllowedIPs": "No downstream LAN",
     "invalidIPFormat": "Invalid IP address or CIDR format",
     "endpoint": "Endpoint",
     "noEndpoint": "No endpoint",
@@ -259,7 +259,7 @@
     "generatingQr": "Generating QR code...",
     "generateQrFailed": "Failed to generate QR code",
     "noServer": "No WireGuard network assigned to this account",
-    "noServerHint": "Ask an administrator to provision the network namespace and WireGuard interface; devices and traffic will appear here afterwards.",
+    "noServerHint": "Ask an administrator to provision a dedicated WireGuard interface and port; devices and traffic will appear here afterwards.",
     "partialData": "Some data is temporarily unavailable (no network assigned or collection failed); related sections were omitted.",
     "ifaceDefault": "default route",
     "ifaceVirtual": "virtual",
@@ -271,7 +271,7 @@
     "detecting": "Detecting",
     "onlineDevices": "Online devices",
     "onlineHint": "{online} / {total} online",
-    "livenessHint": "Every {interval}s the backend enters the device namespace and opens a TCP connection to a high port on its tunnel address: a response or RST marks it online, consecutive failures mark it offline.",
+    "livenessHint": "Every {interval}s the backend binds a probe to the tenant interface and opens a TCP connection to a high port on the device tunnel address: a response or RST marks it online, consecutive failures mark it offline.",
     "usePresharedKey": "Preshared key",
     "usePresharedKeyHelp": "Adds a symmetric key between server and device for extra protection. Re-download the client config after toggling.",
     "forwardInterfaceHelp": "When empty, emits ! -o %i — wg-quick expands %i to the tunnel interface, meaning \"NAT anything not leaving via the tunnel\". No need to know the client NIC name. Only fill this when auto-detection does not fit your case (e.g. eth0, wlan0).",
@@ -292,9 +292,13 @@
       "refused": "peer kernel replied RST",
       "timeout": "probe dropped or timed out",
       "unreachable": "no route to peer",
-      "setup_failed": "namespace unavailable"
+      "setup_failed": "interface unavailable"
     },
-    "probeLastOk": "last ok "
+    "probeLastOk": "last ok ",
+    "clientTargetIPs": "Client target IPs / networks",
+    "clientTargetIPsHelp": "Remote destinations to access, e.g. 192.168.0.100 (exported as a /32 route). Leave empty for system defaults. Disconnect the previous tunnel before switching customers.",
+    "isolationMode": "Isolation",
+    "multiInterface": "Separate interface / port"
   },
   "monitoring": {
     "title": "System Monitoring",

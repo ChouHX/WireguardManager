@@ -113,7 +113,7 @@ type trafficSample struct {
 	tx int64
 }
 
-// LivenessMonitor 周期性地探测各设备：在设备所属命名空间内主动发起 TCP 探测为主，
+// LivenessMonitor 周期性地探测各设备：通过设备所属租户网卡主动发起 TCP 探测为主，
 // 隧道流量与握手状态为辅，实现秒级的在线/离线感知。
 type LivenessMonitor struct {
 	db *gorm.DB
@@ -217,7 +217,7 @@ func (m *LivenessMonitor) ensureKeepalive() {
 
 	fixed := 0
 	for _, server := range servers {
-		stats, err := m.wg.GetDetailedStats(server.Namespace, server.WgInterface)
+		stats, err := m.wg.GetDetailedStats(server.WgInterface)
 		if err != nil || stats == nil || len(stats.Peers) == 0 {
 			continue
 		}
@@ -226,9 +226,9 @@ func (m *LivenessMonitor) ensureKeepalive() {
 		for _, peer := range stats.Peers {
 			keys = append(keys, peer.PublicKey)
 		}
-		if err := m.wg.EnsurePeerKeepalive(server.Namespace, server.WgInterface, keys); err != nil {
-			log.Printf("liveness: failed to fix keepalive for %s/%s: %v",
-				server.Namespace, server.WgInterface, err)
+		if err := m.wg.EnsurePeerKeepalive(server.WgInterface, keys); err != nil {
+			log.Printf("liveness: failed to fix keepalive for %s: %v",
+				server.WgInterface, err)
 			continue
 		}
 		fixed += len(keys)
@@ -267,10 +267,10 @@ func (m *LivenessMonitor) checkAll() {
 		transfers := make(map[string]trafficSample, len(peers))
 		statsOK := false
 
-		stats, err := m.wg.GetDetailedStats(server.Namespace, server.WgInterface)
+		stats, err := m.wg.GetDetailedStats(server.WgInterface)
 		if err != nil {
 			// 接口不可用（账号被禁用、网络未就绪）：本轮不出结论
-			log.Printf("liveness: stats unavailable for %s/%s: %v", server.Namespace, server.WgInterface, err)
+			log.Printf("liveness: stats unavailable for %s: %v", server.WgInterface, err)
 		} else {
 			statsOK = true
 			for _, peerStats := range stats.Peers {
@@ -290,12 +290,12 @@ func (m *LivenessMonitor) checkAll() {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				// 主动探测：进入该账号的命名空间，向设备隧道地址的高位端口发 TCP SYN
+				// 主动探测：绑定该账号的网卡，向设备隧道地址的高位端口发 TCP SYN
 				reachable, rtt := false, time.Duration(0)
 				detail := ""
 				if statsOK {
 					target := ProbeTarget(peerCopy.PeerAddress, m.currentProbePort())
-					reachable, rtt, detail = ProbeTCPInNamespace(server.Namespace, target, timeout)
+					reachable, rtt, detail = ProbeTCPOnInterface(server.WgInterface, target, timeout)
 				}
 
 				trafficActive := m.recordTraffic(peerCopy.PublicKey, sample, now)
@@ -400,7 +400,7 @@ func (m *LivenessMonitor) evaluate(
 	}
 
 	if !statsOK {
-		// 统计读取失败（wg show 在命名空间上偶发失败、账号禁用、网络未就绪）
+		// 统计读取失败（wg show 偶发失败、账号禁用、网络未就绪）
 		// 时完全保留既有结论：只记录计数与依据，绝不改动 State。
 		//
 		// 这里曾把连续失败翻译成 unknown，但 wg show 的失败是间歇性的：

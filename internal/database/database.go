@@ -141,7 +141,7 @@ func createDefaultPlatformAdmin() error {
 	if err != nil {
 		// 保留管理员账号：网络配置失败时管理员仍可登录并后续修复网络。
 		log.Printf("Warning: default admin %s was created, but network provisioning failed "+
-			"(namespace/wireguard setup error): %v", adminCfg.AdminEmail, err)
+			"(interface/routing setup error): %v", adminCfg.AdminEmail, err)
 		return nil
 	}
 

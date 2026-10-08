@@ -8,25 +8,27 @@ import (
 
 // WireguardServer WireGuard服务器配置
 type WireguardServer struct {
-	ID              uint      `json:"id" gorm:"primaryKey"`
-	UserID          uint      `json:"user_id" gorm:"uniqueIndex;not null"`
-	User            User      `json:"user,omitempty" gorm:"foreignKey:UserID"`
-	Namespace       string    `json:"namespace" gorm:"uniqueIndex;not null"` // 网络命名空间名称
-	WgInterface     string    `json:"wg_interface" gorm:"not null"`          // WireGuard接口名称（如wg0）
-	WgPort          int       `json:"wg_port" gorm:"not null"`               // WireGuard监听端口
-	WgPublicKey     string    `json:"wg_public_key" gorm:"not null"`         // WireGuard服务器公钥
-	WgPrivateKey    string    `json:"-" gorm:"not null"`                     // WireGuard服务器私钥（不返回）
-	WgAddress       string    `json:"wg_address" gorm:"not null"`            // WireGuard接口IP地址
-	ServerEndpoint  string    `json:"server_endpoint" gorm:""`               // 服务器外部访问地址（IP:Port）
-	Enabled         bool      `json:"enabled" gorm:"default:true"`           // 是否启用
-	DownloadRate    int       `json:"download_rate" gorm:"default:0"`        // 下载速率限制（Mbps，0表示不限速）
-	UploadRate      int       `json:"upload_rate" gorm:"default:0"`          // 上传速率限制（Mbps，0表示不限速）
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	NetworkMode    string    `json:"network_mode"`
+	ID             uint      `json:"id" gorm:"primaryKey"`
+	UserID         uint      `json:"user_id" gorm:"uniqueIndex;not null"`
+	User           User      `json:"user,omitempty" gorm:"foreignKey:UserID"`
+	Namespace      string    `json:"namespace" gorm:"uniqueIndex;not null"` // 旧版迁移标识；不再创建命名空间
+	WgInterface    string    `json:"wg_interface" gorm:"not null"`          // WireGuard接口名称（如wgm1）
+	WgPort         int       `json:"wg_port" gorm:"not null"`               // WireGuard监听端口
+	WgPublicKey    string    `json:"wg_public_key" gorm:"not null"`         // WireGuard服务器公钥
+	WgPrivateKey   string    `json:"-" gorm:"not null"`                     // WireGuard服务器私钥（不返回）
+	WgAddress      string    `json:"wg_address" gorm:"not null"`            // WireGuard接口IP地址
+	ServerEndpoint string    `json:"server_endpoint" gorm:""`               // 服务器外部访问地址（IP:Port）
+	Enabled        bool      `json:"enabled" gorm:"default:true"`           // 是否启用
+	DownloadRate   int       `json:"download_rate" gorm:"default:0"`        // 下载速率限制（Mbps，0表示不限速）
+	UploadRate     int       `json:"upload_rate" gorm:"default:0"`          // 上传速率限制（Mbps，0表示不限速）
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // WireguardServerResponse 服务器响应结构
 type WireguardServerResponse struct {
+	NetworkMode    string    `json:"network_mode"`
 	ID             uint      `json:"id"`
 	UserID         uint      `json:"user_id"`
 	Namespace      string    `json:"namespace"`
@@ -41,6 +43,7 @@ type WireguardServerResponse struct {
 // ToResponse 转换为响应格式
 func (s *WireguardServer) ToResponse() WireguardServerResponse {
 	return WireguardServerResponse{
+		NetworkMode:    s.NetworkMode,
 		ID:             s.ID,
 		UserID:         s.UserID,
 		Namespace:      s.Namespace,
@@ -55,39 +58,41 @@ func (s *WireguardServer) ToResponse() WireguardServerResponse {
 
 // WireguardPeer WireGuard peer信息
 type WireguardPeer struct {
-	ID                  uint      `json:"id" gorm:"primaryKey"`
-	ServerID            uint      `json:"server_id" gorm:"index;not null"`
+	ClientAllowedIPs    string          `json:"client_allowed_ips" gorm:"default:''"`
+	ID                  uint            `json:"id" gorm:"primaryKey"`
+	ServerID            uint            `json:"server_id" gorm:"index;not null"`
 	Server              WireguardServer `json:"server,omitempty" gorm:"foreignKey:ServerID;constraint:OnDelete:CASCADE"`
-	PublicKey           string    `json:"public_key" gorm:"uniqueIndex;not null"`
-	PrivateKey          string    `json:"-" gorm:"not null"` // peer私钥，不返回给客户端
-	PresharedKey        string    `json:"-" gorm:""` // 不返回给客户端
-	PeerAddress         string    `json:"peer_address" gorm:"not null"` // peer在WireGuard网段中的IP地址
-	AllowedIPs          string    `json:"allowed_ips" gorm:"not null"` // peer可以访问的IP地址或网段
-	Endpoint            string    `json:"endpoint" gorm:""`
-	PersistentKeepalive int       `json:"persistent_keepalive" gorm:"default:0"`
-	Comment             string    `json:"comment" gorm:""` // 备注，如设备名称
+	PublicKey           string          `json:"public_key" gorm:"uniqueIndex;not null"`
+	PrivateKey          string          `json:"-" gorm:"not null"`            // peer私钥，不返回给客户端
+	PresharedKey        string          `json:"-" gorm:""`                    // 不返回给客户端
+	PeerAddress         string          `json:"peer_address" gorm:"not null"` // peer在WireGuard网段中的IP地址
+	AllowedIPs          string          `json:"allowed_ips" gorm:"not null"`  // 此设备背后的现场网段
+	Endpoint            string          `json:"endpoint" gorm:""`
+	PersistentKeepalive int             `json:"persistent_keepalive" gorm:"default:0"`
+	Comment             string          `json:"comment" gorm:""` // 备注，如设备名称
 	// EnableForwarding 是否让该设备充当网关。开启后会在【客户端配置】中注入
 	// iptables NAT 规则（PostUp/PreDown），使其他设备能经它访问 VPN。
 	EnableForwarding bool `json:"enable_forwarding" gorm:"default:false"`
 	// ForwardInterface 客户端设备自己的物理网卡名（如 eth0、wlan0），
 	// 用于客户端侧的 iptables MASQUERADE —— 注意不是服务器的出口网卡。
-	ForwardInterface string `json:"forward_interface" gorm:""`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	ForwardInterface string    `json:"forward_interface" gorm:""`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // WireguardPeerResponse Peer响应结构
 type WireguardPeerResponse struct {
-	ID                  uint      `json:"id"`
-	PublicKey           string    `json:"public_key"`
-	PrivateKey          string    `json:"private_key"` // 返回私钥供客户端配置使用
-	PeerAddress         string    `json:"peer_address"` // peer的WireGuard IP地址
-	AllowedIPs          string    `json:"allowed_ips"`
-	Endpoint            string    `json:"endpoint,omitempty"`
-	PersistentKeepalive int       `json:"persistent_keepalive"`
-	Comment             string    `json:"comment,omitempty"`
-	EnableForwarding    bool      `json:"enable_forwarding"`
-	ForwardInterface    string    `json:"forward_interface,omitempty"`
+	ClientAllowedIPs    string `json:"client_allowed_ips"`
+	ID                  uint   `json:"id"`
+	PublicKey           string `json:"public_key"`
+	PrivateKey          string `json:"private_key"`  // 返回私钥供客户端配置使用
+	PeerAddress         string `json:"peer_address"` // peer的WireGuard IP地址
+	AllowedIPs          string `json:"allowed_ips"`
+	Endpoint            string `json:"endpoint,omitempty"`
+	PersistentKeepalive int    `json:"persistent_keepalive"`
+	Comment             string `json:"comment,omitempty"`
+	EnableForwarding    bool   `json:"enable_forwarding"`
+	ForwardInterface    string `json:"forward_interface,omitempty"`
 	// UsePresharedKey 仅表示是否启用，密钥本身不下发到管理端
 	UsePresharedKey bool      `json:"use_preshared_key"`
 	CreatedAt       time.Time `json:"created_at"`
@@ -95,34 +100,34 @@ type WireguardPeerResponse struct {
 
 // WireguardPeerStats Peer实时统计信息
 type WireguardPeerStats struct {
-	PublicKey         string    `json:"public_key"`
-	Endpoint          string    `json:"endpoint,omitempty"`
-	AllowedIPs        string    `json:"allowed_ips"`
-	LatestHandshake   time.Time `json:"latest_handshake,omitempty"`
-	TransferRx        int64     `json:"transfer_rx"` // 接收字节数
-	TransferTx        int64     `json:"transfer_tx"` // 发送字节数
-	PersistentKeepalive int     `json:"persistent_keepalive"`
-	Comment           string    `json:"comment,omitempty"`
+	PublicKey           string    `json:"public_key"`
+	Endpoint            string    `json:"endpoint,omitempty"`
+	AllowedIPs          string    `json:"allowed_ips"`
+	LatestHandshake     time.Time `json:"latest_handshake,omitempty"`
+	TransferRx          int64     `json:"transfer_rx"` // 接收字节数
+	TransferTx          int64     `json:"transfer_tx"` // 发送字节数
+	PersistentKeepalive int       `json:"persistent_keepalive"`
+	Comment             string    `json:"comment,omitempty"`
 }
 
 // WireguardServerStats 服务器级别统计
 type WireguardServerStats struct {
-	Interface    string               `json:"interface"`
-	PublicKey    string               `json:"public_key"`
-	ListenPort   int                  `json:"listen_port"`
-	PeerCount    int                  `json:"peer_count"`
-	TotalRx      int64                `json:"total_rx"`
-	TotalTx      int64                `json:"total_tx"`
-	Peers        []WireguardPeerStats `json:"peers"`
+	Interface  string               `json:"interface"`
+	PublicKey  string               `json:"public_key"`
+	ListenPort int                  `json:"listen_port"`
+	PeerCount  int                  `json:"peer_count"`
+	TotalRx    int64                `json:"total_rx"`
+	TotalTx    int64                `json:"total_tx"`
+	Peers      []WireguardPeerStats `json:"peers"`
 }
 
 // UserTrafficStats 用户流量统计
 type UserTrafficStats struct {
-	UserID       uint                     `json:"user_id"`
-	UserUID      string                   `json:"user_uid"`
-	Email        string                   `json:"email"`
-	ServerInfo   *WireguardServerResponse `json:"server_info"`
-	ServerStats  *WireguardServerStats    `json:"server_stats"`
+	UserID      uint                     `json:"user_id"`
+	UserUID     string                   `json:"user_uid"`
+	Email       string                   `json:"email"`
+	ServerInfo  *WireguardServerResponse `json:"server_info"`
+	ServerStats *WireguardServerStats    `json:"server_stats"`
 }
 
 // UserTrafficSummary 用户流量摘要（用于轮询）
@@ -144,6 +149,8 @@ type PeerTrafficSummary struct {
 
 // AdminUserTraffic 管理员查看的用户流量信息
 type AdminUserTraffic struct {
+	WgInterface  string `json:"wg_interface"`
+	NetworkMode  string `json:"network_mode"`
 	ServerID     uint   `json:"server_id"`
 	UserID       uint   `json:"user_id"`
 	UserUID      string `json:"user_uid"`
@@ -162,6 +169,7 @@ type AdminUserTraffic struct {
 // ToResponse 转换为响应格式
 func (p *WireguardPeer) ToResponse() WireguardPeerResponse {
 	return WireguardPeerResponse{
+		ClientAllowedIPs:    p.ClientAllowedIPs,
 		ID:                  p.ID,
 		PublicKey:           p.PublicKey,
 		PrivateKey:          p.PrivateKey,

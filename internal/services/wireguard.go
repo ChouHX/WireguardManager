@@ -86,8 +86,7 @@ func (s *WireguardService) GenerateKeys() (privateKey, publicKey string, err err
 //
 // 生成的是 WireGuard 原生格式：只有 [Interface] 段。旧版写在这里的 Address 与
 // PostUp/PostDown 属于 wg-quick 专属语法，wg 的解析器既不认识、也不再需要——
-// 接口地址由命名空间层用 ip addr 直接下发，而加密报文全程不经过任何转发或
-// NAT，那批 iptables 规则随之消失。
+// 接口地址、策略路由及隔离防火墙由 InterfaceService 管理。
 //
 // 返回的配置文件仅作为可读记录（便于人工排查与审计），真正生效的配置通过
 // wg set 逐项下发。
@@ -101,8 +100,8 @@ func (s *WireguardService) CreateConfig(userUID string, config *WireguardConfig)
 
 	configContent := fmt.Sprintf(`# 账号 %s 的服务端接口配置记录（由平台自动生成，请勿手工修改）。
 #
-# 加密报文由宿主命名空间的 UDP socket 直接收发，因此这里没有
-# Address 与 PostUp/PostDown：地址由命名空间层下发，转发与 NAT 均不需要。
+# 仅为原生 wg 配置记录；地址、租户路由表和隔离防火墙由管理器下发。
+# 不应使用 wg-quick 启动服务端或将现场网段写入主路由表。
 [Interface]
 PrivateKey = %s
 ListenPort = %d
@@ -138,7 +137,7 @@ func (s *WireguardService) writePrivateKeyFile(userUID, privateKey string) error
 	return nil
 }
 
-// ApplyInterfaceInNamespace 用 wg set 逐项下发接口参数。
+// ApplyInterface 用 wg set 逐项下发接口参数。
 //
 // 刻意不用 wg setconf/syncconf：二者都以整份配置为单位，setconf 会把未出现在
 // 配置里的 peer 全部移除，syncconf 也要求配置覆盖全部 peer。接口参数（私钥、
@@ -147,21 +146,20 @@ func (s *WireguardService) writePrivateKeyFile(userUID, privateKey string) error
 //
 // 设置 listen-port 会触发内核重建 UDP socket；因为接口诞生于宿主命名空间，
 // 重建后的 socket 依然落在宿主命名空间，这正是握手稳定性的来源。
-func (s *WireguardService) ApplyInterfaceInNamespace(nsName, interfaceName, userUID string, listenPort int) error {
-	cmd := exec.Command("ip", "netns", "exec", nsName,
-		"wg", "set", interfaceName,
+func (s *WireguardService) ApplyInterface(interfaceName, userUID string, listenPort int) error {
+	cmd := exec.Command("wg", "set", interfaceName,
 		"private-key", s.PrivateKeyPath(userUID),
 		"listen-port", strconv.Itoa(listenPort))
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to apply interface config for %s in namespace %s: %v, output: %s",
-			interfaceName, nsName, err, string(output))
+		return fmt.Errorf("failed to apply interface config for %s: %v, output: %s",
+			interfaceName, err, string(output))
 	}
 	return nil
 }
 
 // GetWireguardStatus 获取WireGuard状态
-func (s *WireguardService) GetWireguardStatus(nsName, interfaceName string) (string, error) {
-	cmd := exec.Command("ip", "netns", "exec", nsName, "wg", "show", interfaceName)
+func (s *WireguardService) GetWireguardStatus(interfaceName string) (string, error) {
+	cmd := exec.Command("wg", "show", interfaceName)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("failed to get wireguard status: %v, output: %s", err, string(output))
@@ -181,7 +179,7 @@ func (s *WireguardService) GeneratePresharedKey() (string, error) {
 
 // SetPeerAllowedIPs 更新已存在 peer 的 allowed-ips。
 // 这是 WireGuard 的加密路由表，决定把哪些目标网段的流量发给该 peer。
-func (s *WireguardService) SetPeerAllowedIPs(nsName, interfaceName, peerPublicKey, allowedIPs string) error {
+func (s *WireguardService) SetPeerAllowedIPs(interfaceName, peerPublicKey, allowedIPs string) error {
 	if strings.TrimSpace(allowedIPs) == "" {
 		return fmt.Errorf("allowed-ips must not be empty")
 	}
@@ -189,21 +187,20 @@ func (s *WireguardService) SetPeerAllowedIPs(nsName, interfaceName, peerPublicKe
 	// 同时补设服务端保活：该函数会在修改网段、切换 PSK 等路径上被调用，
 	// 只更新 allowed-ips 会让保活停留在创建时的状态；对早期创建的 peer
 	// （服务端保活特性上线之前）来说，那就等于永不发送保活包。
-	cmd := exec.Command("ip", "netns", "exec", nsName,
-		"wg", "set", interfaceName, "peer", peerPublicKey,
+	cmd := exec.Command("wg", "set", interfaceName, "peer", peerPublicKey,
 		"allowed-ips", allowedIPs,
 		"persistent-keepalive", strconv.Itoa(serverKeepaliveSeconds))
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to set peer allowed-ips: %v, output: %s", err, string(output))
 	}
 
-	InvalidateStatsCache(nsName, interfaceName)
+	InvalidateStatsCache(interfaceName)
 	return nil
 }
 
 // SetPeerPresharedKey 为已存在的 peer 设置预共享密钥。
 // wg 要求从文件读取密钥，这里写入临时文件（0600）后立即删除。
-func (s *WireguardService) SetPeerPresharedKey(nsName, interfaceName, peerPublicKey, presharedKey string) error {
+func (s *WireguardService) SetPeerPresharedKey(interfaceName, peerPublicKey, presharedKey string) error {
 	if strings.TrimSpace(presharedKey) == "" {
 		return fmt.Errorf("preshared key must not be empty")
 	}
@@ -225,8 +222,7 @@ func (s *WireguardService) SetPeerPresharedKey(nsName, interfaceName, peerPublic
 		return fmt.Errorf("failed to flush preshared key: %v", err)
 	}
 
-	cmd := exec.Command("ip", "netns", "exec", nsName,
-		"wg", "set", interfaceName, "peer", peerPublicKey, "preshared-key", file.Name())
+	cmd := exec.Command("wg", "set", interfaceName, "peer", peerPublicKey, "preshared-key", file.Name())
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to set preshared key: %v, output: %s", err, string(output))
 	}
@@ -243,10 +239,9 @@ func (s *WireguardService) SetPeerPresharedKey(nsName, interfaceName, peerPublic
 const serverKeepaliveSeconds = 10
 
 // AddPeer 添加WireGuard peer
-func (s *WireguardService) AddPeer(nsName, interfaceName, peerPublicKey, allowedIPs, endpoint string) error {
+func (s *WireguardService) AddPeer(interfaceName, peerPublicKey, allowedIPs, endpoint string) error {
 	args := []string{
-		"netns", "exec", nsName,
-		"wg", "set", interfaceName, "peer", peerPublicKey,
+		"set", interfaceName, "peer", peerPublicKey,
 		"allowed-ips", allowedIPs,
 		"persistent-keepalive", strconv.Itoa(serverKeepaliveSeconds),
 	}
@@ -254,13 +249,13 @@ func (s *WireguardService) AddPeer(nsName, interfaceName, peerPublicKey, allowed
 		args = append(args, "endpoint", endpoint)
 	}
 
-	cmd := exec.Command("ip", args...)
+	cmd := exec.Command("wg", args...)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to add peer: %v, output: %s", err, string(output))
 	}
 
 	// 新增设备后让缓存立即失效，否则在一个 TTL 窗口内它不会出现在流量列表里
-	InvalidateStatsCache(nsName, interfaceName)
+	InvalidateStatsCache(interfaceName)
 	return nil
 }
 
@@ -269,10 +264,9 @@ func (s *WireguardService) AddPeer(nsName, interfaceName, peerPublicKey, allowed
 // 用途：服务端保活是后加的配置项，此前创建的 peer 从未设置过它，
 // 于是服务端不会主动发包，客户端表现为"0 B received"、握手长期不更新。
 // 启动时对全部 peer 执行一次即可修正，成本极低。
-func (s *WireguardService) EnsurePeerKeepalive(nsName, interfaceName string, peers []string) error {
+func (s *WireguardService) EnsurePeerKeepalive(interfaceName string, peers []string) error {
 	for _, publicKey := range peers {
-		cmd := exec.Command("ip", "netns", "exec", nsName,
-			"wg", "set", interfaceName, "peer", publicKey,
+		cmd := exec.Command("wg", "set", interfaceName, "peer", publicKey,
 			"persistent-keepalive", strconv.Itoa(serverKeepaliveSeconds))
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to ensure keepalive for %s: %v, output: %s",
@@ -283,14 +277,14 @@ func (s *WireguardService) EnsurePeerKeepalive(nsName, interfaceName string, pee
 }
 
 // RemovePeer 移除WireGuard peer
-func (s *WireguardService) RemovePeer(nsName, interfaceName, peerPublicKey string) error {
-	cmd := exec.Command("ip", "netns", "exec", nsName, "wg", "set", interfaceName, "peer", peerPublicKey, "remove")
+func (s *WireguardService) RemovePeer(interfaceName, peerPublicKey string) error {
+	cmd := exec.Command("wg", "set", interfaceName, "peer", peerPublicKey, "remove")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to remove peer: %v, output: %s", err, string(output))
 	}
 
 	// 删除设备后让缓存立即失效，否则已删除的设备会在一个 TTL 窗口内继续显示
-	InvalidateStatsCache(nsName, interfaceName)
+	InvalidateStatsCache(interfaceName)
 	return nil
 }
 
@@ -315,8 +309,8 @@ var (
 
 // GetDetailedStats 获取详细的WireGuard统计信息（带 1 秒缓存）。
 // 注意：返回的是副本，调用方可以安全地改写字段（例如补充设备备注）。
-func (s *WireguardService) GetDetailedStats(nsName, interfaceName string) (*models.WireguardServerStats, error) {
-	key := nsName + "/" + interfaceName
+func (s *WireguardService) GetDetailedStats(interfaceName string) (*models.WireguardServerStats, error) {
+	key := interfaceName
 
 	statsCacheMu.Lock()
 	if entry, ok := statsCache[key]; ok && time.Since(entry.at) < statsCacheTTL {
@@ -325,7 +319,7 @@ func (s *WireguardService) GetDetailedStats(nsName, interfaceName string) (*mode
 	}
 	statsCacheMu.Unlock()
 
-	cmd := exec.Command("ip", "netns", "exec", nsName, "wg", "show", interfaceName, "dump")
+	cmd := exec.Command("wg", "show", interfaceName, "dump")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get wireguard stats: %v, output: %s", err, string(output))
@@ -350,9 +344,9 @@ func (s *WireguardService) GetDetailedStats(nsName, interfaceName string) (*mode
 }
 
 // InvalidateStatsCache 让指定接口的缓存立即失效（设备增删后调用）。
-func InvalidateStatsCache(nsName, interfaceName string) {
+func InvalidateStatsCache(interfaceName string) {
 	statsCacheMu.Lock()
-	delete(statsCache, nsName+"/"+interfaceName)
+	delete(statsCache, interfaceName)
 	statsCacheMu.Unlock()
 }
 
@@ -433,8 +427,8 @@ func (s *WireguardService) parseWireguardDump(output, interfaceName string) (*mo
 }
 
 // GetPeerStatsMap 获取peer统计信息的映射（以公钥为key）
-func (s *WireguardService) GetPeerStatsMap(nsName, interfaceName string) (map[string]*models.WireguardPeerStats, error) {
-	stats, err := s.GetDetailedStats(nsName, interfaceName)
+func (s *WireguardService) GetPeerStatsMap(interfaceName string) (map[string]*models.WireguardPeerStats, error) {
+	stats, err := s.GetDetailedStats(interfaceName)
 	if err != nil {
 		return nil, err
 	}

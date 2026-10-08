@@ -38,6 +38,8 @@ func GetAllUsers(c *gin.Context) {
 }
 
 func DeleteUser(c *gin.Context) {
+	peerMutationMu.Lock()
+	defer peerMutationMu.Unlock()
 	userIDStr := c.Param("id")
 	userID, err := strconv.ParseUint(userIDStr, 10, 32)
 	if err != nil {
@@ -69,14 +71,14 @@ func DeleteUser(c *gin.Context) {
 		return
 	}
 
-	// 网络先拆，再删记录：顺序反了会留下数据库里查不到的孤儿命名空间，
+	// 网络先拆，再删记录：顺序反了会留下数据库里查不到的孤儿网络资源，
 	// 启动期收敛流程依据服务器记录工作，记录一删就再也发现不了残留资源。
 	var wgServer models.WireguardServer
 	if err := database.DB.Where("user_id = ?", targetUser.ID).First(&wgServer).Error; err == nil {
 		networkService := services.NewUserNetworkServiceFromRuntime()
 		if err := networkService.DestroyUserNetwork(&wgServer, targetUser.UserUID); err != nil {
 			// 与删除服务器保持一致：回收失败就保留记录，让这次操作可重试、
-			// 也仍然对收敛流程可见，而不是留下一个谁也看不见的命名空间。
+			// 也仍然对收敛流程可见，而不是留下一个无人管理的网络资源。
 			response.InternalError(c, "Failed to tear down the user's network: "+err.Error())
 			return
 		}

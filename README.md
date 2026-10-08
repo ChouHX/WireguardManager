@@ -1,6 +1,6 @@
 # WireGuard Manager
 
-> 多用户 WireGuard 管理平台：账号级网络命名空间隔离，设备配置一键下发，流量与在线状态实时可见。
+> 多用户 WireGuard 管理平台：每租户独立网卡、端口与路由表隔离，设备配置一键下发，流量与在线状态实时可见。
 
 [![Build and Push Images](https://github.com/ChouHX/WireguardManager/actions/workflows/build-images.yml/badge.svg)](https://github.com/ChouHX/WireguardManager/actions/workflows/build-images.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -30,11 +30,11 @@
 
 ## 特性
 
-- **账号级隔离** —— 每个账号独享一个 network namespace、独立的 WireGuard 接口与监听端口，互不可见、互不干扰。
-- **命名空间原生加密信道** —— 加密 UDP socket 由内核固定在宿主命名空间收发，明文则落在账号命名空间内。全程没有 DNAT、没有 conntrack 回转，回程源端口恒等于监听端口，不存在端口漂移。
-- **自动化编排** —— 注册即自动创建命名空间、隧道接口与路由；任一步失败自动回滚，不留半成品。
+- **账号级隔离** —— 每个账号独享 WireGuard 网卡、UDP 端口与策略路由表；不同租户可声明相同现场网段。
+- **云端多实例** —— 网卡始终位于宿主网络，直接收发加密 UDP；不创建 namespace、veth 或 DNAT。
+- **自动化编排** —— 注册时分配接口与端口；先建立防火墙隔离与路由规则，再启用接口；失败时回滚。
 - **设备即开即用** —— 一键生成客户端配置，支持 `.conf` 下载与二维码扫码导入，转发出口自动探测。
-- **秒级在线感知** —— 每 2 秒进入设备所属命名空间，向其隧道地址的高位端口发起一次 TCP 探测（纯 Go `setns`，无外部进程）：对端内核回 RST 或完成握手即为在线，连续无响应即离线，约 4 秒完成，不受 WireGuard 握手周期拖累。
+- **秒级在线感知** —— 纯 Go TCP 探测绑定租户网卡（`SO_BINDTODEVICE`），不再切换线程 namespace；结合接收流量判断设备在线状态。
 - **流量与资源监控** —— 设备握手状态、收发流量、系统 CPU / 内存 / 磁盘 / 网络趋势一屏掌握。
 - **精细管控** —— 设备粒度限速、启用禁用、网关转发（客户端侧 NAT，网卡按设备指定）、AllowedIPs 网段自定义，支持为单个设备启用预共享密钥（PSK）以增强抗中间人与抗量子能力。
 - **零配置部署** —— 开箱即用：JWT 密钥首次启动自动生成并随数据一起持久化，网络与监控等参数全部在管理界面「系统设置」中调整；部署侧无需任何配置文件。
@@ -45,54 +45,34 @@
 
 ```mermaid
 flowchart LR
-  subgraph clients["客户端设备"]
-    D1["设备 A<br/>10.100.1.2"]
-    D2["设备 B · 现场网关<br/>10.100.1.3 + 下挂 192.168.10.0/24"]
-  end
-
-  subgraph host["宿主机（Default NS）"]
-    direction TB
-    ETH["物理网卡 eth0<br/>加密 UDP socket 原生绑定"]
-    subgraph ns1["netns · wg_a1b2c3d4"]
-      W1["wg0 · 10.100.1.1/24<br/>明文落地点"]
-    end
-    API["Gin API :3000<br/>嵌入式 SQLite"]
-  end
-
-  WEB["控制台 · :3000"]
-  INET((互联网))
-
-  D1 -- "加密 UDP" --> ETH
-  D2 -- "加密 UDP" --> ETH
-  ETH -. "内核原生解密 / 直通<br/>零 DNAT · 零 veth" .-> W1
-  W1 -. "命名空间内转发<br/>ip_forward + cryptokey routing" .-> ETH
-  WEB -- "同进程提供页面与 /api" --> API
-  API -. "netns / wg 编排与统计" .-> ns1
+  CA["客户 A 客户端"] -->|UDP 51820| A["wgm1 · 10.100.1.1/24"]
+  A --> TA["路由表 20001"] --> GA["网关 A · 10.100.1.2"] --> LA["192.168.0.100"]
+  CB["客户 B 客户端"] -->|UDP 51821| B["wgm2 · 10.100.2.1/24"]
+  B --> TB["路由表 20002"] --> GB["网关 B · 10.100.2.2"] --> LB["192.168.0.100"]
 ```
 
-加密信道的做法是 **WireGuard 原生跨命名空间**：网卡在宿主命名空间创建，内核据此把创建时的命名空间记进 `struct wg_device.creating_net`，此后每次接口 up 都在该命名空间重建 UDP socket，收发加密报文时的路由查找与源地址选择也都在该命名空间完成。网卡实体随后被移入账号命名空间，明文流量因此被封闭其中。
+一个账号对应一个租户；不同租户可使用同一个现场网段。云端所有接口位于宿主网络，通过 `ip rule iif wgmN` 选择该租户路由表。**仅创建多个网卡并不能隔离重叠路由**：本实现用专属路由表解决选路，并用 `WGM-FORWARD` 链拒绝跨接口转发。网段缺少路由时返回 unreachable，不回落到宿主默认路由。
 
-这条路径带来两个直接结果：客户端要连的端口就是宿主机上的监听端口，回程源端口恒等于它，**不存在端口漂移**；加密报文不经过任何转发、改写或连接跟踪，**没有 conntrack 回转可丢包**。
-
-需要注意的内核语义（实现中已按此编排）：移入命名空间会让接口强制 down 并销毁 socket，因此必须在移入后重新 up；socket 的归属只取决于创建接口时所在的命名空间，与在哪里执行 up 无关。
-
-- **后端**（Go + Gin + GORM）：以 host 网络运行，负责 WireGuard 操作、命名空间编排与数据持久化。
-- **前端**（React + Vite + Mantine）：构建为静态产物，由后端一并托管（`WEB_ROOT` 模式），无需单独的 Web 容器。
-- **数据库**（嵌入式 SQLite）：单文件持久化，随镜像一起部署，无需外部服务。
-- **共享命名空间**（`/var/run/netns`）：宿主可直接管理容器创建的 netns。
+- 服务端 `AllowedIPs` = 设备隧道地址 `/32` + 该网关背后的现场网段。
+- 同租户内允许 `wgmN → wgmN` 转发；禁止跨租户、租户到宿主公网出口、外部到租户的明文转发。`INPUT` 只允许发往本租户服务端隧道 IP 的 ICMP 与探测响应，阻止访问宿主其他地址和管理服务。
+- `noprefixroute` 避免向主路由表写入隧道前缀；现场网段仅写入租户表。接口自己的本地 IP 仍由内核登记在 `local` 表。
+- 每租户使用独立 conntrack zone，避免相同源/目标五元组互相影响。每个隧道网卡设置宽松反向路径校验，避免重叠现场网段被 strict rp_filter 丢弃。
+- 当前转发支持 IPv4；租户接口关闭 IPv6。现场地址不能与云端自身的本地 IP 重合；`10.100.0.0/16` 保留给隧道，不能作为现场网段声明。
+- 后端为 Go + Gin + GORM，前端为 React。仓库不包含 Windows/Tauri 客户端运行程序。
 
 ### 网络资源模型
 
-每个账号注册后自动获得以下资源，均由平台负责创建与回收：
+| 资源 | 分配规则 |
+|---|---|
+| WireGuard 接口 | `wgm1` … `wgm254`；从隧道网段序号推导，避免与用户自建 `wg0` 混淆 |
+| UDP 端口 | 从 `network.base_port`（默认 51820）顺序分配，避让已有占用 |
+| 隧道网段 | `10.100.<序号>.0/24`；服务端 `.1`，设备从 `.2` 起分配 |
+| 专属路由表 | `20000 + 序号`，保留范围 `20001..20254` |
+| 策略规则优先级 | 入接口 `10000 + 序号`；绑定出接口的探测 `11000 + 序号`；服务端隧道源地址 `12000 + 序号` |
+| conntrack zone | 与专属路由表编号相同 |
+| 配置文件 | `/etc/wg_config/<user_uid>/wgmN.conf` 与 `private.key`（0600）；由管理器下发，不使用 wg-quick 启动服务端 |
 
-| 资源 | 说明 |
-| --- | --- |
-| network namespace | `wg_<user_uid>`，账号独占，与其他账号完全隔离 |
-| WireGuard 接口 | 先在宿主命名空间创建，再移入账号命名空间并改名 `wg0`；加密 UDP socket 固定在宿主命名空间收发 |
-| 监听端口 | 从 `network.base_port` 起顺序分配，同时避开宿主机上已占用的端口 |
-| 隧道网段 | `10.100.<序号>.0/24`，服务端占 `.1`，设备从 `.2` 起顺序分配 |
-| 转发 | 命名空间内 `net.ipv4.ip_forward=1`，承载设备互通与访问对端下挂网段 |
-| 配置文件 | `/etc/wg_config/<user_uid>/wg0.conf`（可读记录）与 `private.key`（0600） |
+宿主已有策略规则不得抢先匹配租户接口；保留上述接口名、路由表和规则优先级供本服务独占。云安全组及宿主 INPUT 需放行分配的 UDP 端口。默认 compose 不再挂载 `/var/run/netns`。
 
 ## 快速开始
 
@@ -176,9 +156,18 @@ WM_SERVER_PORT=8080 docker compose up -d
 
 ### 客户端配置
 
+设备表单中的两个字段分别控制两个方向：
+
+- **设备背后的现场网段**（`allowed_ips`）：网关填写 `192.168.0.0/24`；普通 PC 留空。不同租户可以重复，同一租户内的重复/重叠声明会被拒绝。
+- **客户端目标 IP / 网段**（`client_allowed_ips`）：PC 填写 `192.168.0.100`，导出为 `192.168.0.100/32`，并保留本租户隧道网段。显式设置优先于全局 `network.client_allowed_ips`。清空字段恢复全局默认。
+
+Windows 官方 WireGuard 会根据导出的 AllowedIPs 安装和清理路由。封装客户端应按“断开并清理 A 的路由 → 启动 B 对应端口的配置 → 添加 B 的目标 /32 路由”顺序切换；连接失败时也要清理新隧道与路由。不能同时启用两个指向相同目标 IP 的租户配置。现有配置仍可继续使用；新增目标地址后需要重新导入配置。
+
+网关侧开启转发选项会生成 Linux wg-quick 的 `ip_forward`、FORWARD 和 MASQUERADE 配置。Windows PC 不应开启网关转发选项。
+
 下载的 `AllowedIPs` 默认按设备所在网段下发（服务端接口 `10.100.0.1/24`、设备分配到 `10.100.0.2` 时下发 `10.100.0.0/24`），只把 VPN 网段流量送进隧道。
 
-> **关于全局代理**：`network.client_allowed_ips` 可以写成 `0.0.0.0/0, ::/0`，但在当前架构下这样只会得到一个「握手正常却上不了网」的隧道——账号命名空间不接公网出口，隧道里也没有 NAT。想要全局代理，需要为每个账号命名空间补一条出口链路（veth 对 + 宿主 `MASQUERADE` + 开启 `net.ipv4.ip_forward`）。详见「架构」一节对加密信道与明文路径的说明。
+> **关于全局代理**：此方案用于租户内部互访与现场网段接入，不提供公网出口。即使旧系统设置中保留了 `0.0.0.0/0`，服务端仍会拒绝公网转发；建议清空该设置，使用设备级目标地址。
 >
 > 请勿在客户端配置里写 `0.0.0.0/0` 作为**服务端** allowed-ips（界面上的「设备网段」）：那会让服务端把所有流量都转发给该设备，抢走其他设备的流量。程序会自动从服务端 allowed-ips 中剔除全局代理条目。
 
@@ -215,7 +204,7 @@ PostUp = iptables -t nat -A POSTROUTING ! -o %i -j MASQUERADE; iptables -A FORWA
 | `GET` | `/api/admin/wireguard/traffic/{id}` | 单个账号流量详情 |
 | `GET` | `/api/admin/wireguard/liveness` | 各账号在线设备统计 |
 | `PATCH` | `/api/admin/wireguard/servers/{id}/toggle` | 启用 / 禁用账号网络（真实把隧道接口 down/up） |
-| `PATCH` | `/api/admin/wireguard/servers/{id}/ratelimit` | 设置限速（在命名空间内用 `tc` 实际生效） |
+| `PATCH` | `/api/admin/wireguard/servers/{id}/ratelimit` | 设置限速（在租户接口上用 `tc` 实际生效） |
 | `DELETE` | `/api/admin/wireguard/servers/{id}` | 删除账号网络环境 |
 | `POST` | `/api/admin/wireguard/users/{id}/server` | 为账号重新分配隧道（误删服务器后的补救） |
 | `GET` | `/api/admin/monitoring/*` | 系统监控（`system` `cpu` `memory` `disk` `network` `chart` `history` `stats`） |
@@ -235,7 +224,7 @@ PostUp = iptables -t nat -A POSTROUTING ! -o %i -j MASQUERADE; iptables -A FORWA
 │   ├── middleware/             # 鉴权与用户缓存
 │   ├── models/                 # 数据模型
 │   ├── routes/                 # 路由注册
-│   └── services/               # netns / WireGuard / 监控采样 / 存活探测
+│   └── services/               # 多网卡 / WireGuard / 监控采样 / 存活探测
 ├── frontend/                   # React + Vite + MantineUI 源码
 ├── Dockerfile                  # 单容器镜像：Go 后端 + 前端产物 + wg 工具链
 ├── docker-compose.yml          # 默认编排：拉取 GHCR 镜像
@@ -247,7 +236,7 @@ PostUp = iptables -t nat -A POSTROUTING ! -o %i -j MASQUERADE; iptables -A FORWA
 ## 本地开发
 
 ```bash
-# 后端（涉及 netns / iptables，需要 root）
+# 后端（涉及接口 / 策略路由 / iptables，需要 root）
 go mod tidy
 sudo go run main.go
 
@@ -260,7 +249,7 @@ npm run dev        # http://localhost:3000，自动代理 /api 到 localhost:808
 npm run typecheck       # tsc --noEmit
 npm run check:locales   # 校验中英文文案键一致
 
-# 重置环境（删除全部 netns、WireGuard 配置与 SQLite 数据；会断开在线设备）
+# 重置环境（删除全部租户网络、WireGuard 配置与 SQLite 数据；会断开在线设备）
 sudo ./scripts/cleanup_all.sh
 ```
 
@@ -269,6 +258,14 @@ sudo ./scripts/cleanup_all.sh
 ```bash
 go test ./internal/...
 ```
+
+网络内核回归测试（只在临时 Docker 网络中创建测试接口，不使用宿主网络）：
+
+```bash
+bash scripts/test_network.sh
+```
+
+该测试使用本地 `ghcr.io/chouhx/wireguardmanager:latest` 镜像中的 `wg/ip/iptables/tc`，也可通过 `WGM_NETWORK_TEST_IMAGE` 指定镜像。覆盖重复现场地址、相同 TCP 五元组、跨租户阻断、启停及删除恢复、旧布局迁移和配置失败回滚。
 
 ## 常用命令
 
@@ -287,45 +284,46 @@ sudo ./scripts/cleanup_all.sh --network-only
 
 ## 升级与灰度
 
-**热更新不会断开在线设备。** 账号的网络命名空间与隧道接口都是宿主内核对象，后端进程退出并不会带走它们，隧道在此期间持续转发。停止旧容器、拉起新容器，客户端全程无感；新实例启动后会发现这些网络已经就绪并直接接管，不做任何重建。
-
-这也是后端刻意**不在关闭时拆除数据面**的原因：一旦在退出时清理，每次升级都会把全部在线设备踢下线。需要真正下架或重置时，改用 `scripts/cleanup_all.sh`。
-
-从旧版（veth + DNAT）升级时，后端在**首次启动**会做一次后台收敛：把每个账号重建到当前架构，并回收旧版留在宿主命名空间的端口映射、出口 NAT 与游离网卡。收敛沿用数据库中已记录的监听端口与隧道地址，因此**客户端配置不需要重新导入**。
-
-收敛是幂等的，重复启动不会中断已就绪的账号（判据是「账号命名空间存在 + 隧道接口存在 + 宿主命名空间已有该端口的加密 socket」，全部成立即跳过）。
-
-灰度时按以下四项确认，全部通过即可放量。把 `51820` 换成控制台里该账号的监听端口：
+升级前停止旧容器并备份 `data/`、`wg_config/`。从 namespace 版本首次迁移时，需要临时挂载历史 namespace 目录来释放旧网卡和 UDP 端口：
 
 ```bash
-# 1. 加密端口应出现在宿主命名空间
-grep -i "$(printf ':%04X' 51820)" /proc/net/udp
-
-# 2. 同一端口不该再出现在账号命名空间内（应无输出）
-ip netns exec wg_admin001 grep -i "$(printf ':%04X' 51820)" /proc/net/udp
-
-# 3. 命名空间内只应剩隧道接口，不应再出现 veth-ns-*（应为 lo 与 wg0）
-ip netns exec wg_admin001 ip -br link
-
-# 4. 宿主命名空间不应有游离的旧网卡或半成品临时接口（应无输出）
-ip -br link | grep -E 'veth-h-|wgx-'
+docker compose down
+docker compose -f docker-compose.build.yml -f docker-compose.legacy-migration.yml up -d --build
+docker compose -f docker-compose.build.yml -f docker-compose.legacy-migration.yml logs -f app
 ```
 
-业务侧再确认三项：
+启动日志应显示每个账号已使用 `wgmN / UDP <原端口>`。迁移沿用数据库密钥、端口、隧道地址、设备、PSK、启停及限速设置，客户端无需更换凭据。迁移成功后移除临时挂载：
 
-- 握手持续更新：`ip netns exec wg_admin001 wg show` 的 `latest handshake` 不再停住。
-- Site-to-Site 可达：从设备 B 直接 `ping` 设备 A 背后的内网地址（如 `192.168.10.50`）。
-- 客户端 `AllowedIPs` 配成 `0.0.0.0/0` 时，公网流量被丢弃，且不影响隧道内既有业务。
+```bash
+docker compose -f docker-compose.build.yml up -d
+```
+
+使用发布镜像时，将上述 `docker-compose.build.yml` 换成 `docker-compose.yml` 并省略 `--build`。数据库保留 `namespace` 字段仅作历史迁移标识，新布局通过 `network_mode = multi-interface` 记录。
+
+启动会先重建接口、路由、防火墙并恢复设备，再开放 HTTP 和探测；因此**启动/升级期间隧道会短暂重连**。重建失败会阻止服务就绪并记录错误；设备恢复失败时将该接口保持 down。不要在迁移后直接回滚旧镜像：新接口与策略规则不会由旧版本识别；应停服务、清理新数据面并恢复备份。
+
+验证示例（替换接口、源地址和目标）：
+
+```bash
+wg show wgm1
+ip -4 rule show
+ip -4 route show table 20001
+ip -4 route get 192.168.0.100 from 10.100.1.3 iif wgm1
+ip -4 route get 192.168.0.100 from 10.100.2.3 iif wgm2
+iptables -nvL WGM-FORWARD
+```
+
+相同目标在两个租户中应分别选择 `wgm1/table 20001` 与 `wgm2/table 20002`；从 A 访问 B 的隧道地址应失败。删除 A 后 B 应继续可用，主路由表不应出现现场路由。
 
 ## 常见问题
 
 **注册 / 首次启动比较慢？**
-注册需要创建命名空间、隧道接口并下发地址与路由，通常在一两秒内完成；任一步失败会整体回滚，不会留下残留资源。
+注册需要创建租户接口并下发地址、专属路由与防火墙，通常在一两秒内完成；任一步失败会整体回滚，不会留下残留资源。
 
-升级到当前版本后首次启动会做一次后台收敛：把此前用旧方案（veth + DNAT）编排的账号迁移过来，并修复缺失的命名空间或接口。迁移沿用数据库里已记录的端口与隧道地址，因此**下发给客户端的配置不需要重新导入**。
+首次升级按上一节临时挂载历史 namespace，迁移会保留客户端凭据与监听端口。
 
 **在线状态是怎么判定的？**
-服务端每 1 秒进入设备所属的网络命名空间，向它的隧道地址加探测端口（`liveness.probe_port`，默认 49151）发起一次 TCP 连接：
+服务端每 1 秒绑定设备所属租户的网卡，向它的隧道地址加探测端口（`liveness.probe_port`，默认 49151）发起一次 TCP 连接：
 
 1. 完成握手，或收到 `connection refused`（对端内核回 RST）→ **在线**，并显示往返耗时；
 2. 探测无响应，但最近一轮**收到过**对端流量 → **在线**；
@@ -344,7 +342,7 @@ ip -br link | grep -E 'veth-h-|wgx-'
 
 - 依据是**「探测有响应」**——服务端发的小包能到达对端、且对端有回应，说明路由与 allowed-ips 都没问题，只可能是**满长大包**过不去 → 按下面「链路 MTU」处理。
 - 依据是**「隧道有流量」**（探测无响应但 `rx` 在增长）——服务端收得到对端的包，自己发出的探测却得不到响应，说明**服务端到对端这个方向不通** → 按下面「服务端 peer 的 allowed-ips」处理。
-- 探测细节显示**「路由不可达」**——命名空间内没有到该地址的路由，通常意味着设备的下挂网段没被下发。
+- 探测细节显示**「路由不可达」**——租户路由表内没有到该地址的路由，通常意味着设备的下挂网段没被下发。
 
 **链路 MTU（最常见）**
 隧道接口 MTU 默认 1420，这个值是照「底层链路 1500」定的。一旦本机所处的链路更窄（本机自身位于 IPIP / VXLAN / PPPoE 等通道之后是常见情形），加密封装后的报文就会超出链路容量：握手、探测这类**小包照常通过**，满长的数据包却发出即被丢弃。于是出现「能连上、却传不动数据」，而两端都不会报任何错。内核**不会**因为底层链路 MTU 变小而自动回退隧道 MTU。
@@ -360,9 +358,9 @@ WARNING: 出口接口 eth0 的 MTU 为 1300，最多只能承载 1240 字节的�
 自己确认是不是这条：
 
 ```bash
-# 在账号命名空间内对比小包与大包（大包不通、小包通 => 基本确诊）
-ip netns exec wg_xxxxxx ping -M do -s 1200 <对端隧道地址>   # 通
-ip netns exec wg_xxxxxx ping -M do -s 1400 <对端隧道地址>   # 不通
+# 绑定租户接口对比小包与大包（大包不通、小包通 => 基本确诊）
+ping -I wgm1 -M do -s 1200 <对端隧道地址>   # 通
+ping -I wgm1 -M do -s 1400 <对端隧道地址>   # 不通
 ```
 
 `-M do` 表示禁止分片，必须用 iputils 的 `ping`（许多精简镜像里的 busybox `ping` 不支持该选项）。
@@ -375,16 +373,14 @@ ip netns exec wg_xxxxxx ping -M do -s 1400 <对端隧道地址>   # 不通
 **关于保活（PersistentKeepalive）**
 服务端会为每台设备设置 10 秒的保活。这是必要的：WireGuard 客户端的保活定时器只有在**收到对端数据包**后才会续期（内核的 `timer_need_another_keepalive` 标志），服务端若从不主动发包，客户端会在首个保活之后停止发送，直到 120 秒重协商才恢复——表现为"设了 25 秒却两分钟才动一次"。双向保活后客户端的保活才会持续生效。
 
-**为什么必须在设备的命名空间里探测？**
-每台设备的隧道地址（如 `10.100.0.2`）只存在于它所属账号的 netns 内，宿主机路由表里没有该网段——从宿主命名空间发包会落到默认路由上，无论对端是否在线都只会超时。后端在容器内以特权模式运行并共享 `/var/run/netns`，用 `setns` 切入目标命名空间，探测完再切回，整个过程是纯 Go 的，不 fork 任何外部命令。
+**为什么探测必须绑定租户接口？**
+租户路由只存在于专属路由表。Go 探测通过 `SO_BINDTODEVICE` 与 `oif` 策略规则选择正确租户；不绑定会使用宿主路由表，无法可靠访问隧道设备。不再使用 `setns` 或锁定线程。
 
 **设备 A 访问不到设备 B 背后的局域网？**
-跨网段转发需要三件事同时成立，本平台已自动处理前两项：① 服务端开启命名空间内的 IP 转发（新建命名空间的 `FORWARD` 策略本就是 `ACCEPT`，因此不需要额外规则）；② 服务端把对端网段写进该设备的 `allowed-ips`（WireGuard 的加密路由表，决定包发给谁），并为这些网段在命名空间内补一条路由——**内核不会依据 `allowed-ips` 自动写路由表**，`wg-quick` 正是靠自身的 `add_route` 补上这一步；③ 设备 A 的客户端 `AllowedIPs` 要包含目标网段，否则 A 根本不会把这些包送进隧道——这一项需要为 A 单独配置。
+跨网段转发需要服务端网关 peer 的 AllowedIPs、租户路由表和防火墙、客户端目标路由及网关转发/NAT 一起生效。平台处理云端部分；设备表单的“客户端目标 IP / 网段”用于配置发起访问的一端，“设备背后的现场网段”用于配置网关一端。
 
 **能让设备把所有流量都从服务器出去吗（全局代理）？**
-当前架构下，账号命名空间内只有隧道接口与 `lo`，**没有公网出口**：客户端的流量送进隧道、服务端也能解密，但明文包在命名空间内查不到去处，因此 `network.client_allowed_ips = 0.0.0.0/0` 会表现为「隧道已建立、握手正常，但上不了公网」。
-
-本平台的定位是账号隔离与站点组网——设备互通、访问对端下挂网段（site-to-site）都在支持范围内。若确实需要「服务器兼作出口网关」，需要为命名空间补一条 veth 出口并在宿主机上做 `MASQUERADE`，这会把加密信道之外的转发路径重新引回宿主机，建议作为独立特性评估。
+当前架构仅支持租户内部互访和现场网段接入；没有默认出口路由，防火墙也会拒绝租户到公网的转发。设置全流量 AllowedIPs 不会启用公网代理。
 
 **为什么判定不参考握手时间？**
 `last handshake` 在客户端断开后**不会被清空，只是停住**，而它又只在密钥重协商时更新（默认 120 秒）。拿它当在线依据，会让离线判定滞后一个重协商周期——这是早期版本"设备断开很久仍显示在线"的根因，现已完全移除该依据，只依赖实时探测与流量增量。
@@ -402,7 +398,7 @@ ip netns exec wg_xxxxxx ping -M do -s 1400 <对端隧道地址>   # 不通
 SQLite 数据与 JWT 密钥都在 `data/` 目录，停服务后整体复制即可（建议连 `-wal`、`-shm` 一起复制）。
 
 **可以多个后端副本共享同一数据库吗？**
-SQLite 面向单实例部署设计。需要横向扩容时应改用支持并发的数据库，并重新评估 netns 的归属。
+SQLite 面向单实例部署设计。需要横向扩容时应改用支持并发的数据库，并重新设计接口、端口、路由表的归属。
 
 ## 安全提示
 
@@ -417,7 +413,7 @@ SQLite 面向单实例部署设计。需要横向扩容时应改用支持并发�
   ```
 
   跨域来源同理可用 `WM_CORS_ORIGINS`（逗号分隔）显式收窄，默认放行全部来源时启动日志会给出提示。
-- 后端需要 `privileged` 与 host 网络才能管理 netns、iptables，请仅在受控主机上部署，并限制控制台的网络暴露面（建议置于 TLS 反向代理之后）。`privileged` 无法用 `cap_add` 替代——`ip netns add` 需要改动挂载传播属性，而 Docker 默认对该操作加了锁，仅凭 `CAP_SYS_ADMIN` 无法绕过（compose 文件中有实测说明）。
+- 后端使用 host 网络管理 WireGuard、iptables 和策略路由；默认保留 privileged 以写入宿主转发及接口 sysctl。运行时不再共享 namespace 挂载。请仅在受控主机部署，并限制控制台暴露范围。
 - 容器健康检查指向 `/ready`（会真正 Ping 数据库），而非无条件返回 200 的 `/health`。
 - 设备配置中包含私钥，下载链路应确保可信。
 

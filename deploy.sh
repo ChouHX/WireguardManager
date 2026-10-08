@@ -98,7 +98,7 @@ else
     echo -e "${GREEN}✓ WireGuard 模块已加载${NC}"
 fi
 # 说明：宿主无需安装 wireguard-tools，wg / ip / iptables 都在后端容器内，
-# 容器以特权 + host 网络运行并共享 /var/run/netns，因此能直接管理宿主的网络环境。
+# 容器以特权 + host 网络运行，直接管理租户独立网卡、策略路由和防火墙。
 echo -e "  ${GREEN}提示:${NC} 宿主机无需安装 wg 命令，工具链由后端容器提供（第 7 步会自检）"
 
 # 准备数据与配置目录
@@ -107,11 +107,6 @@ echo -e "${YELLOW}[5/7] 准备目录...${NC}"
 # WireGuard 配置目录（映射到容器内 /etc/wg_config）
 sudo mkdir -p /etc/wg_config
 sudo chmod 755 /etc/wg_config
-
-# 网络命名空间目录（关键！）
-sudo mkdir -p /var/run/netns
-sudo chmod 755 /var/run/netns
-echo -e "${GREEN}✓ 已创建 /var/run/netns 目录${NC}"
 
 # 数据目录：SQLite 数据库与自动生成的 jwt.secret
 mkdir -p data
@@ -192,11 +187,11 @@ else
     SELF_CHECK_FAILED=1
 fi
 
-# 2) 命名空间共享：容器里应能直接列出宿主的 netns
-if docker compose -f "$COMPOSE_FILE" exec -T app ip netns list >/dev/null 2>&1; then
-    echo -e "  ${GREEN}✓${NC} 容器可访问宿主网络命名空间（/var/run/netns 已共享）"
+# 2) 宿主网络工具可读取策略路由
+if docker compose -f "$COMPOSE_FILE" exec -T app ip -4 rule show >/dev/null 2>&1; then
+    echo -e "  ${GREEN}✓${NC} 容器可管理宿主策略路由（每租户独立路由表）"
 else
-    echo -e "  ${RED}✗${NC} 容器无法访问 /var/run/netns，请确认该挂载为 shared"
+    echo -e "  ${RED}✗${NC} 无法读取宿主策略路由，请检查 host 网络与权限"
     SELF_CHECK_FAILED=1
 fi
 

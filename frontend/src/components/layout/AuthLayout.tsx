@@ -115,7 +115,7 @@ export function AuthLayout() {
             </Stack>
 
             <Text c="#5f6773" fz={10.5} style={{ position: 'relative', zIndex: 1 }}>
-              namespace isolation · per-user wg interface · live traffic
+              tenant interfaces · separate ports · live traffic
             </Text>
           </Box>
 

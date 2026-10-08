@@ -72,7 +72,7 @@
     "passwordMinLength": "密码至少需要6个字符",
     "nameMinLength": "姓名至少需要2个字符",
     "heroTitle": "开箱即用的 WireGuard 控制台",
-    "heroDescription": "按账号隔离网络命名空间，自动编排接口、路由与转发规则；设备配置下发与实时流量一屏掌握。"
+    "heroDescription": "按账号分配独立网卡和端口，自动编排路由与隔离规则；设备配置下发与实时流量一屏掌握。"
   },
   "user": {
     "profile": "个人资料",
@@ -166,9 +166,9 @@
     "unnamed": "未命名设备",
     "publicKey": "公钥",
     "peerAddress": "Peer IP",
-    "allowedIPs": "允许访问的IP",
-    "allowedIPsHelp": "此设备可以通过VPN访问的IP地址或网段（按 Enter、逗号或空格添加）。单个IP会自动添加/32后缀。留空则默认只允许访问设备自己的IP。",
-    "noAllowedIPs": "无限制",
+    "allowedIPs": "设备背后的现场网段",
+    "allowedIPsHelp": "仅网关设备填写，例如 192.168.0.0/24；普通客户端留空。不同租户可使用相同现场网段，同一租户内不得重复声明。",
+    "noAllowedIPs": "无下挂网段",
     "invalidIPFormat": "IP地址或CIDR格式不正确",
     "endpoint": "端点",
     "noEndpoint": "无端点",
@@ -259,7 +259,7 @@
     "generatingQr": "正在生成二维码...",
     "generateQrFailed": "生成二维码失败",
     "noServer": "该账号尚未分配 WireGuard 网络",
-    "noServerHint": "请联系管理员为账号完成网络命名空间与 WireGuard 接口配置，配置完成后本页会自动显示设备与流量。",
+    "noServerHint": "请联系管理员配置独立的 WireGuard 网卡和端口，完成后即可添加设备。",
     "partialData": "部分数据暂时不可用（未分配网络或采集失败），已为你省略相关内容。",
     "ifaceDefault": "默认出口",
     "ifaceVirtual": "虚拟接口",
@@ -271,7 +271,7 @@
     "detecting": "检测中",
     "onlineDevices": "在线设备",
     "onlineHint": "{online} / {total} 台在线",
-    "livenessHint": "每 {interval} 秒进入设备所属网络命名空间，向其隧道地址的探测端口发起 TCP 连接：收到响应或 RST 立即在线，连续无响应即判离线。",
+    "livenessHint": "后端每 {interval} 秒绑定租户网卡，向设备隧道地址的高位端口发起 TCP 探测；收到响应或 RST 即判为在线，连续失败则判为离线。",
     "usePresharedKey": "启用预共享密钥",
     "usePresharedKeyHelp": "在服务端与设备之间再加一层对称密钥，提升抗中间人与抗量子能力。开启或关闭后需要重新下载客户端配置。",
     "forwardInterfaceHelp": "留空时下发 ! -o %i —— 由 wg-quick 自动展开为隧道接口名，即「只要不是从隧道出去就做 NAT」，无需知道客户端网卡叫什么。仅当自动模式不适用时才填写客户端自己的物理网卡名（如 eth0、wlan0）。",
@@ -292,9 +292,13 @@
       "refused": "对方内核回 RST",
       "timeout": "探测包被丢弃或超时",
       "unreachable": "路由不可达",
-      "setup_failed": "命名空间不可用"
+      "setup_failed": "网卡不可用"
     },
-    "probeLastOk": "最后成功 "
+    "probeLastOk": "最后成功 ",
+    "clientTargetIPs": "客户端目标 IP / 网段",
+    "clientTargetIPsHelp": "此客户端需要访问的远端地址，例如 192.168.0.100（自动生成 /32 路由）。留空使用系统默认范围。切换客户前先断开上一条隧道。",
+    "isolationMode": "隔离方式",
+    "multiInterface": "独立网卡 / 独立端口"
   },
   "monitoring": {
     "title": "系统监控",

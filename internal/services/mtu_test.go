@@ -111,14 +111,14 @@ func TestCheckTunnelMTUFit_Boundary(t *testing.T) {
 	}
 }
 
-func TestSetLinkMTUInNamespace_ZeroIsNoop(t *testing.T) {
-	// mtu<=0 表示不干预，不应产生任何外部调用，因此用一个不存在的命名空间
+func TestSetLinkMTU_ZeroIsNoop(t *testing.T) {
+	// mtu<=0 表示不干预，不应产生任何外部调用，因此用一个不存在的接口
 	// 也必须直接返回 nil（若真的去执行 ip 命令就会失败）。
-	svc := NewNetnsService()
-	if err := svc.SetLinkMTUInNamespace("no-such-ns", "wg0", 0); err != nil {
+	svc := NewInterfaceService()
+	if err := svc.SetLinkMTU("wg0", 0); err != nil {
 		t.Errorf("mtu=0 应为空操作，实际返回: %v", err)
 	}
-	if err := svc.SetLinkMTUInNamespace("no-such-ns", "wg0", -1); err != nil {
+	if err := svc.SetLinkMTU("wg0", -1); err != nil {
 		t.Errorf("mtu<0 应为空操作，实际返回: %v", err)
 	}
 }

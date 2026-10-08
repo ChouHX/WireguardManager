@@ -5,6 +5,10 @@ import (
 	"cloud-platform/internal/models"
 	"errors"
 	"fmt"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -32,17 +36,9 @@ func AllocationsFromServers(servers []models.WireguardServer) []NetworkAllocatio
 	return allocations
 }
 
-// UserNetworkService 账号网络编排服务。
-//
-// 每个账号得到一个独占的网络命名空间，其中只有隧道接口与 lo：
-//
-//	[宿主 Default NS]  eth0 + 加密 UDP socket（接口创建时即固定在此）
-//	[netns wg_<uid>]   wg0（明文落地点） + lo，ip_forward=1
-//
-// 加密报文由宿主命名空间的 socket 直接收发，明文流量留在命名空间内。
-// 因此全程没有 veth 中转、没有 DNAT、没有 conntrack 回转。
+// UserNetworkService provisions one host interface, UDP port and routing table per account.
 type UserNetworkService struct {
-	netnsService     *NetnsService
+	interfaceService *InterfaceService
 	wireguardService *WireguardService
 	baseSubnet       string // 旧版 veth 网段前缀，仅用于回收历史规则
 	basePort         int    // WireGuard 监听端口起始值
@@ -65,7 +61,7 @@ func NewUserNetworkServiceFromRuntime() *UserNetworkService {
 
 func NewUserNetworkService(configDir, baseSubnet string, basePort int, outInterface string, mtu int) *UserNetworkService {
 	return &UserNetworkService{
-		netnsService:     NewNetnsService(),
+		interfaceService: NewInterfaceService(),
 		wireguardService: NewWireguardService(configDir),
 		baseSubnet:       baseSubnet,
 		basePort:         basePort,
@@ -80,8 +76,6 @@ func NewUserNetworkService(configDir, baseSubnet string, basePort int, outInterf
 // 访问数据库，避免与 database 包形成循环依赖。
 // 返回 WireguardServer 对象，调用方负责保存到数据库。
 func (s *UserNetworkService) ProvisionUserNetwork(user *models.User, existing []NetworkAllocation) (*models.WireguardServer, error) {
-	nsName := fmt.Sprintf("wg_%s", user.UserUID)
-	wgInterface := "wg0"
 
 	port, subnetID, err := s.allocateNetwork(existing)
 	if err != nil {
@@ -94,10 +88,13 @@ func (s *UserNetworkService) ProvisionUserNetwork(user *models.User, existing []
 	}
 
 	wgIP := tunnelAddress(subnetID)
+	wgInterface := TenantInterface(subnetID)
 
 	server := &models.WireguardServer{
 		UserID:       user.ID,
-		Namespace:    nsName,
+		Namespace:    "wg_" + user.UserUID, // legacy unique column, no active namespace
+		NetworkMode:  NetworkModeMultiInterface,
+		Enabled:      true,
 		WgInterface:  wgInterface,
 		WgPort:       port,
 		WgPublicKey:  publicKey,
@@ -105,139 +102,145 @@ func (s *UserNetworkService) ProvisionUserNetwork(user *models.User, existing []
 		WgAddress:    wgIP,
 	}
 
-	if err := s.createNetwork(nsName, wgInterface, user.UserUID, privateKey, wgIP, port, true); err != nil {
+	if err := s.createNetwork(server, user.UserUID); err != nil {
 		return nil, err
 	}
 
 	return server, nil
 }
 
-// EnsureUserNetwork 让既有账号的网络回到目标状态：沿用数据库中已记录的端口与
-// 隧道地址重建命名空间与接口，下发给客户端的任何参数都不改变。
-//
-// 两类场景会用到：升级到「原生跨命名空间」方案后的迁移；运行期发现命名空间或
-// 接口缺失时的自愈。
+// EnsureUserNetwork rebuilds the tenant from persisted credentials. Startup runs
+// before HTTP handlers and probes, so no peer mutations race with the rebuild.
 func (s *UserNetworkService) EnsureUserNetwork(server *models.WireguardServer, userUID string) error {
-	nsName := server.Namespace
-	if nsName == "" {
-		nsName = fmt.Sprintf("wg_%s", userUID)
+	id := subnetIDFromAddress(server.WgAddress)
+	if id == 0 || server.WgPrivateKey == "" || server.WgPort < 1 || server.WgPort > 65535 {
+		return fmt.Errorf("server %d has invalid network parameters", server.ID)
 	}
-	wgInterface := server.WgInterface
-	if wgInterface == "" {
-		wgInterface = "wg0"
+	link := TenantInterface(id)
+	if s.interfaceService.LinkExists(link) {
+		if err := s.verifyOwnership(link, userUID); err != nil {
+			return err
+		}
+		if err := s.interfaceService.Destroy(link, server.WgAddress); err != nil {
+			return err
+		}
 	}
-	if server.WgPrivateKey == "" || server.WgPort <= 0 || server.WgAddress == "" {
-		return fmt.Errorf("server %d is missing the parameters required to rebuild its network", server.ID)
+	if server.NetworkMode != NetworkModeMultiInterface {
+		if err := s.removeLegacyNamespace(server, userUID); err != nil {
+			return err
+		}
+		s.removeLegacyForwarding(server, userUID)
 	}
-
-	// 旧版方案在宿主机上留了端口映射，会劫持本该直接投递给加密 socket 的报文，
-	// 必须先清掉再重建。
-	s.removeLegacyForwarding(server, userUID)
-
-	// 删除旧命名空间：其中的旧接口、旧 veth 与命名空间内规则随之回收，
-	// 接口销毁时内核会同步释放宿主命名空间里的加密 socket。
-	if err := s.netnsService.DeleteNamespace(nsName); err != nil {
+	desired := *server
+	desired.WgInterface = link
+	desired.NetworkMode = NetworkModeMultiInterface
+	if err := s.createNetwork(&desired, userUID); err != nil {
 		return err
 	}
-
-	return s.createNetwork(nsName, wgInterface, userUID, server.WgPrivateKey, server.WgAddress, server.WgPort, server.Enabled)
-}
-
-// createNetwork 按「原生跨命名空间」方案构建一个账号的网络环境。
-//
-// 关键顺序：
-//  1. 在宿主机创建接口 —— 内核把 creating_net 记为宿主命名空间；
-//  2. 移入账号命名空间并改名为 wg0；
-//  3. 下发私钥与监听端口；
-//  4. 配置地址，并按 enabled 决定是否拉起接口 —— 拉起时监听 socket 在宿主命名空间建立。
-//
-// enabled=false 用于保留「被管理员禁用」的账号形态：接口建好但保持 down，
-// 内核因此不会为该设备建立加密 socket，重启后也不会被收敛流程意外启用。
-func (s *UserNetworkService) createNetwork(nsName, wgInterface, userUID, privateKey, wgIP string, port int, enabled bool) error {
-	tempLink := tempLinkName(userUID)
-
-	rollback := func() {
-		// 临时接口可能仍留在宿主命名空间（尚未成功移入时）
-		s.netnsService.DeleteLinkInHost(tempLink)
-		s.netnsService.DeleteNamespace(nsName)
-	}
-
-	if err := s.netnsService.CreateNamespace(nsName); err != nil {
-		return err
-	}
-
-	if _, err := s.wireguardService.CreateConfig(userUID, &WireguardConfig{
-		InterfaceName: wgInterface,
-		ListenPort:    port,
-		PrivateKey:    privateKey,
-		Address:       wgIP,
-	}); err != nil {
-		rollback()
-		return err
-	}
-
-	if err := s.netnsService.CreateWireguardDevice(tempLink); err != nil {
-		rollback()
-		return err
-	}
-
-	if err := s.netnsService.MoveLinkToNamespace(tempLink, nsName); err != nil {
-		rollback()
-		return err
-	}
-
-	if err := s.netnsService.RenameLinkInNamespace(nsName, tempLink, wgInterface); err != nil {
-		rollback()
-		return err
-	}
-
-	if err := s.wireguardService.ApplyInterfaceInNamespace(nsName, wgInterface, userUID, port); err != nil {
-		rollback()
-		return err
-	}
-
-	if err := s.netnsService.AddAddressInNamespace(nsName, wgInterface, wgIP); err != nil {
-		rollback()
-		return err
-	}
-
-	// 在拉起接口之前下发 MTU：接口 up 后再改会让已建立的会话经历一次瞬时中断；
-	// down 状态下设置则完全无感。mtu 为 0 时该调用不做任何改动。
-	if err := s.netnsService.SetLinkMTUInNamespace(nsName, wgInterface, s.mtu); err != nil {
-		rollback()
-		return err
-	}
-
-	// 显式设置状态而非只做「拉起」：禁用中的账号必须保持 down
-	if err := s.netnsService.SetLinkStateInNamespace(nsName, wgInterface, enabled); err != nil {
-		rollback()
-		return err
-	}
-
-	// peer 互访与「访问某个 peer 背后的下挂网段」都要在命名空间内完成一次转发
-	if err := s.netnsService.EnableForwardingInNamespace(nsName); err != nil {
-		rollback()
-		return err
-	}
-
+	*server = desired
 	return nil
 }
 
-// DestroyUserNetwork 回收账号的网络环境。
-//
-// 删除命名空间即完成主体回收：接口、路由与命名空间内的规则都在其中。接口销毁
-// 时内核会释放宿主命名空间里的加密 socket，因此无需再逐项摘除。
+func (s *UserNetworkService) verifyOwnership(link, userUID string) error {
+	out, err := s.interfaceService.run("ip", "-o", "link", "show", "dev", link)
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(string(out), "alias wireguard-manager:"+userUID+" ") &&
+		!strings.HasSuffix(strings.TrimSpace(string(out)), "alias wireguard-manager:"+userUID) {
+		return fmt.Errorf("interface %s already exists without this account's ownership marker", link)
+	}
+	return nil
+}
+
+func (s *UserNetworkService) createNetwork(server *models.WireguardServer, userUID string) (result error) {
+	prefix, err := netip.ParsePrefix(server.WgAddress)
+	if err != nil || !prefix.Addr().Is4() {
+		return fmt.Errorf("invalid tunnel address %q", server.WgAddress)
+	}
+
+	link := server.WgInterface
+	if err := s.interfaceService.CreateWireguardDevice(link); err != nil {
+		return err
+	}
+	defer func() {
+		if result != nil {
+			if err := s.interfaceService.Destroy(link, server.WgAddress); err != nil {
+				result = errors.Join(result, fmt.Errorf("rollback: %w", err))
+			}
+		}
+	}()
+	if err := s.interfaceService.command("ip", "link", "set", "dev", link, "alias", "wireguard-manager:"+userUID); err != nil {
+		return err
+	}
+	if _, err := s.wireguardService.CreateConfig(userUID, &WireguardConfig{
+		InterfaceName: link, ListenPort: server.WgPort, PrivateKey: server.WgPrivateKey, Address: server.WgAddress,
+	}); err != nil {
+		return err
+	}
+	if err := s.interfaceService.SetLinkMTU(link, s.mtu); err != nil {
+		return err
+	}
+	// Keep the new interface unkeyed until isolation and routing are installed.
+	if err := s.interfaceService.ConfigureRouting(link, server.WgAddress); err != nil {
+		return err
+	}
+	if err := s.interfaceService.SetLinkState(link, server.Enabled); err != nil {
+		return err
+	}
+	return s.wireguardService.ApplyInterface(link, userUID, server.WgPort)
+}
+
 func (s *UserNetworkService) DestroyUserNetwork(server *models.WireguardServer, userUID string) error {
-	if server.Namespace == "" {
+	if server.NetworkMode != NetworkModeMultiInterface {
+		// A failed migration may have already created the target host interface.
+		link := TenantInterface(subnetIDFromAddress(server.WgAddress))
+		if s.interfaceService.LinkExists(link) {
+			if err := s.verifyOwnership(link, userUID); err != nil {
+				return err
+			}
+			if err := s.interfaceService.Destroy(link, server.WgAddress); err != nil {
+				return err
+			}
+		}
+		if err := s.removeLegacyNamespace(server, userUID); err != nil {
+			return err
+		}
+		s.removeLegacyForwarding(server, userUID)
 		return nil
 	}
-
-	s.removeLegacyForwarding(server, userUID)
-
-	if err := s.netnsService.DeleteNamespace(server.Namespace); err != nil {
-		return fmt.Errorf("failed to delete namespace: %v", err)
+	if s.interfaceService.LinkExists(server.WgInterface) {
+		if err := s.verifyOwnership(server.WgInterface, userUID); err != nil {
+			return err
+		}
 	}
+	return s.interfaceService.Destroy(server.WgInterface, server.WgAddress)
+}
 
+// Legacy namespaces are accessed only during migration/cleanup. Containers need
+// the one-time legacy migration compose override to see the old mount points.
+func (s *UserNetworkService) removeLegacyNamespace(server *models.WireguardServer, userUID string) error {
+	name := "wg_" + userUID
+	if server.Namespace != "" && server.Namespace != name {
+		return fmt.Errorf("unexpected legacy namespace %q", server.Namespace)
+	}
+	path := filepath.Join("/var/run/netns", name)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if HostUDPPortInUse(server.WgPort) {
+			return fmt.Errorf("legacy UDP port %d is still in use; use docker-compose.legacy-migration.yml for the first upgrade", server.WgPort)
+		}
+		return nil
+	} else if err != nil {
+		return err
+	}
+	// Explicitly delete the interface before unmounting: another open namespace
+	// handle must not keep its WireGuard socket alive and occupy the old port.
+	if out, err := exec.Command("ip", "-n", name, "link", "del", "dev", server.WgInterface).CombinedOutput(); err != nil && !strings.Contains(string(out), "Cannot find device") {
+		return fmt.Errorf("remove legacy interface: %w: %s", err, out)
+	}
+	if out, err := exec.Command("ip", "netns", "delete", name).CombinedOutput(); err != nil {
+		return fmt.Errorf("remove legacy namespace: %w: %s", err, out)
+	}
 	return nil
 }
 
@@ -249,12 +252,12 @@ func (s *UserNetworkService) DestroyUserNetwork(server *models.WireguardServer, 
 //     加密 socket 的报文。
 //   - 出口 NAT 规则：veth 子网的 MASQUERADE 与 FORWARD。
 //   - 游离的宿主侧网卡：旧方案在「veth 对已创建、但移入命名空间失败」时会把两端
-//     都留在宿主命名空间；本方案在「临时接口已创建、但尚未移入」时同样可能留下。
+//     都留在宿主命名空间；更早版本也可能留下未移入的临时接口。
 //     命名空间侧的网卡会随命名空间一并销毁，宿主侧的必须单独回收。
 func (s *UserNetworkService) removeLegacyForwarding(server *models.WireguardServer, userUID string) {
 	// 按账号名精确推导网卡名，不做通配扫描——通配会误删并发编排中正在创建的接口。
-	s.netnsService.DeleteLinkInHost(tempLinkName(userUID))
-	s.netnsService.DeleteLinkInHost(legacyVethHostName(userUID))
+	s.interfaceService.DeleteLinkInHost(tempLinkName(userUID))
+	s.interfaceService.DeleteLinkInHost(legacyVethHostName(userUID))
 
 	if server.WgPort <= 0 {
 		return
@@ -266,8 +269,8 @@ func (s *UserNetworkService) removeLegacyForwarding(server *models.WireguardServ
 	}
 
 	legacyNSIP := fmt.Sprintf("%s.%d.2", s.baseSubnet, subnetID)
-	s.netnsService.RemoveLegacyPortForwarding(s.outInterface, server.WgPort, legacyNSIP, "udp")
-	s.netnsService.RemoveHostNAT(fmt.Sprintf("%s.%d.0/30", s.baseSubnet, subnetID), s.outInterface)
+	s.interfaceService.RemoveLegacyPortForwarding(s.outInterface, server.WgPort, legacyNSIP, "udp")
+	s.interfaceService.RemoveHostNAT(fmt.Sprintf("%s.%d.0/30", s.baseSubnet, subnetID), s.outInterface)
 }
 
 // allocateNetwork 顺序分配监听端口与隧道网段号。
@@ -301,7 +304,7 @@ func (s *UserNetworkService) allocateNetwork(existing []NetworkAllocation) (int,
 
 	subnetID := 0
 	for candidate := 1; candidate <= maxSubnetID; candidate++ {
-		if !usedSubnets[candidate] {
+		if !usedSubnets[candidate] && !s.interfaceService.LinkExists(TenantInterface(candidate)) {
 			subnetID = candidate
 			break
 		}
@@ -320,27 +323,23 @@ func tunnelAddress(subnetID int) string {
 
 // subnetIDFromAddress 从服务端隧道地址解析网段号（10.100.<id>.1/24 → id）。
 func subnetIDFromAddress(address string) int {
-	parts := strings.SplitN(strings.TrimSpace(address), "/", 2)
-	octets := strings.Split(parts[0], ".")
-	if len(octets) != 4 {
+	raw := strings.SplitN(strings.TrimSpace(address), "/", 2)[0]
+	ip, err := netip.ParseAddr(raw)
+	if err != nil || !ip.Is4() {
 		return 0
 	}
-
-	var id int
-	if _, err := fmt.Sscanf(octets[2], "%d", &id); err != nil {
+	octets := ip.As4()
+	if octets[0] != 10 || octets[1] != 100 {
 		return 0
 	}
+	id := int(octets[2])
 	if id < 1 || id > maxSubnetID {
 		return 0
 	}
 	return id
 }
 
-// tempLinkName 生成只在宿主命名空间短暂存在的临时接口名。
-//
-// 所有账号的隧道接口最终都叫 wg0。若直接在宿主命名空间以 wg0 创建，并发编排
-// 时必然撞名；先以唯一名创建、移入命名空间后再改名，即可规避这一竞态
-// （改名只触发 NETDEV_CHANGENAME，不影响接口归属的 creating_net）。
+// tempLinkName 仅用于回收旧版本的临时网卡。
 func tempLinkName(userUID string) string {
 	return "wgx-" + shortUID(userUID, 8)
 }

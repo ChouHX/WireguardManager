@@ -3,7 +3,8 @@
 export interface WireguardServerInfo {
   id: number;
   user_id: number;
-  namespace: string;
+  namespace: string; // Legacy migration identifier
+  network_mode: string;
   wg_interface: string;
   wg_port: number;
   wg_public_key: string;
@@ -13,6 +14,7 @@ export interface WireguardServerInfo {
 }
 
 export interface WireguardPeer {
+  client_allowed_ips: string;
   id: number;
   public_key: string;
   private_key: string;
@@ -88,7 +90,9 @@ export interface AdminUserTraffic {
   total_tx: number;
   wg_port: number;
   wg_address: string;
-  namespace: string;
+  wg_interface: string;
+  namespace: string; // Legacy migration identifier
+  network_mode: string;
   enabled: boolean;
   /** Mbps，0 表示不限速 */
   download_rate: number;
@@ -172,6 +176,7 @@ export interface AdminLivenessResponse {
 
 export interface AddPeerRequest {
   allowed_ips?: string;
+  client_allowed_ips?: string;
   persistent_keepalive?: number;
   comment?: string;
   enable_forwarding?: boolean;
@@ -182,6 +187,7 @@ export interface AddPeerRequest {
 
 export interface UpdatePeerRequest {
   allowed_ips?: string;
+  client_allowed_ips?: string;
   persistent_keepalive?: number;
   comment?: string;
   enable_forwarding?: boolean;

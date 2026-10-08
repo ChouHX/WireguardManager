@@ -19,15 +19,8 @@ services:
     image: ghcr.io/chouhx/wireguardmanager:${WM_IMAGE_TAG:-latest}
     container_name: cloud-app
     restart: unless-stopped
-    # 需要管理宿主机的 netns / iptables / WireGuard 接口，必须使用宿主网络与特权。
-    #
-    # 关于 privileged：这里不能用「cap_add 精确授权」来替代，实测确认过——
-    # 只给 SYS_ADMIN + NET_ADMIN + SYS_MODULE（即使再把 /var/run/netns 以 rshared
-    # 绑定挂载进去）时，ip netns add 依然失败：
-    #     mount --make-shared /var/run/netns failed: Permission denied
-    # 原因是 Docker 会给容器的挂载加上传播锁定，内核层面禁止改动挂载传播属性，
-    # 仅凭 CAP_SYS_ADMIN 无法绕过。下列 cap_add 在特权模式下确属冗余，
-    # 但保留它们对外无副作用，也便于阅读者了解本服务实际用到的能力范围。
+    # 在宿主网络创建租户独立网卡并管理 iptables / 策略路由。
+    # privileged 用于写入宿主网络栈的转发及接口 sysctl；运行时不再挂载或创建 netns。
     network_mode: host
     privileged: true
     cap_add:
@@ -40,7 +33,6 @@ services:
       # （容器内路径固定为 /root/data，与后端默认值一致）
       - ./data:/root/data
       - /lib/modules:/lib/modules:ro
-      - /var/run/netns:/var/run/netns:shared
     environment:
       # 只暴露端口这一项：默认 3000，需要时用环境变量覆盖
       - WM_SERVER_PORT=${WM_SERVER_PORT:-3000}

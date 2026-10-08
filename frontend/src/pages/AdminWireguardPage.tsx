@@ -398,7 +398,7 @@ export default function AdminWireguardPage() {
                 <Table.Tr>
                   <Table.Th>{t('wireguard.user')}</Table.Th>
                   <Table.Th>{t('wireguard.address')}</Table.Th>
-                  <Table.Th>{t('wireguard.namespace')}</Table.Th>
+                  <Table.Th>{t('wireguard.interface')}</Table.Th>
                   <Table.Th>{t('wireguard.peers')}</Table.Th>
                   <Table.Th>{t('wireguard.onlineDevices')}</Table.Th>
                   <Table.Th>{t('wireguard.transfer')}</Table.Th>
@@ -437,7 +437,7 @@ export default function AdminWireguardPage() {
                     </Table.Td>
                     <Table.Td>
                       <Text size="xs" c="dimmed" className="wm-mono">
-                        {row.namespace}
+                        {row.wg_interface}
                       </Text>
                     </Table.Td>
                     <Table.Td>
@@ -623,12 +623,12 @@ export default function AdminWireguardPage() {
                   <Table.Tr>
                     <Table.Th w={150}>
                       <Text size="xs" c="dimmed">
-                        {t('wireguard.namespace')}
+                        {t('wireguard.isolationMode')}
                       </Text>
                     </Table.Th>
                     <Table.Td>
-                      <Text size="sm" fw={600} className="wm-mono">
-                        {detailInfo?.namespace}
+                      <Text size="sm" fw={600}>
+                        {t('wireguard.multiInterface')}
                       </Text>
                     </Table.Td>
                   </Table.Tr>
@@ -820,7 +820,7 @@ export default function AdminWireguardPage() {
           />
           {selected ? (
             <Text size="xs" c="dimmed" className="wm-mono">
-              {selected.email} · {selected.namespace}
+              {selected.email} · {selected.wg_interface}
             </Text>
           ) : null}
           <Group justify="flex-end">
@@ -857,10 +857,10 @@ export default function AdminWireguardPage() {
               </Group>
               <Group gap={6}>
                 <Text size="sm" c="dimmed">
-                  {t('wireguard.namespace')}:
+                  {t('wireguard.interface')}:
                 </Text>
                 <Text size="sm" fw={600} className="wm-mono">
-                  {selected.namespace}
+                  {selected.wg_interface}
                 </Text>
               </Group>
               <Group gap={6}>

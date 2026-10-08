@@ -27,10 +27,6 @@ import (
 // shutdownTimeout 优雅关闭的最长等待时间
 const shutdownTimeout = 10 * time.Second
 
-// reconcileWaitTimeout 关闭时等待启动期收敛收尾的上限。
-// 大账号量场景下收敛可能较久，超过这个时间就放弃等待（收敛本身幂等，下次启动会继续）。
-const reconcileWaitTimeout = 20 * time.Second
-
 // maxRequestBodyBytes 请求体大小上限。
 // 所有接口都只接收 JSON，1 MiB 对任何合法请求都绰绰有余。
 const maxRequestBodyBytes = 1 << 20
@@ -54,6 +50,11 @@ func main() {
 	// 运行时配置：config.yaml 只作为初始默认值，之后以管理界面中的设置为准
 	if _, err := services.InitSettings(database.DB, settingsDefaults()); err != nil {
 		log.Fatalf("Failed to initialize settings: %v", err)
+	}
+
+	// Complete network migration before requests or probes can access interfaces.
+	if err := reconcile.Networks(); err != nil {
+		log.Fatalf("Tenant network reconciliation failed: %v", err)
 	}
 
 	// SIGINT/SIGTERM 触发优雅关闭
@@ -83,17 +84,6 @@ func main() {
 	} else {
 		log.Println("Liveness probing is disabled by configuration")
 	}
-
-	// 启动期收敛：把历史账号迁移到「原生跨命名空间」形态，并修复缺失的命名空间/接口。
-	// 放后台执行以免拖慢服务就绪；沿用数据库中已记录的端口与地址，客户端无需重新导入配置。
-	//
-	// 用 done 通道持有它，退出时才知道它是否已经收尾——否则可能停在「命名空间建了一半」
-	// 的位置就被进程终止（虽然下次启动会重建，但留下半成品没有意义）。
-	reconcileDone := make(chan struct{})
-	go func() {
-		defer close(reconcileDone)
-		reconcile.Networks()
-	}()
 
 	// Setup Gin
 	r := gin.New()
@@ -195,14 +185,6 @@ func main() {
 	}
 	monitoringService.Stop()
 	collector.Stop()
-
-	// 等启动期收敛收尾，避免它正处在「创建命名空间/移动接口」的中间步骤时进程退出。
-	// 收敛本身是幂等的，故超时后继续退出是安全的，只是留个记录便于排查。
-	select {
-	case <-reconcileDone:
-	case <-time.After(reconcileWaitTimeout):
-		log.Println("Startup reconcile is still running; proceeding with shutdown")
-	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()

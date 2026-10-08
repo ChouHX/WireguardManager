@@ -73,6 +73,7 @@ const LIVENESS_INTERVAL_MS = 2000;
 
 interface PeerFormValues {
   allowed_ips: string[];
+  client_allowed_ips: string[];
   persistent_keepalive: number;
   comment: string;
   enable_forwarding: boolean;
@@ -83,6 +84,7 @@ interface PeerFormValues {
 
 const EMPTY_FORM: PeerFormValues = {
   allowed_ips: [],
+  client_allowed_ips: [],
   persistent_keepalive: 10,
   comment: '',
   enable_forwarding: false,
@@ -306,7 +308,7 @@ export default function WireguardPage() {
   );
 
   const handleAdd = async () => {
-    const invalid = addValues.allowed_ips.some((ip) => !isValidIPOrCIDR(ip));
+    const invalid = [...addValues.allowed_ips, ...addValues.client_allowed_ips].some((ip) => !isValidIPOrCIDR(ip));
     if (invalid) {
       setAddIpError(t('wireguard.invalidIPFormat'));
       return;
@@ -316,6 +318,7 @@ export default function WireguardPage() {
     setError(null);
     try {
       const payload: AddPeerRequest = {
+        client_allowed_ips: addValues.client_allowed_ips.map(normalizeIPToCIDR).join(', '),
         allowed_ips: addValues.allowed_ips.length
           ? addValues.allowed_ips.map(normalizeIPToCIDR).join(', ')
           : undefined,
@@ -344,7 +347,7 @@ export default function WireguardPage() {
   const handleEdit = async () => {
     if (!selected) return;
 
-    const invalid = editValues.allowed_ips.some((ip) => !isValidIPOrCIDR(ip));
+    const invalid = [...editValues.allowed_ips, ...editValues.client_allowed_ips].some((ip) => !isValidIPOrCIDR(ip));
     if (invalid) {
       setEditIpError(t('wireguard.invalidIPFormat'));
       return;
@@ -354,9 +357,10 @@ export default function WireguardPage() {
     setError(null);
     try {
       const payload: UpdatePeerRequest = {
+        client_allowed_ips: editValues.client_allowed_ips.map(normalizeIPToCIDR).join(', '),
         allowed_ips: editValues.allowed_ips.length
           ? editValues.allowed_ips.map(normalizeIPToCIDR).join(', ')
-          : undefined,
+          : `${selected.peer_address}/32`,
         persistent_keepalive: editValues.persistent_keepalive,
         comment: editValues.comment,
         enable_forwarding: editValues.enable_forwarding,
@@ -430,6 +434,7 @@ export default function WireguardPage() {
     setSelected(peer);
     setEditIpError(null);
     setEditValues({
+      client_allowed_ips: peer.client_allowed_ips ? peer.client_allowed_ips.split(/,\s*/).filter(Boolean) : [],
       allowed_ips: peer.allowed_ips ? peer.allowed_ips.split(/,\s*/).filter(Boolean) : [],
       persistent_keepalive: peer.persistent_keepalive,
       comment: peer.comment ?? '',
@@ -482,6 +487,17 @@ export default function WireguardPage() {
             allowed_ips: next,
           })
         }
+        error={ipError}
+        disabled={disabled}
+        splitChars={[',', ' ']}
+      />
+
+      <TagsInput
+        label={t('wireguard.clientTargetIPs')}
+        description={t('wireguard.clientTargetIPsHelp')}
+        placeholder="192.168.0.100"
+        value={values.client_allowed_ips}
+        onChange={(next) => setValues({ ...values, client_allowed_ips: next })}
         error={ipError}
         disabled={disabled}
         splitChars={[',', ' ']}
