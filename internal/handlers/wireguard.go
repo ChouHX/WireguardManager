@@ -771,11 +771,14 @@ func UpdatePeer(c *gin.Context) {
 		response.ValidationError(c, err.Error())
 		return
 	}
+	// LAN edits never remove or replace the allocated tunnel address. Persist the
+	// same complete representation exposed by the API and applied to WireGuard.
+	requestedAllowedIPs = candidate.ServerAllowedIPs()
 
 	needWgUpdate := false
 	if requestedAllowedIPs != "" && requestedAllowedIPs != peer.AllowedIPs {
 		updates["allowed_ips"] = requestedAllowedIPs
-		needWgUpdate = true
+		needWgUpdate = requestedAllowedIPs != peer.ServerAllowedIPs()
 	}
 
 	if req.PersistentKeepalive != nil {
@@ -793,7 +796,7 @@ func UpdatePeer(c *gin.Context) {
 			return
 		}
 		if routesChanged {
-			if err := services.NewInterfaceService().ChangePeerRoutes(wgServer.WgInterface, requestedAllowedIPs, originalPeer.AllowedIPs); err != nil {
+			if err := services.NewInterfaceService().ChangePeerRoutes(wgServer.WgInterface, requestedAllowedIPs, originalPeer.ServerAllowedIPs()); err != nil {
 				log.Printf("Peer %d route rollback failed: %v", peer.ID, err)
 			}
 		}
@@ -867,7 +870,7 @@ func UpdatePeer(c *gin.Context) {
 			return
 		}
 
-		if err := interfaceService.ChangePeerRoutes(wgServer.WgInterface, peer.AllowedIPs, requestedAllowedIPs); err != nil {
+		if err := interfaceService.ChangePeerRoutes(wgServer.WgInterface, peer.ServerAllowedIPs(), requestedAllowedIPs); err != nil {
 			response.InternalError(c, "Failed to update tenant routes: "+err.Error())
 			return
 		}

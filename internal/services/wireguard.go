@@ -43,21 +43,7 @@ type WireguardConfig struct {
 // 全局代理（0.0.0.0/0、::/0）会被排除——那是客户端把流量送进隧道的行为，
 // 若写进服务端 allowed-ips，会导致所有流量都被转发给该设备。
 func ServerAllowedIPs(peer *models.WireguardPeer) string {
-	self := peer.PeerAddress + "/32"
-	parts := []string{self}
-
-	for _, cidr := range strings.Split(peer.AllowedIPs, ",") {
-		cidr = strings.TrimSpace(cidr)
-		if cidr == "" || cidr == self || cidr == peer.PeerAddress {
-			continue
-		}
-		if cidr == "0.0.0.0/0" || cidr == "::/0" {
-			continue
-		}
-		parts = append(parts, cidr)
-	}
-
-	return strings.Join(parts, ",")
+	return peer.ServerAllowedIPs()
 }
 
 // GenerateKeys 生成WireGuard密钥对

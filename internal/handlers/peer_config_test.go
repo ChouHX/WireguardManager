@@ -342,8 +342,8 @@ func TestClearDeviceLANRetainsTunnelAddress(t *testing.T) {
 	if saved.AllowedIPs != "10.100.2.3/32" || !saved.EnableForwarding {
 		t.Fatal("clearing LAN removed tunnel route or disabled forwarding")
 	}
-	if saved.ToResponse().AllowedIPs != "" {
-		t.Fatal("response must hide tunnel /32")
+	if saved.ToResponse().AllowedIPs != "10.100.2.3/32" || saved.ToResponse().DeviceLAN != "" {
+		t.Fatal("response must retain tunnel /32 separately from editable LAN")
 	}
 	log, err := os.ReadFile(logPath)
 	if err != nil {
@@ -353,5 +353,55 @@ func TestClearDeviceLANRetainsTunnelAddress(t *testing.T) {
 		if !strings.Contains(string(log), want) {
 			t.Fatalf("missing %s in %s", want, log)
 		}
+	}
+}
+
+func TestLANEditPreservesPeerAddressInStorageResponseAndWireGuard(t *testing.T) {
+	fixture := setupPeerConfigFixture(t, "", "10.100.2.1/24", "10.100.2.3")
+	if err := database.DB.Model(&fixture.server).Update("wg_interface", "wgm2").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Model(&fixture.peer).Update("allowed_ips", "10.100.2.3/32,192.168.0.0/24").Error; err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "commands")
+	t.Setenv("WGM_COMMAND_LOG", logPath)
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	for _, name := range []string{"wg", "ip"} {
+		script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$WGM_COMMAND_LOG\"\ncase \"$*\" in '-o link show dev wgm2') printf '1: wgm2: <UP>\\n';; esac\n"
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixture.context.Request = httptest.NewRequest("PATCH", "/api/wireguard/peers/1", strings.NewReader(`{"allowed_ips":"192.168.2.0/24","peer_address":"10.100.2.99"}`))
+	fixture.context.Request.Header.Set("Content-Type", "application/json")
+	UpdatePeer(fixture.context)
+	if fixture.recorder.Code != 200 {
+		t.Fatal(fixture.recorder.Body.String())
+	}
+	var saved models.WireguardPeer
+	if err := database.DB.First(&saved, fixture.peer.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	want := "10.100.2.3/32,192.168.2.0/24"
+	if saved.AllowedIPs != want || saved.PeerAddress != fixture.peer.PeerAddress || saved.PublicKey != fixture.peer.PublicKey || saved.PrivateKey != fixture.peer.PrivateKey {
+		t.Fatal("LAN edit changed identity or lost tunnel route")
+	}
+	var response struct {
+		Data models.WireguardPeerResponse `json:"data"`
+	}
+	if err := json.Unmarshal(fixture.recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Data.AllowedIPs != want || response.Data.DeviceLAN != "192.168.2.0/24" {
+		t.Fatal("API did not separate full routes and editable LAN")
+	}
+	log, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(log), "allowed-ips "+want) || strings.Contains(string(log), "route del 10.100.2.3/32") {
+		t.Fatal("LAN edit removed or overwrote the tunnel route")
 	}
 }

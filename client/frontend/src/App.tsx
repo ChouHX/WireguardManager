@@ -579,7 +579,7 @@ export default function App() {
                         {device.address}
                       </Badge>
                       <Text size="xs" c="dimmed">
-                        当前电脑使用此配置
+                        WireGuard IP · 云端分配
                       </Text>
                     </Group>
                   </div>
@@ -648,8 +648,8 @@ export default function App() {
                           disabled={locked}
                         />
                         <Text id="device-lans-help" size="xs" c="dimmed" mt={5}>
-                          本设备后面的真实内网；保存或连接时更新云端。仅访问远端可留空，不要填写
-                          WireGuard 地址。
+                          本设备后面的真实内网；保存或连接时同步，保留上方 WireGuard
+                          IP。仅访问远端可留空。
                         </Text>
                         <Group justify="space-between" mt={4}>
                           <Text size="xs" c="dimmed">

@@ -71,6 +71,17 @@ const POLL_INTERVAL_MS = 3000;
 /** 在线状态刷新间隔：服务端每秒探测，前端 2 秒取一次结论 */
 const LIVENESS_INTERVAL_MS = 2000;
 
+// device_lan is deliberately separate from the immutable WireGuard address.
+// Legacy servers returned editable LANs directly in allowed_ips.
+function deviceLAN(peer: WireguardPeer): string {
+  return (
+    peer.device_lan ??
+    peer.allowed_ips.split(',').map((ip) => ip.trim())
+      .filter((ip) => ip && ip !== peer.peer_address && ip !== `${peer.peer_address}/32`)
+      .join(', ')
+  );
+}
+
 interface PeerFormValues {
   allowed_ips: string[];
   persistent_keepalive: number;
@@ -422,7 +433,7 @@ export default function WireguardPage() {
     setSelected(peer);
     setEditIpError(null);
     setEditValues({
-      allowed_ips: peer.allowed_ips ? peer.allowed_ips.split(/,\s*/).filter(Boolean) : [],
+      allowed_ips: deviceLAN(peer).split(/,\s*/).filter(Boolean),
       persistent_keepalive: peer.persistent_keepalive,
       comment: peer.comment ?? '',
       use_preshared_key: peer.use_preshared_key,
@@ -707,7 +718,7 @@ export default function WireguardPage() {
                       </Table.Td>
                       <Table.Td>
                         <Text size="xs" c="dimmed" className="wm-mono">
-                          {peer.allowed_ips || t('wireguard.noAllowedIPs')}
+                          {deviceLAN(peer) || t('wireguard.noAllowedIPs')}
                         </Text>
                       </Table.Td>
                       <Table.Td>

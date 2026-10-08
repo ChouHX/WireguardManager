@@ -18,7 +18,9 @@ export interface WireguardPeer {
   public_key: string;
   private_key: string;
   peer_address: string;
+  /** 服务端完整路由，包含设备自身 /32。局域网编辑使用 device_lan。 */
   allowed_ips: string;
+  device_lan?: string;
   endpoint?: string;
   persistent_keepalive: number;
   comment?: string;

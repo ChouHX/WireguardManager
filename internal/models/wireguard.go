@@ -68,7 +68,7 @@ type WireguardPeer struct {
 	PrivateKey          string          `json:"-" gorm:"not null"`            // peer私钥，不返回给客户端
 	PresharedKey        string          `json:"-" gorm:""`                    // 不返回给客户端
 	PeerAddress         string          `json:"peer_address" gorm:"not null"` // peer在WireGuard网段中的IP地址
-	AllowedIPs          string          `json:"allowed_ips" gorm:"not null"`  // 设备局域网及兼容旧版的隧道地址
+	AllowedIPs          string          `json:"allowed_ips" gorm:"not null"`  // 设备自身 /32 与设备局域网
 	Endpoint            string          `json:"endpoint" gorm:""`
 	PersistentKeepalive int             `json:"persistent_keepalive" gorm:"default:0"`
 	Comment             string          `json:"comment" gorm:""` // 备注，如设备名称
@@ -85,7 +85,8 @@ type WireguardPeerResponse struct {
 	PublicKey           string `json:"public_key"`
 	PrivateKey          string `json:"private_key"`  // 返回私钥供客户端配置使用
 	PeerAddress         string `json:"peer_address"` // peer的WireGuard IP地址
-	AllowedIPs          string `json:"allowed_ips"`
+	AllowedIPs          string `json:"allowed_ips"`  // 完整服务端 cryptokey routes，始终包含 peer 自身 /32
+	DeviceLAN           string `json:"device_lan"`   // 单独用于局域网展示与编辑
 	Endpoint            string `json:"endpoint,omitempty"`
 	PersistentKeepalive int    `json:"persistent_keepalive"`
 	Comment             string `json:"comment,omitempty"`
@@ -170,7 +171,8 @@ func (p *WireguardPeer) ToResponse() WireguardPeerResponse {
 		PublicKey:           p.PublicKey,
 		PrivateKey:          p.PrivateKey,
 		PeerAddress:         p.PeerAddress,
-		AllowedIPs:          p.DeviceLANs(),
+		AllowedIPs:          p.ServerAllowedIPs(),
+		DeviceLAN:           p.DeviceLANs(),
 		Endpoint:            p.Endpoint,
 		PersistentKeepalive: p.PersistentKeepalive,
 		Comment:             p.Comment,
@@ -181,6 +183,9 @@ func (p *WireguardPeer) ToResponse() WireguardPeerResponse {
 
 // BeforeCreate Hook
 func (p *WireguardPeer) BeforeCreate(tx *gorm.DB) error {
+	if p.PeerAddress != "" {
+		p.AllowedIPs = p.ServerAllowedIPs()
+	}
 	p.EnableForwarding = true
 	p.ClientAllowedIPs = ""
 	p.ForwardInterface = ""
@@ -217,4 +222,24 @@ func (p *WireguardPeer) DeviceLANs() string {
 		}
 	}
 	return strings.Join(result, ", ")
+}
+
+// ServerAllowedIPs preserves the immutable tunnel address alongside LAN routes.
+// Both API responses and the WireGuard backend use this same representation.
+func (p *WireguardPeer) ServerAllowedIPs() string {
+	self := p.PeerAddress + "/32"
+	parts := []string{self}
+
+	for _, cidr := range strings.Split(p.AllowedIPs, ",") {
+		cidr = strings.TrimSpace(cidr)
+		if cidr == "" || cidr == self || cidr == p.PeerAddress {
+			continue
+		}
+		if cidr == "0.0.0.0/0" || cidr == "::/0" {
+			continue
+		}
+		parts = append(parts, cidr)
+	}
+
+	return strings.Join(parts, ",")
 }

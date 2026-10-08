@@ -103,6 +103,23 @@ func TestRedirectDoesNotForwardCredentials(t *testing.T) {
 	}
 }
 
+func TestDeviceLANFieldDoesNotIncludeTunnelAddress(t *testing.T) {
+	for _, tc := range []struct{ name, raw, want string }{
+		{"current", `{"peer_address":"10.100.1.2","allowed_ips":"10.100.1.2/32,192.168.1.0/24","device_lan":"192.168.1.0/24"}`, "192.168.1.0/24"},
+		{"cleared", `{"peer_address":"10.100.1.2","allowed_ips":"10.100.1.2/32","device_lan":""}`, ""},
+		{"legacy LAN", `{"peer_address":"10.100.1.2","allowed_ips":"192.168.1.0/24"}`, "192.168.1.0/24"},
+		{"legacy full routes", `{"peer_address":"10.100.1.2","allowed_ips":"10.100.1.2/32,192.168.1.0/24"}`, "192.168.1.0/24"},
+		{"legacy tunnel only", `{"peer_address":"10.100.1.2","allowed_ips":"10.100.1.2/32"}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var dev Device
+			if err := json.Unmarshal([]byte(tc.raw), &dev); err != nil || dev.LANs != tc.want {
+				t.Fatalf("tunnel leaked into LAN or LAN lost: %q, %v", dev.LANs, err)
+			}
+		})
+	}
+}
+
 func TestUnauthorizedAndInvalidURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(401)

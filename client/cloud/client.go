@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -40,8 +41,45 @@ type Device struct {
 	ID      uint   `json:"id"`
 	Name    string `json:"comment"`
 	Address string `json:"peer_address"`
-	LANs    string `json:"allowed_ips"`
+	LANs    string `json:"device_lan"`
 }
+
+// Current servers expose editable LANs separately from full AllowedIPs. Older
+// servers returned only LANs; also accept full legacy lists without putting the
+// assigned tunnel address into either the LAN editor or automatic access targets.
+func (d *Device) UnmarshalJSON(raw []byte) error {
+	var wire struct {
+		ID         uint    `json:"id"`
+		Name       string  `json:"comment"`
+		Address    string  `json:"peer_address"`
+		AllowedIPs string  `json:"allowed_ips"`
+		LANs       *string `json:"device_lan"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return err
+	}
+	*d = Device{ID: wire.ID, Name: wire.Name, Address: wire.Address}
+	if wire.LANs != nil {
+		d.LANs = *wire.LANs
+		return nil
+	}
+	self, _ := netip.ParseAddr(wire.Address)
+	var lans []string
+	for _, part := range strings.Split(wire.AllowedIPs, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" || part == wire.Address {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(part)
+		if err == nil && prefix.Contains(self) {
+			continue
+		}
+		lans = append(lans, part)
+	}
+	d.LANs = strings.Join(lans, ", ")
+	return nil
+}
+
 type LoginResult struct {
 	Token string `json:"token"`
 	User  User   `json:"user"`

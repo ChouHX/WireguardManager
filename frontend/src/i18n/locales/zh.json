@@ -167,7 +167,7 @@
     "publicKey": "公钥",
     "peerAddress": "Peer IP",
     "allowedIPs": "设备局域网",
-    "allowedIPsHelp": "填写该设备所在的局域网（如 192.168.0.0/24），无局域网可留空。转发默认启用；网卡和访问目标在客户端选择。",
+    "allowedIPsHelp": "填写该设备所在的真实局域网（如 192.168.0.0/24），无局域网可留空。WireGuard IP 始终保留，无需填写；客户端自动探测网卡并启用转发。",
     "noAllowedIPs": "无下挂网段",
     "invalidIPFormat": "IP地址或CIDR格式不正确",
     "endpoint": "端点",

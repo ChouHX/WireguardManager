@@ -167,7 +167,7 @@
     "publicKey": "Public Key",
     "peerAddress": "Peer IP",
     "allowedIPs": "Device LAN",
-    "allowedIPsHelp": "LANs reachable through this device (e.g. 192.168.0.0/24). Leave empty if none. Forwarding is automatic; select the adapter and targets in the client.",
+    "allowedIPsHelp": "Physical LANs behind this device (e.g. 192.168.0.0/24). Leave empty if none. The WireGuard IP is always retained; do not enter it here. The client detects adapters and enables forwarding automatically.",
     "noAllowedIPs": "No downstream LAN",
     "invalidIPFormat": "Invalid IP address or CIDR format",
     "endpoint": "Endpoint",
