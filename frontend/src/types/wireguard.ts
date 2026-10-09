@@ -14,6 +14,7 @@ export interface WireguardServerInfo {
 }
 
 export interface WireguardPeer {
+  device_role?: 'gateway' | 'access';
   id: number;
   public_key: string;
   private_key: string;

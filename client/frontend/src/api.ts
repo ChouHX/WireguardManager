@@ -9,8 +9,6 @@ export interface Device {
   name: string;
   address: string;
   lans: string;
-  targets: string;
-  autoTargets: string;
 }
 export interface Desktop {
   serverURL: string;
@@ -65,8 +63,9 @@ interface API {
   Refresh(): Promise<Desktop>;
   Snapshot(): Promise<Desktop>;
   DetectLANs(): Promise<Detection>;
-  SaveDevice(id: string, lans: string, targets: string): Promise<Desktop>;
-  Connect(id: string, lans: string, targets: string): Promise<Desktop>;
+  SaveDevice(id: string, targets: string): Promise<Desktop>;
+  Connect(id: string, targets: string): Promise<Desktop>;
+  DownloadGatewaySetup(id: string): Promise<string>;
   Disconnect(): Promise<void>;
   Status(): Promise<Status>;
   Quit(): Promise<void>;

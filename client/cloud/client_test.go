@@ -170,7 +170,7 @@ func TestInterruptedMutationIsNotReplayedOrExposed(t *testing.T) {
 	if !errors.As(err, &detail) || !errors.Is(err, io.ErrUnexpectedEOF) || detail.Stage != "read" || detail.Attempts != 1 {
 		t.Fatal("lost network failure detail", err)
 	}
-	if calls.Load() != 1 || !strings.Contains(err.Error(), "设置可能已保存") || !strings.Contains(err.Error(), "保存设备局域网") {
+	if calls.Load() != 1 || !strings.Contains(err.Error(), "设置可能已保存") || !strings.Contains(err.Error(), "保存网关转发目标") {
 		t.Fatal("mutation replayed or ambiguous save not explained", err)
 	}
 	if strings.Contains(err.Error(), "private-config") {
@@ -212,5 +212,60 @@ func TestTruncatedUnauthorizedResponseStillExpiresLogin(t *testing.T) {
 	_, err := c.Devices(context.Background())
 	if !IsUnauthorized(err) || calls.Load() != 1 {
 		t.Fatal("unauthorized response retried or hidden", err)
+	}
+}
+
+func TestAccessRegistrationAndGatewayBootstrapAPI(t *testing.T) {
+	for _, mode := range []string{"ok", "wrong-identity", "old-server"} {
+		t.Run(mode, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "Bearer access-test" {
+					t.Error("missing auth")
+				}
+				if r.URL.Path == "/api/wireguard/peers/2/config" {
+					if r.URL.Query().Get("format") != "gateway" {
+						t.Error("missing gateway export format")
+					}
+					w.Write([]byte(`{"success":true,"data":{"setup":"#!/bin/sh\n# gateway enrollment"}}`))
+					return
+				}
+				if r.Method != "POST" || r.URL.Path != "/api/wireguard/access" {
+					t.Error("wrong access endpoint")
+				}
+				var input map[string]string
+				if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+					t.Error(err)
+				}
+				if !reflect.DeepEqual(input, map[string]string{"public_key": "desktop-public", "name": "Laptop"}) {
+					t.Error("registration sent unexpected fields")
+				}
+				if mode == "old-server" {
+					w.WriteHeader(404)
+					return
+				}
+				key := "desktop-public"
+				if mode == "wrong-identity" {
+					key = "other-public"
+				}
+				json.NewEncoder(w).Encode(map[string]any{"success": true, "data": map[string]any{"peer": map[string]any{"id": 3, "device_role": "access", "public_key": key, "peer_address": "10.100.1.3"}, "config": "[Interface]\nAddress = 10.100.1.3/32"}})
+			}))
+			defer server.Close()
+			c, _ := New(server.URL)
+			c.SetToken("access-test")
+			access, err := c.Access(context.Background(), "desktop-public", "Laptop")
+			if mode == "ok" {
+				if err != nil || access.Peer.Role != "access" || access.Peer.ID != 3 {
+					t.Fatal("registration failed", err)
+				}
+				setup, err := c.GatewaySetup(context.Background(), 2)
+				if err != nil || !strings.HasPrefix(setup, "#!/bin/sh") {
+					t.Fatal("setup export failed", err)
+				}
+			} else if err == nil {
+				t.Fatal("incompatible registration accepted")
+			} else if mode == "old-server" && !strings.Contains(err.Error(), "更新服务端") {
+				t.Fatal("missing upgrade instruction")
+			}
+		})
 	}
 }

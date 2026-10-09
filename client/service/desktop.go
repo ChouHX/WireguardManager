@@ -2,9 +2,14 @@ package service
 
 import (
 	"context"
+	"crypto/ecdh"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/netip"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,17 +23,16 @@ type CloudAPI interface {
 	Login(context.Context, string, string) (cloud.LoginResult, error)
 	Me(context.Context) (cloud.User, error)
 	Devices(context.Context) ([]cloud.Device, error)
-	Config(context.Context, uint) (string, error)
+	Access(context.Context, string, string) (cloud.AccessConfig, error)
+	GatewaySetup(context.Context, uint) (string, error)
 	SetLANs(context.Context, uint, string) (cloud.Device, error)
 }
 type DeviceView struct {
-	PublicKey   string `json:"publicKey"`
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Address     string `json:"address"`
-	LANs        string `json:"lans"`
-	Targets     string `json:"targets"`
-	AutoTargets string `json:"autoTargets"`
+	PublicKey string `json:"publicKey"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Address   string `json:"address"`
+	LANs      string `json:"lans"`
 }
 type DesktopView struct {
 	ServerURL string       `json:"serverURL"`
@@ -59,35 +63,22 @@ func NewDesktop(api CloudAPI, backend Backend, store CloudStore) (*Desktop, erro
 	}
 	return &Desktop{api: api, backend: backend, manager: NewManager(backend), store: store, data: data}, nil
 }
-func (d *Desktop) targetKey(id uint) string {
-	return fmt.Sprintf("%x/%d/%d", sha256.Sum256([]byte(d.api.BaseURL())), d.user.ID, id)
-}
 func (d *Desktop) view(message string) DesktopView {
 	view := DesktopView{ServerURL: d.api.BaseURL(), User: d.user, Devices: []DeviceView{}, Message: message}
 	if d.user == nil {
 		return view
 	}
 	for _, dev := range d.devices {
+		if dev.Role == "access" {
+			continue
+		}
 		name := dev.Name
 		if name == "" {
 			name = "设备 " + strconv.Itoa(int(dev.ID))
 		}
-		view.Devices = append(view.Devices, DeviceView{PublicKey: dev.PublicKey, ID: strconv.Itoa(int(dev.ID)), Name: name, Address: dev.Address, LANs: dev.LANs, Targets: d.data.Targets[d.targetKey(dev.ID)], AutoTargets: d.autoTargets(dev.ID)})
+		view.Devices = append(view.Devices, DeviceView{PublicKey: dev.PublicKey, ID: strconv.Itoa(int(dev.ID)), Name: name, Address: dev.Address, LANs: dev.LANs})
 	}
 	return view
-}
-func (d *Desktop) autoTargets(id uint) string {
-	var raw []string
-	for _, dev := range d.devices {
-		if dev.ID != id && dev.LANs != "" {
-			raw = append(raw, dev.LANs)
-		}
-	}
-	p, err := ParsePrefixes(strings.Join(raw, ","))
-	if err != nil {
-		return ""
-	}
-	return JoinPrefixes(p)
 }
 func (d *Desktop) Bootstrap(ctx context.Context) (DesktopView, error) {
 	d.mu.Lock()
@@ -200,193 +191,171 @@ func (d *Desktop) find(id string) (cloud.Device, error) {
 		return cloud.Device{}, errors.New("请先登录")
 	}
 	for _, dev := range d.devices {
-		if strconv.Itoa(int(dev.ID)) == id {
+		if dev.Role != "access" && strconv.Itoa(int(dev.ID)) == id {
 			return dev, nil
 		}
 	}
 	return cloud.Device{}, errors.New("所选设备已不存在，请刷新列表")
 }
-func (d *Desktop) prepare(ctx context.Context, id, lans, targets string) (Profile, cloud.Device, error) {
-	dev, err := d.find(id)
-	if err != nil {
-		return Profile{}, dev, err
+
+// One local identity per account and deployment, persisted before registration.
+func (d *Desktop) accessKey() (string, string, error) {
+	scope := fmt.Sprintf("%x/%d", sha256.Sum256([]byte(d.api.BaseURL())), d.user.ID)
+	encoded := d.data.AccessKeys[scope]
+	if encoded == "" {
+		key, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			return "", "", err
+		}
+		encoded = base64.StdEncoding.EncodeToString(key.Bytes())
+		d.data.AccessKeys[scope] = encoded
+		if err := d.store.Save(d.data); err != nil {
+			delete(d.data.AccessKeys, scope)
+			return "", "", err
+		}
 	}
-	raw, err := d.api.Config(ctx, dev.ID)
+	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return Profile{}, dev, d.apiError(err)
+		return "", "", errors.New("本机访问密钥损坏")
 	}
-	return d.prepareConfig(raw, dev, lans, targets)
+	key, err := ecdh.X25519().NewPrivateKey(raw)
+	clear(raw)
+	if err != nil {
+		return "", "", errors.New("本机访问密钥损坏")
+	}
+	return encoded, base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()), nil
 }
-func (d *Desktop) prepareConfig(raw string, dev cloud.Device, lans, targets string) (Profile, cloud.Device, error) {
+func gatewayTargets(raw string) (string, error) {
+	prefixes, err := ParsePrefixes(raw)
+	if err != nil {
+		return "", err
+	}
+	reserved := netip.MustParsePrefix("10.100.0.0/16")
+	for _, p := range prefixes {
+		if p.Overlaps(reserved) {
+			return "", fmt.Errorf("转发目标 %s 不能覆盖 WireGuard 隧道网段", p)
+		}
+	}
+	return JoinPrefixes(prefixes), nil
+}
+func (d *Desktop) accessProfile(ctx context.Context, dev cloud.Device, targets string) (Profile, error) {
+	key, public, err := d.accessKey()
+	if err != nil {
+		return Profile{}, err
+	}
+	name, _ := os.Hostname()
+	access, err := d.api.Access(ctx, public, name)
+	if err != nil {
+		return Profile{}, d.apiError(err)
+	}
+	raw := strings.Replace(access.Config, "[Interface]", "[Interface]\nPrivateKey = "+key, 1)
 	cfg, err := ParseConfig(raw)
 	if err != nil {
-		return Profile{}, dev, err
+		return Profile{}, err
 	}
-	dev.LANs = JoinPrefixes(cfg.DeviceLANs)
-	for i := range d.devices {
-		if d.devices[i].ID == dev.ID {
-			d.devices[i].LANs = dev.LANs
-		}
+	if cfg.Address.Addr().String() != access.Peer.Address || len(cfg.DeviceLANs) != 0 {
+		return Profile{}, errors.New("本机访问配置与服务端身份不一致")
 	}
-	cfg.DeviceLANs, err = ParsePrefixes(lans)
-	if err != nil {
-		return Profile{}, dev, err
-	}
-	for _, lan := range cfg.DeviceLANs {
-		for _, vpn := range cfg.BaseRoutes {
-			if lan.Overlaps(vpn) {
-				return Profile{}, dev, fmt.Errorf("填写的局域网 %s 与 WireGuard 虚拟网段 %s 重叠。这里应填写本机连接的真实现场局域网；仅访问远端时请留空", lan, vpn)
-			}
-		}
-	}
-	extra, err := ParsePrefixes(targets)
-	if err != nil {
-		return Profile{}, dev, err
-	}
-	combined := JoinPrefixes(extra)
-	if len(extra) == 0 {
-		combined = d.autoTargets(dev.ID)
-	}
-	all, err := ParsePrefixes(combined)
-	if err != nil {
-		return Profile{}, dev, err
-	}
-	p := Profile{ID: strconv.FormatUint(uint64(dev.ID), 10), Name: dev.Name, Config: cfg, Targets: JoinPrefixes(all)}
+	p := Profile{ID: strconv.Itoa(int(dev.ID)), Name: dev.Name, Config: cfg, Targets: targets, AccessOnly: true}
 	if _, err = p.Routes(); err != nil {
-		return p, dev, err
+		return p, err
 	}
 	adapters, err := d.backend.Adapters()
 	if err != nil {
-		return p, dev, err
+		return p, err
 	}
 	if err = ValidateLocalRouteTargets(p, adapters); err != nil {
-		return p, dev, err
+		return p, err
 	}
-	if _, err = DetectLANAdapters(cfg.DeviceLANs, adapters); err != nil {
-		return p, dev, err
-	}
-	return p, dev, nil
+	return p, nil
 }
-func (d *Desktop) save(ctx context.Context, p Profile, dev cloud.Device, targets string) (bool, error) {
-	lans := JoinPrefixes(p.Config.DeviceLANs)
-	changed := lans != dev.LANs
-	if changed {
-		updated, err := d.api.SetLANs(ctx, dev.ID, lans)
-		if err != nil {
-			return false, d.apiError(err)
-		}
-		for i := range d.devices {
-			if d.devices[i].ID == dev.ID {
-				d.devices[i] = updated
-			}
+func (d *Desktop) saveGateway(ctx context.Context, dev cloud.Device, targets string) error {
+	updated, err := d.api.SetLANs(ctx, dev.ID, targets)
+	if err != nil {
+		return d.apiError(err)
+	}
+	if updated.ID != dev.ID || updated.PublicKey != dev.PublicKey || updated.Address != dev.Address {
+		return errors.New("服务端返回了不同的网关身份，请刷新检查")
+	}
+	for i := range d.devices {
+		if d.devices[i].ID == dev.ID {
+			d.devices[i] = updated
 		}
 	}
-	extra, _ := ParsePrefixes(targets)
-	key := d.targetKey(dev.ID)
-	old, existed := d.data.Targets[key]
-	normalized := JoinPrefixes(extra)
-	if old == normalized {
-		return changed, nil
-	}
-	d.data.Targets[key] = normalized
-	if err := d.store.Save(d.data); err != nil {
-		if existed {
-			d.data.Targets[key] = old
-		} else {
-			delete(d.data.Targets, key)
-		}
-		return changed, fmt.Errorf("本机访问目标保存失败（云端局域网可能已更新）：%w", err)
-	}
-	return changed, nil
+	return nil
 }
-func (d *Desktop) SaveDevice(ctx context.Context, id, lans, targets string) (DesktopView, error) {
+
+// Saving configures the remote gateway's cloud routes, never the Windows LAN.
+func (d *Desktop) SaveDevice(ctx context.Context, id, targets string) (DesktopView, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	dev, err := d.find(id)
+	if err != nil {
+		return d.view(""), err
+	}
+	targets, err = gatewayTargets(targets)
+	if err != nil {
+		return d.view(""), err
+	}
+	if err = d.saveGateway(ctx, dev, targets); err != nil {
+		return d.view(""), err
+	}
 	if d.manager.Active() == id {
-		return d.view(""), errors.New("请先断开当前设备再修改下挂地址")
+		// Old local routes must not stay active after their cloud assignment changed.
+		if err = d.manager.Disconnect(); err != nil {
+			return d.view(""), fmt.Errorf("云端转发已更新，本机旧路由清理失败：%w", err)
+		}
+		p, err := d.accessProfile(ctx, dev, targets)
+		if err == nil {
+			err = d.manager.Connect(ctx, p)
+		}
+		if err != nil {
+			return d.view(""), fmt.Errorf("云端转发已更新，本机访问未恢复：%w", err)
+		}
 	}
-	p, dev, err := d.prepare(ctx, id, lans, targets)
-	if err != nil {
-		return d.view(""), err
-	}
-	changed, err := d.save(ctx, p, dev, targets)
-	if err != nil {
-		return d.view(""), err
-	}
-	if changed {
-		return d.view("设备局域网已同步到云端，本机访问目标已保存"), nil
-	}
-	return d.view("本机访问目标已保存，云端局域网未修改"), nil
+	return d.view("转发目标已保存到云端，网关身份与配置保持不变"), nil
 }
-func (d *Desktop) Connect(ctx context.Context, id, lans, targets string) (DesktopView, error) {
+func (d *Desktop) Connect(ctx context.Context, id, targets string) (DesktopView, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.user == nil {
 		return d.view(""), errors.New("请先登录")
 	}
+	targets, err := gatewayTargets(targets)
+	if err != nil {
+		return d.view(""), err
+	}
+	if _, err = d.refresh(ctx); err != nil {
+		return d.view(""), err
+	}
 	dev, err := d.find(id)
 	if err != nil {
 		return d.view(""), err
 	}
-	// Validate syntax before any remote request. Route ownership is checked against
-	// fresh server data below; private configurations are never cached offline.
-	if _, err = ParsePrefixes(lans); err != nil {
-		return d.view(""), err
-	}
-	if _, err = ParsePrefixes(targets); err != nil {
-		return d.view(""), err
-	}
-	// These authenticated reads are independent. Both complete before handling a
-	// possible 401, so clearing the shared API token cannot race an active request.
-	var raw string
-	var devices []cloud.Device
-	var configErr, listErr error
-	var reads sync.WaitGroup
-	reads.Add(2)
-	go func() { defer reads.Done(); raw, configErr = d.api.Config(ctx, dev.ID) }()
-	go func() { defer reads.Done(); devices, listErr = d.api.Devices(ctx) }()
-	reads.Wait()
-	if cloud.IsUnauthorized(configErr) {
-		return d.view(""), d.apiError(configErr)
-	}
-	if listErr != nil {
-		return d.view(""), d.apiError(listErr)
-	}
-	if configErr != nil {
-		return d.view(""), d.apiError(configErr)
-	}
-	d.devices = devices
-	dev, err = d.find(id)
+	p, err := d.accessProfile(ctx, dev, targets)
 	if err != nil {
 		return d.view(""), err
 	}
-	p, dev, err := d.prepareConfig(raw, dev, lans, targets)
-	if err != nil {
+	if err = d.saveGateway(ctx, dev, targets); err != nil {
 		return d.view(""), err
-	}
-	changed, err := d.save(ctx, p, dev, targets)
-	if err != nil {
-		return d.view(""), err
-	}
-	// Only a cloud LAN mutation invalidates the configuration just fetched.
-	if changed {
-		raw, err = d.api.Config(ctx, dev.ID)
-		if err != nil {
-			return d.view(""), d.apiError(err)
-		}
-		updated, err := ParseConfig(raw)
-		if err != nil {
-			return d.view(""), err
-		}
-		if JoinPrefixes(updated.DeviceLANs) != JoinPrefixes(p.Config.DeviceLANs) {
-			return d.view(""), errors.New("云端局域网配置已发生变化，请刷新设备后重试")
-		}
-		p.Config = updated
 	}
 	if err = d.manager.Connect(ctx, p); err != nil {
 		return d.view(""), err
 	}
-	return d.view("已启动连接，正在等待云端握手"), nil
+	return d.view("已使用本机独立身份连接，正在等待云端握手"), nil
+}
+func (d *Desktop) GatewaySetup(ctx context.Context, id string) (string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	dev, err := d.find(id)
+	if err != nil {
+		return "", err
+	}
+	setup, err := d.api.GatewaySetup(ctx, dev.ID)
+	if err != nil {
+		return "", d.apiError(err)
+	}
+	return setup, nil
 }
 func (d *Desktop) Disconnect() error {
 	d.mu.Lock()

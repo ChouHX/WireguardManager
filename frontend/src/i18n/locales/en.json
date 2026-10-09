@@ -150,6 +150,7 @@
     "maxLength": "Must be at most {max} characters"
   },
   "wireguard": {
+    "accessTerminal": "Access terminal",
     "title": "WireGuard",
     "adminTitle": "WireGuard Admin",
     "myPeers": "My Peers",

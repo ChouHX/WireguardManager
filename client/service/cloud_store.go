@@ -13,9 +13,10 @@ type CloudLogin struct {
 	User      cloud.User `json:"user"`
 }
 type CloudData struct {
-	Version int               `json:"version"`
-	Login   *CloudLogin       `json:"login,omitempty"`
-	Targets map[string]string `json:"targets"`
+	Version    int               `json:"version"`
+	AccessKeys map[string]string `json:"accessKeys,omitempty"`
+	Login      *CloudLogin       `json:"login,omitempty"`
+	Targets    map[string]string `json:"targets"`
 }
 type CloudStore struct {
 	Path   string
@@ -23,7 +24,7 @@ type CloudStore struct {
 }
 
 func (s CloudStore) Load() (CloudData, error) {
-	data := CloudData{Version: 1, Targets: map[string]string{}}
+	data := CloudData{Version: 1, Targets: map[string]string{}, AccessKeys: map[string]string{}}
 	raw, err := os.ReadFile(s.Path)
 	if errors.Is(err, os.ErrNotExist) {
 		return data, nil
@@ -41,6 +42,9 @@ func (s CloudStore) Load() (CloudData, error) {
 	defer clear(plain)
 	if err = json.Unmarshal(plain, &data); err != nil || data.Version != 1 {
 		return data, errors.New("本地登录数据格式无效")
+	}
+	if data.AccessKeys == nil {
+		data.AccessKeys = map[string]string{}
 	}
 	if data.Targets == nil {
 		data.Targets = map[string]string{}

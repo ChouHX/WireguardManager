@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"cloud-platform/gateway"
 	"cloud-platform/internal/config"
 	"cloud-platform/internal/database"
 	"cloud-platform/internal/models"
@@ -752,6 +753,11 @@ func UpdatePeer(c *gin.Context) {
 		return
 	}
 
+	if peer.DeviceRole == "access" && (req.AllowedIPs != nil || req.UsePresharedKey != nil) {
+		response.BadRequest(c, "访问终端不能声明网关转发网段或更换预共享密钥", nil)
+		return
+	}
+
 	updates := map[string]interface{}{"enable_forwarding": true}
 	requestedAllowedIPs := peer.AllowedIPs
 	if req.AllowedIPs != nil {
@@ -1205,6 +1211,11 @@ func GetPeerConfig(c *gin.Context) {
 		return
 	}
 
+	if peer.DeviceRole == "access" {
+		response.BadRequest(c, "访问终端的私钥仅保存在对应电脑，请使用桌面客户端连接", nil)
+		return
+	}
+
 	// 客户端 DNS 与服务器地址取自运行时设置（config.yaml 仅作为初始默认值）
 	runtimeSettings := services.GetSettings()
 	dns := strings.TrimSpace(runtimeSettings.String(services.SettingNetworkDNS, config.AppConfig.Network.DNS))
@@ -1257,6 +1268,11 @@ PersistentKeepalive = %d
 		allowedIPs,
 		peer.PersistentKeepalive,
 	)
+
+	if c.Query("format") == "gateway" {
+		response.Success(c, "Gateway setup exported", map[string]string{"setup": gateway.SetupScript(configContent)})
+		return
+	}
 
 	// 返回JSON格式的配置文本
 	response.Success(c, "Config retrieved successfully", map[string]string{

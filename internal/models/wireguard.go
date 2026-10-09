@@ -60,6 +60,7 @@ func (s *WireguardServer) ToResponse() WireguardServerResponse {
 
 // WireguardPeer WireGuard peer信息
 type WireguardPeer struct {
+	DeviceRole          string          `json:"device_role" gorm:"default:'gateway'"`
 	ClientAllowedIPs    string          `json:"-" gorm:"default:''"`
 	ID                  uint            `json:"id" gorm:"primaryKey"`
 	ServerID            uint            `json:"server_id" gorm:"index;not null"`
@@ -81,6 +82,7 @@ type WireguardPeer struct {
 
 // WireguardPeerResponse Peer响应结构
 type WireguardPeerResponse struct {
+	DeviceRole          string `json:"device_role"`
 	ID                  uint   `json:"id"`
 	PublicKey           string `json:"public_key"`
 	PrivateKey          string `json:"private_key"`  // 返回私钥供客户端配置使用
@@ -167,6 +169,7 @@ type AdminUserTraffic struct {
 // ToResponse 转换为响应格式
 func (p *WireguardPeer) ToResponse() WireguardPeerResponse {
 	return WireguardPeerResponse{
+		DeviceRole:          p.DeviceRole,
 		ID:                  p.ID,
 		PublicKey:           p.PublicKey,
 		PrivateKey:          p.PrivateKey,

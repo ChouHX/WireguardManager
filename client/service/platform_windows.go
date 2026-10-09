@@ -302,7 +302,7 @@ func (b *WindowsBackend) Open(ctx context.Context, p Profile) (Session, error) {
 	if err != nil {
 		return fail(err)
 	}
-	row.ForwardingEnabled = true
+	row.ForwardingEnabled = !p.AccessOnly
 	row.UseAutomaticMetric = false
 	row.Metric = 1
 	row.NLMTU = p.Config.MTU
@@ -318,10 +318,11 @@ func (b *WindowsBackend) Open(ctx context.Context, p Profile) (Session, error) {
 			return fail(fmt.Errorf("添加路由 %s 失败：%w", route, err))
 		}
 	}
-	if err = b.applyAutomaticNetwork(session, p, selected); err != nil {
-		return fail(err)
+	if !p.AccessOnly {
+		if err = b.applyAutomaticNetwork(session, p, selected); err != nil {
+			return fail(err)
+		}
 	}
-
 	return session, nil
 }
 

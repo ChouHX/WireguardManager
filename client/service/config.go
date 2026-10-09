@@ -25,11 +25,12 @@ type Config struct {
 }
 
 type Profile struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Config    Config `json:"config"`
-	Targets   string `json:"targets"`
-	AdapterID string `json:"adapterID"`
+	AccessOnly bool   `json:"-"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Config     Config `json:"config"`
+	Targets    string `json:"targets"`
+	AdapterID  string `json:"adapterID"`
 }
 
 type ProfileView struct {

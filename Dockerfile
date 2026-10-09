@@ -39,6 +39,7 @@ RUN go mod download
 
 COPY main.go ./
 COPY internal ./internal
+COPY gateway ./gateway
 
 # 依赖为纯 Go 实现（glebarez/sqlite），无需 CGO
 RUN go build -a -installsuffix cgo -o /out/main .

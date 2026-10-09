@@ -38,6 +38,7 @@ type User struct {
 
 // Deliberately omit the peer private_key field returned by older server versions.
 type Device struct {
+	Role      string `json:"device_role"`
 	ID        uint   `json:"id"`
 	Name      string `json:"comment"`
 	Address   string `json:"peer_address"`
@@ -50,6 +51,7 @@ type Device struct {
 // assigned tunnel address into either the LAN editor or automatic access targets.
 func (d *Device) UnmarshalJSON(raw []byte) error {
 	var wire struct {
+		Role       string  `json:"device_role"`
 		ID         uint    `json:"id"`
 		Name       string  `json:"comment"`
 		Address    string  `json:"peer_address"`
@@ -60,7 +62,7 @@ func (d *Device) UnmarshalJSON(raw []byte) error {
 	if err := json.Unmarshal(raw, &wire); err != nil {
 		return err
 	}
-	*d = Device{ID: wire.ID, Name: wire.Name, Address: wire.Address, PublicKey: wire.PublicKey}
+	*d = Device{Role: wire.Role, ID: wire.ID, Name: wire.Name, Address: wire.Address, PublicKey: wire.PublicKey}
 	if wire.LANs != nil {
 		d.LANs = *wire.LANs
 		return nil
@@ -98,6 +100,7 @@ func IsUnauthorized(err error) bool { var e *APIError; return errors.As(err, &e)
 // Keep diagnostic context without exposing response bodies, credentials or
 // transport errors that may contain proxy credentials.
 type RequestError struct {
+	Method    string
 	Operation string
 	Stage     string
 	Elapsed   time.Duration
@@ -126,7 +129,7 @@ func (e *RequestError) Error() string {
 		retry = "，已重试一次"
 	}
 	hint := "请重试"
-	if e.Operation == "保存设备局域网" {
+	if e.Method == "PATCH" {
 		hint = "设置可能已保存，请刷新设备确认"
 	}
 	return fmt.Sprintf("%s失败：%s（%.1f 秒%s）；%s", e.Operation, reason, e.Elapsed.Seconds(), retry, hint)
@@ -137,10 +140,14 @@ func operationName(method, path string) string {
 		return "登录"
 	case path == "/api/me":
 		return "恢复登录"
+	case path == "/api/wireguard/access":
+		return "获取本机访问配置"
+	case strings.Contains(path, "/config?format=gateway"):
+		return "下载网关接入脚本"
 	case strings.HasSuffix(path, "/config"):
 		return "获取设备配置"
 	case method == "PATCH":
-		return "保存设备局域网"
+		return "保存网关转发目标"
 	default:
 		return "获取设备列表"
 	}
@@ -201,6 +208,37 @@ func (c *Client) Config(ctx context.Context, id uint) (string, error) {
 	}
 	return data.Config, err
 }
+
+type AccessConfig struct {
+	Peer   Device `json:"peer"`
+	Config string `json:"config"`
+}
+
+func (c *Client) Access(ctx context.Context, publicKey, name string) (AccessConfig, error) {
+	var data AccessConfig
+	err := c.request(ctx, "POST", "/api/wireguard/access", map[string]string{"public_key": publicKey, "name": name}, &data)
+	if err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Status == 404 {
+			return data, errors.New("服务端尚不支持独立访问终端，请先更新服务端")
+		}
+		return data, err
+	}
+	if data.Peer.ID == 0 || data.Peer.Role != "access" || data.Peer.PublicKey != publicKey || data.Config == "" {
+		return data, errors.New("服务端返回了无效的本机访问配置")
+	}
+	return data, nil
+}
+func (c *Client) GatewaySetup(ctx context.Context, id uint) (string, error) {
+	var data struct {
+		Setup string `json:"setup"`
+	}
+	err := c.request(ctx, "GET", devicePath(id)+"/config?format=gateway", nil, &data)
+	if err == nil && data.Setup == "" {
+		err = errors.New("服务端尚不支持网关接入脚本，请更新服务端")
+	}
+	return data.Setup, err
+}
 func (c *Client) SetLANs(ctx context.Context, id uint, lans string) (Device, error) {
 	var device Device
 	err := c.request(ctx, "PATCH", devicePath(id), map[string]string{"allowed_ips": lans}, &device)
@@ -223,6 +261,7 @@ func (c *Client) request(ctx context.Context, method, path string, input, output
 		if !errors.As(err, &failure) {
 			return err
 		}
+		failure.Method = method
 		failure.Operation, failure.Elapsed, failure.Attempts = operationName(method, path), time.Since(started), attempt
 		var networkError net.Error
 		timedOut := errors.Is(err, context.DeadlineExceeded) || errors.As(err, &networkError) && networkError.Timeout()

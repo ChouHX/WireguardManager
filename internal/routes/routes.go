@@ -36,6 +36,7 @@ func SetupRoutes(r *gin.Engine) {
 		wg.GET("/traffic", handlers.GetMyTrafficSummary) // 用户流量摘要（用于轮询）
 		
 		// Peer管理
+		wg.POST("/access", handlers.EnsureDesktopAccess)
 		wg.GET("/peers", handlers.GetMyPeers)
 		wg.POST("/peers", handlers.AddPeer)
 		wg.PATCH("/peers/:id", handlers.UpdatePeer)

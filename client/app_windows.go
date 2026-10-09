@@ -209,21 +209,21 @@ func (a *App) DetectLANs() (service.LANDetection, error) {
 	}
 	return a.desktop.DetectLANs()
 }
-func (a *App) SaveDevice(id, lans, targets string) (service.DesktopView, error) {
+func (a *App) SaveDevice(id, targets string) (service.DesktopView, error) {
 	a.operations.Lock()
 	defer a.operations.Unlock()
 	if err := a.ready(); err != nil {
 		return service.DesktopView{}, err
 	}
-	return a.desktop.SaveDevice(a.ctx, id, lans, targets)
+	return a.desktop.SaveDevice(a.ctx, id, targets)
 }
-func (a *App) Connect(id, lans, targets string) (service.DesktopView, error) {
+func (a *App) Connect(id, targets string) (service.DesktopView, error) {
 	a.operations.Lock()
 	defer a.operations.Unlock()
 	if err := a.ready(); err != nil {
 		return service.DesktopView{}, err
 	}
-	return a.desktop.Connect(a.ctx, id, lans, targets)
+	return a.desktop.Connect(a.ctx, id, targets)
 }
 func (a *App) Disconnect() error {
 	a.operations.Lock()
@@ -238,4 +238,24 @@ func (a *App) Status() (service.Status, error) {
 		return service.Status{}, err
 	}
 	return a.desktop.Status(a.ctx), nil
+}
+
+func (a *App) DownloadGatewaySetup(id string) (string, error) {
+	a.operations.Lock()
+	defer a.operations.Unlock()
+	if err := a.ready(); err != nil {
+		return "", err
+	}
+	script, err := a.desktop.GatewaySetup(a.ctx, id)
+	if err != nil {
+		return "", err
+	}
+	path, err := wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{Title: "保存网关首次接入脚本", DefaultFilename: "wireguard-gateway-" + id + ".sh", Filters: []wailsruntime.FileFilter{{DisplayName: "Shell 脚本", Pattern: "*.sh"}}})
+	if err != nil || path == "" {
+		return "", err
+	}
+	if err = service.AtomicWrite(path, []byte(script)); err != nil {
+		return "", err
+	}
+	return "网关接入脚本已保存；将它复制到目标网关并以 root 执行一次", nil
 }

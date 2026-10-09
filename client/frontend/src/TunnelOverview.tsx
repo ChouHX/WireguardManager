@@ -64,7 +64,7 @@ export function TunnelOverview({
     <Card className="tunnel-overview">
       <Group justify="space-between" mb="xs">
         <Text size="sm" fw={650}>
-          接口 · 当前电脑
+          远端网关
         </Text>
         <Badge color="gray" size="xs">
           WireGuard
@@ -72,25 +72,19 @@ export function TunnelOverview({
       </Group>
       <Table withRowBorders={false} verticalSpacing={5} horizontalSpacing={0}>
         <Table.Tbody>
-          <InfoRow
-            label="隧道地址"
-            value={
-              d?.address ||
-              device.address + (device.address.includes("/") ? "" : "/32")
-            }
-            copy
-          />
-          <InfoRow
-            label="接口公钥"
-            value={d?.publicKey || device.publicKey}
-            copy
-          />
-          <InfoRow
-            label="监听端口"
-            value={d?.listenPort ? String(d.listenPort) : "自动分配"}
-          />
+          <InfoRow label="网关地址" value={device.address} copy />
+          <InfoRow label="网关公钥" value={device.publicKey} copy />
+          <InfoRow label="转发目标" value={device.lans || "尚未配置"} copy />
+        </Table.Tbody>
+      </Table>
+      <Divider my="sm" />
+      <Text size="sm" fw={650} mb="xs">本机 · 独立访问终端</Text>
+      <Table withRowBorders={false} verticalSpacing={5} horizontalSpacing={0}>
+        <Table.Tbody>
+          <InfoRow label="隧道地址" value={d?.address} copy />
+          <InfoRow label="本机公钥" value={d?.publicKey} copy />
+          <InfoRow label="监听端口" value={d?.listenPort ? String(d.listenPort) : undefined} />
           <InfoRow label="MTU" value={d ? String(d.mtu) : undefined} />
-          <InfoRow label="DNS" value="跟随系统" />
         </Table.Tbody>
       </Table>
       <Divider my="sm" />

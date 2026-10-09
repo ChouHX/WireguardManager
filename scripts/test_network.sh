@@ -12,5 +12,5 @@ docker run --rm --network none --privileged \
   --mount "type=bind,src=${PWD}/scripts/diagnose_network.sh,dst=/tmp/diagnose_network.sh,readonly" \
   --entrypoint /tmp/services.test \
   "${WGM_NETWORK_TEST_IMAGE:-ghcr.io/chouhx/wireguardmanager:latest}" \
-  -test.run '^Test(MultiInterfaceIntegration|LegacyMigrationIntegration|ProvisionRollbackIntegration|TenantNATTransportIntegration)$' \
+  -test.run '^Test(MultiInterfaceIntegration|LegacyMigrationIntegration|ProvisionRollbackIntegration|TenantNATTransportIntegration|GatewayBootstrapIntegration)$' \
   -test.v -test.timeout=120s

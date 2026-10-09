@@ -150,6 +150,7 @@
     "maxLength": "最多 {max} 个字符"
   },
   "wireguard": {
+    "accessTerminal": "访问终端",
     "title": "WireGuard",
     "adminTitle": "WireGuard 管理",
     "myPeers": "我的设备",

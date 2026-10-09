@@ -35,7 +35,7 @@ import {
   IconPlugConnectedX,
   IconRefresh,
   IconSearch,
-  IconWand,
+  IconDownload,
 } from "@tabler/icons-react";
 import { notifications } from "@mantine/notifications";
 import { AddressInput, addressDraft } from "./AddressInput";
@@ -48,7 +48,6 @@ import {
   type Desktop,
   type Device,
   type Status,
-  type Detection,
 } from "./api";
 const empty: Desktop = { serverURL: "", user: null, devices: [], message: "" };
 const offline: Status = {
@@ -157,7 +156,6 @@ export default function App() {
     [selected, setSelected] = useState(""),
     [query, setQuery] = useState("");
   const [lans, setLANs] = useState(""),
-    [targets, setTargets] = useState(""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(true),
@@ -165,10 +163,8 @@ export default function App() {
   const [email, setEmail] = useState(""),
     [password, setPassword] = useState(""),
     [remember, setRemember] = useState(true),
-    [detection, setDetection] = useState<Detection | null>(null),
     [history, setHistory] = useState<Status[]>([]);
-  const [lanSearch, setLANSearch] = useState(""),
-    [targetSearch, setTargetSearch] = useState("");
+  const [lanSearch, setLANSearch] = useState("");
   const [latestMessage, setLatestMessage] = useState<ActivityMessage | null>(
     null,
   );
@@ -203,16 +199,13 @@ export default function App() {
   const device = state.devices.find((d) => d.id === selected);
   const active = state.devices.find((d) => d.id === status.profileID);
   const connectedHere = !!device && status.profileID === device.id;
-  const locked = busy || connectedHere;
+  const locked = busy;
   const select = (d: Device | undefined) => {
     const id = d?.id ?? "";
     selectedRef.current = id;
     setSelected(id);
     setLANs(d?.lans ?? "");
     setLANSearch("");
-    setTargetSearch("");
-    setTargets(d?.targets ?? "");
-    setDetection(null);
     setNotice("");
   };
   const apply = (next: Desktop, resetDraft = false) => {
@@ -314,14 +307,13 @@ export default function App() {
     void run(async () => {
       const next = await api().Refresh();
       apply(next, true);
-      setNotice("设备列表已更新");
+      setNotice("网关列表已更新");
     });
   const connect = () =>
     void run(async () => {
       const next = await api().Connect(
         selected,
         addressDraft(lans, lanSearch),
-        addressDraft(targets, targetSearch),
       );
       apply(next, true);
     });
@@ -335,22 +327,14 @@ export default function App() {
       const next = await api().SaveDevice(
         selected,
         addressDraft(lans, lanSearch),
-        addressDraft(targets, targetSearch),
       );
       apply(next, true);
       setNotice(next.message);
     });
-  const detect = () =>
+  const downloadSetup = () =>
     void run(async () => {
-      const result = await api().DetectLANs();
-      setDetection(result);
-      if (result.suggestedLANs) {
-        setLANs(result.suggestedLANs);
-        setLANSearch("");
-        setNotice("已识别本机局域网，可按需改为具体下挂设备 IP");
-      } else {
-        setNotice("未检测到可用的物理局域网，请连接现场网络后重试");
-      }
+      const message = await api().DownloadGatewaySetup(selected);
+      if (message) setNotice(message);
     });
   const authenticated = Boolean(state.user);
   useEffect(() => {
@@ -460,7 +444,7 @@ export default function App() {
           </Box>
           <span className="header-divider" />
           <Text size="xs" c="dimmed">
-            设备连接
+            远程访问
           </Text>
         </Group>
         <Group gap="sm" wrap="nowrap" className="server-address">
@@ -486,7 +470,7 @@ export default function App() {
           />
           <Group justify="space-between" mt="sm">
             <Text size="xs" fw={600} c="#a9b1bd">
-              设备配置{" "}
+              远端网关{" "}
               <Text component="span" size="xs" c="#a9b1bd">
                 {state.devices.length}
               </Text>
@@ -609,7 +593,7 @@ export default function App() {
                       onClick={connect}
                       size="xs"
                     >
-                      {status.profileID ? "切换到此设备" : "连接此设备"}
+                      {status.profileID ? "切换访问网关" : "访问此网关"}
                     </Button>
                   )}
                 </Group>
@@ -636,104 +620,37 @@ export default function App() {
                       <Tabs.Panel value="network">
                         <Card className="settings-card">
                           <Group justify="space-between" mb="sm">
-                            <Group gap={8}>
-                              <ThemeIcon variant="light" size={24}>
-                                <IconNetwork size={15} />
-                              </ThemeIcon>
-                              <Text fw={650} size="sm">
-                                网络设置
-                              </Text>
-                            </Group>
-                            <Badge color="teal" variant="light" size="sm">
-                              自动转发
-                            </Badge>
+                            <Text fw={650} size="sm">云端转发</Text>
+                            <Badge size="xs" variant="light">经所选网关</Badge>
                           </Group>
                           <div className="field-section">
-                            <Group justify="space-between" mb={4}>
-                              <FieldLabel
-                                id="device-lans"
-                                label="设备局域网"
-                                help="本设备下挂的真实 IP / 网段，保存或连接时同步到云端，保留设备的 WireGuard IP。仅访问远端可留空。回车添加，单个 IP 自动转为 /32。"
-                              />
-                              <Badge size="xs" color="wg">
-                                同步云端
-                              </Badge>
-                            </Group>
+                            <FieldLabel
+                              id="gateway-targets"
+                              label="转发目标 IP / 网段"
+                              help="云端将这些地址交给所选网关转发，本机同时添加访问路由。网关首次运行接入脚本后，后续修改无需重新配置网关。单个 IP 自动转为 /32；与本机局域网重叠时请指定具体 IP。"
+                            />
                             <AddressInput
-                              id="device-lans"
-                              placeholder="例如 192.168.1.0/24 或 192.168.1.100"
+                              id="gateway-targets"
+                              placeholder="192.168.1.100 或 192.168.10.0/24"
                               value={lans}
                               onChange={setLANs}
                               search={lanSearch}
                               onSearchChange={setLANSearch}
                               disabled={locked}
                             />
-                            <Group justify="flex-end" mt={4}>
-                              <Button
-                                variant="subtle"
-                                size="compact-xs"
-                                leftSection={<IconWand size={14} />}
-                                onClick={detect}
-                                disabled={locked}
-                              >
-                                探测本机局域网
-                              </Button>
-                            </Group>
-                            {detection && (
-                              <Stack gap={5} mt="sm">
-                                {detection.adapters
-                                  .filter((a) => a.autoEligible)
-                                  .map((a) => (
-                                    <Text key={a.id} size="xs" c="dimmed">
-                                      {a.name} · {a.addresses.join("、")}
-                                    </Text>
-                                  ))}
-                              </Stack>
-                            )}
                           </div>
+                          <Group mt="sm" pt="sm" justify="space-between" className="settings-footer">
+                            <Text size="xs" c="dimmed">保存后立即在云端生效</Text>
+                            <Button variant="light" size="xs" disabled={locked} onClick={save}>保存转发目标</Button>
+                          </Group>
                           <Divider my="sm" />
-                          <div className="field-section">
-                            <Group justify="space-between" mb={4}>
-                              <FieldLabel
-                                id="local-targets"
-                                label="本机访问目标"
-                                help={`要访问的远端 IP / 网段，只在本机配置。留空自动访问同账号其他设备的局域网；与本机网段重叠时请填写具体 IP。自动目标：${device.autoTargets || "仅 WireGuard 内设备"}。`}
-                              />
-                              <Badge size="xs" color="gray">
-                                仅本机
-                              </Badge>
-                            </Group>
-                            <AddressInput
-                              id="local-targets"
-                              placeholder={
-                                device.autoTargets || "192.168.0.100"
-                              }
-                              value={targets}
-                              onChange={setTargets}
-                              search={targetSearch}
-                              onSearchChange={setTargetSearch}
-                              disabled={locked}
+                          <Group justify="space-between" gap="xs">
+                            <FieldLabel
+                              id="gateway-setup"
+                              label="网关首次接入"
+                              help="在 OpenWrt 或 Linux 网关以 root 执行下载的脚本，完成 WireGuard、转发、回程 NAT 和开机启动。须预装 WireGuard 工具和防火墙组件。脚本含该网关密钥，请妥善保管。"
                             />
-                          </div>
-                          <Group
-                            mt="sm"
-                            pt="sm"
-                            justify="space-between"
-                            className="settings-footer"
-                          >
-                            <Text size="xs" c="dimmed">
-                              {connectedHere
-                                ? "断开后可编辑"
-                                : "连接时会保存当前设置"}
-                            </Text>
-                            <Button
-                              variant="light"
-                              size="xs"
-                              disabled={locked}
-                              onClick={save}
-                            >
-                              保存设置
-                            </Button>
+                            <Button aria-label="下载接入脚本" id="gateway-setup" size="compact-xs" variant="subtle" leftSection={<IconDownload size={14} />} disabled={busy} onClick={downloadSetup}>下载接入脚本</Button>
                           </Group>
                         </Card>
                       </Tabs.Panel>
@@ -753,7 +670,7 @@ export default function App() {
                           )}
                         </Group>
                         <Text fw={600} size="sm" truncate>
-                          {active?.name || "尚未连接设备"}
+                          {active?.name || "尚未访问网关"}
                         </Text>
                         <Text size="xs" c="dimmed" mt={5}>
                           {status.handshake
@@ -765,37 +682,7 @@ export default function App() {
                         {status.profileID && (
                           <>
                             <Divider my="sm" />
-                            <Stack gap={7}>
-                              <Text size="xs">
-                                网卡：
-                                {status.network.adapters?.join("、") ||
-                                  "仅 VPN 访问"}
-                              </Text>
-                              <Group gap={6}>
-                                <Badge
-                                  size="xs"
-                                  color={
-                                    status.network.forwarding ? "teal" : "gray"
-                                  }
-                                >
-                                  IP 转发
-                                </Badge>
-                                <Badge
-                                  size="xs"
-                                  color={
-                                    status.network.firewall ? "teal" : "gray"
-                                  }
-                                >
-                                  防火墙
-                                </Badge>
-                                <Badge
-                                  size="xs"
-                                  color={status.network.nat ? "teal" : "gray"}
-                                >
-                                  {status.network.nat ? "自动 NAT" : "路由模式"}
-                                </Badge>
-                              </Group>
-                            </Stack>
+                            <Text size="xs" c="dimmed">本机独立访问隧道</Text>
                             {!connectedHere && (
                               <Button
                                 fullWidth
@@ -886,7 +773,7 @@ export default function App() {
                   选择一台设备
                 </Title>
                 <Text size="sm" c="dimmed" mt="sm">
-                  从左侧选择当前电脑使用的配置，或在管理后台创建新设备后刷新。
+                  从左侧选择要访问的远端网关，或在管理后台创建网关后刷新。
                 </Text>
               </Paper>
             )}

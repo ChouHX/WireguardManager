@@ -14,6 +14,7 @@ import (
 	"time"
 	"unsafe"
 
+	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/driver"
 )
 
@@ -75,7 +76,7 @@ func CheckLoopbackTransport(ctx context.Context) (result error) {
 	if installed.ListenPort == 0 {
 		return errors.New("test server did not allocate a UDP port")
 	}
-	profile := Profile{ID: "loopback-self-check", Config: Config{
+	profile := Profile{ID: "loopback-self-check", AccessOnly: true, Config: Config{
 		PrivateKey: [32]byte(clientKey.Bytes()), PublicKey: [32]byte(serverKey.PublicKey().Bytes()), PresharedKey: psk,
 		Address: netip.MustParsePrefix("10.254.253.2/32"), BaseRoutes: []netip.Prefix{netip.MustParsePrefix("10.254.253.0/24")},
 		Endpoint: fmt.Sprintf("127.0.0.1:%d", installed.ListenPort), Keepalive: 1, MTU: 1420,
@@ -86,6 +87,18 @@ func CheckLoopbackTransport(ctx context.Context) (result error) {
 	}
 	if err != nil {
 		return err
+	}
+	// The same access mode as the desktop must not modify LAN forwarding/NAT.
+	native := session.(*windowsSession)
+	row, err := native.luid.IPInterface(windows.AF_INET)
+	if err != nil {
+		return err
+	}
+	if row.ForwardingEnabled || native.restore {
+		return errors.New("access mode unexpectedly enabled forwarding or LAN recovery")
+	}
+	if _, err := os.Stat(backend.journal); !os.IsNotExist(err) {
+		return errors.New("access mode unexpectedly created a LAN recovery journal")
 	}
 	// A cancelled probe context skips ICMP while still sampling native counters.
 	// The responder has no IP assigned; its handshake is confirmed by a keepalive.

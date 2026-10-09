@@ -697,6 +697,7 @@ export default function WireguardPage() {
                             <Text size="sm" fw={600}>
                               {peer.comment || t('wireguard.unnamed')}
                             </Text>
+                            {peer.device_role === 'access' && <Badge size="xs" color="gray">{t('wireguard.accessTerminal')}</Badge>}
                             {peer.use_preshared_key ? (
                               <Tooltip label={t('wireguard.usePresharedKey')}>
                                 <Badge size="xs" color="wg" variant="light">
@@ -758,18 +759,21 @@ export default function WireguardPage() {
                           <Menu.Dropdown>
                             <Menu.Item
                               leftSection={<IconQrcode size={15} />}
+                              disabled={peer.device_role === 'access'}
                               onClick={() => void openQrCode(peer)}
                             >
                               {t('wireguard.showQrCode')}
                             </Menu.Item>
                             <Menu.Item
                               leftSection={<IconDownload size={15} />}
+                              disabled={peer.device_role === 'access'}
                               onClick={() => void handleDownload(peer)}
                             >
                               {t('wireguard.downloadConfig')}
                             </Menu.Item>
                             <Menu.Item
                               leftSection={<IconPencil size={15} />}
+                              disabled={peer.device_role === 'access'}
                               onClick={() => openEdit(peer)}
                             >
                               {t('common.edit')}
