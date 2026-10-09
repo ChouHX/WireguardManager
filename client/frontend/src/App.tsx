@@ -24,7 +24,6 @@ import {
 import {
   IconArrowDown,
   IconArrowUp,
-  IconCheck,
   IconChevronRight,
   IconCircleFilled,
   IconCloud,
@@ -77,6 +76,39 @@ const states: Record<string, string> = {
   stale: "握手已过期",
   error: "连接异常",
 };
+function FieldLabel({
+  id,
+  label,
+  help,
+}: {
+  id: string;
+  label: string;
+  help: string;
+}) {
+  return (
+    <Group gap={4}>
+      <Text component="label" htmlFor={id} size="xs" fw={600}>
+        {label}
+      </Text>
+      <Tooltip
+        label={help}
+        multiline
+        w={280}
+        withArrow
+        events={{ hover: true, focus: true, touch: true }}
+      >
+        <ActionIcon
+          size="xs"
+          color="gray"
+          variant="subtle"
+          aria-label={`${label}说明`}
+        >
+          <IconInfoCircle size={14} />
+        </ActionIcon>
+      </Tooltip>
+    </Group>
+  );
+}
 function Sparkline({
   data,
   color,
@@ -320,6 +352,12 @@ export default function App() {
         setNotice("未检测到可用的物理局域网，请连接现场网络后重试");
       }
     });
+  const authenticated = Boolean(state.user);
+  useEffect(() => {
+    void window.go?.main.App.SetWindowLayout(authenticated).catch((e) =>
+      report(String(e), "yellow"),
+    );
+  }, [authenticated, report]);
   const login = () =>
     void run(async () => {
       const next = await api().Login(email, password, remember);
@@ -342,105 +380,65 @@ export default function App() {
   if (!state.user)
     return (
       <main className="login-shell">
-        <div className="login-card">
-          <div className="login-story">
-            <Group gap="sm">
-              <WireGuardLogo size={32} color="#fa6c61" />
-              <Box>
-                <Text fw={650} size="sm">
-                  WireGuard Manager
-                </Text>
-                <Text className="brand-subtitle">CONTROL PLANE</Text>
-              </Box>
-            </Group>
+        <div className="login-main">
+          <Group gap={10} mb="lg">
+            <WireGuardLogo size={34} />
             <div>
-              <Title order={1}>
-                现场连接，
-                <br />
-                从这里开始。
-              </Title>
-              <Text mt="lg" className="story-copy">
-                登录后选择当前电脑使用的设备配置。隧道、局域网网卡和转发规则，由客户端自动处理。
+              <Title order={3}>WireGuard Manager</Title>
+              <Text size="xs" c="dimmed">
+                登录管理平台
               </Text>
-              <Stack gap="md" mt="xl">
-                {[
-                  "云端设备配置同步",
-                  "自动探测局域网与转发",
-                  "一个客户端，随时切换设备",
-                ].map((t) => (
-                  <Group key={t} gap="sm">
-                    <IconCheck size={17} />
-                    <Text size="sm">{t}</Text>
-                  </Group>
-                ))}
-              </Stack>
             </div>
-            <Text size="xs" opacity={0.7}>
-              Windows · 原生 WireGuard 隧道
+          </Group>
+          <Group gap={6} mb="lg" wrap="nowrap" c="dimmed">
+            <IconCloud size={15} />
+            <Text size="xs" truncate>
+              {state.serverURL || "正在读取服务端…"}
             </Text>
-          </div>
-          <div className="login-main">
-            <Paper w="100%" maw={352}>
-              <Title order={2}>登录管理平台</Title>
-              <Text size="sm" c="dimmed" mt={8} mb="xl">
-                使用管理后台的账号和密码继续。
-              </Text>
-              <Paper className="server-label" p="sm" mb="lg">
-                <Group gap={8} wrap="nowrap">
-                  <IconCloud size={18} />
-                  <Text size="xs" truncate>
-                    {state.serverURL || "正在读取内置服务端…"}
-                  </Text>
-                </Group>
-              </Paper>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  login();
-                }}
+          </Group>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              login();
+            }}
+          >
+            <Stack gap="md">
+              <TextInput
+                label="邮箱"
+                placeholder="you@example.com"
+                type="email"
+                autoComplete="username"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.currentTarget.value)}
+                disabled={busy || loading}
+              />
+              <PasswordInput
+                label="密码"
+                placeholder="输入账号密码"
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.currentTarget.value)}
+                disabled={busy || loading}
+              />
+              <Checkbox
+                label="保持登录"
+                checked={remember}
+                onChange={(e) => setRemember(e.currentTarget.checked)}
+                disabled={busy}
+              />
+              <Button
+                type="submit"
+                size="sm"
+                fullWidth
+                loading={busy || loading}
+                mt="sm"
               >
-                <Stack gap="md">
-                  <TextInput
-                    label="邮箱"
-                    placeholder="you@example.com"
-                    type="email"
-                    autoComplete="username"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.currentTarget.value)}
-                    disabled={busy || loading}
-                  />
-                  <PasswordInput
-                    label="密码"
-                    placeholder="输入账号密码"
-                    autoComplete="current-password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.currentTarget.value)}
-                    disabled={busy || loading}
-                  />
-                  <Checkbox
-                    label="保持登录（在本机加密保存令牌）"
-                    checked={remember}
-                    onChange={(e) => setRemember(e.currentTarget.checked)}
-                    disabled={busy}
-                  />
-                  <Button
-                    type="submit"
-                    size="sm"
-                    fullWidth
-                    loading={busy || loading}
-                    mt="sm"
-                  >
-                    登录并获取设备 <IconChevronRight size={16} />
-                  </Button>
-                </Stack>
-              </form>
-              <Text size="xs" c="dimmed" mt="xl">
-                使用与 Web 端相同的账号；密码不会保存在本机。
-              </Text>
-            </Paper>
-          </div>
+                登录并获取设备 <IconChevronRight size={16} />
+              </Button>
+            </Stack>
+          </form>
         </div>
         <div className="login-activity">
           <LatestMessage entry={latestMessage} />
@@ -528,9 +526,6 @@ export default function App() {
                   <Text fz={12.5} fw={600} truncate>
                     {d.name}
                   </Text>
-                  <Text fz={11} c="#a9b1bd" truncate>
-                    {d.address}
-                  </Text>
                 </div>
                 {status.profileID === d.id ? (
                   <IconCircleFilled className="online-dot" size={8} />
@@ -595,14 +590,6 @@ export default function App() {
                 >
                   <div>
                     <Title order={3}>{device.name}</Title>
-                    <Group mt={4} gap="xs">
-                      <Badge variant="outline" color="gray" size="sm">
-                        {device.address}
-                      </Badge>
-                      <Text size="xs" c="dimmed">
-                        WireGuard IP · 云端分配
-                      </Text>
-                    </Group>
                   </div>
                   {connectedHere ? (
                     <Button
@@ -626,23 +613,23 @@ export default function App() {
                     </Button>
                   )}
                 </Group>
-                <div className="detail-grid">
-                  <Stack gap="sm">
-                    <Tabs defaultValue="overview" keepMounted={false}>
-                      <Tabs.List mb="sm">
-                        <Tabs.Tab
-                          value="overview"
-                          leftSection={<IconInfoCircle size={14} />}
-                        >
-                          隧道详情
-                        </Tabs.Tab>
-                        <Tabs.Tab
-                          value="network"
-                          leftSection={<IconNetwork size={14} />}
-                        >
-                          网络设置
-                        </Tabs.Tab>
-                      </Tabs.List>
+                <Tabs defaultValue="overview" keepMounted={false}>
+                  <Tabs.List mb="sm">
+                    <Tabs.Tab
+                      value="overview"
+                      leftSection={<IconInfoCircle size={14} />}
+                    >
+                      隧道详情
+                    </Tabs.Tab>
+                    <Tabs.Tab
+                      value="network"
+                      leftSection={<IconNetwork size={14} />}
+                    >
+                      网络设置
+                    </Tabs.Tab>
+                  </Tabs.List>
+                  <div className="detail-grid">
+                    <div className="configuration-column">
                       <Tabs.Panel value="overview">
                         <TunnelOverview device={device} status={status} />
                       </Tabs.Panel>
@@ -663,21 +650,17 @@ export default function App() {
                           </Group>
                           <div className="field-section">
                             <Group justify="space-between" mb={4}>
-                              <Text
-                                component="label"
-                                htmlFor="device-lans"
-                                size="xs"
-                                fw={600}
-                              >
-                                设备局域网
-                              </Text>
+                              <FieldLabel
+                                id="device-lans"
+                                label="设备局域网"
+                                help="本设备下挂的真实 IP / 网段，保存或连接时同步到云端，保留设备的 WireGuard IP。仅访问远端可留空。回车添加，单个 IP 自动转为 /32。"
+                              />
                               <Badge size="xs" color="wg">
                                 同步云端
                               </Badge>
                             </Group>
                             <AddressInput
                               id="device-lans"
-                              descriptionID="device-lans-help"
                               placeholder="例如 192.168.1.0/24 或 192.168.1.100"
                               value={lans}
                               onChange={setLANs}
@@ -685,19 +668,7 @@ export default function App() {
                               onSearchChange={setLANSearch}
                               disabled={locked}
                             />
-                            <Text
-                              id="device-lans-help"
-                              size="xs"
-                              c="dimmed"
-                              mt={5}
-                            >
-                              本设备后面的真实内网；保存或连接时同步，保留上方
-                              WireGuard IP。仅访问远端可留空。
-                            </Text>
-                            <Group justify="space-between" mt={4}>
-                              <Text size="xs" c="dimmed">
-                                回车添加 · 单个 IP 自动转为 /32
-                              </Text>
+                            <Group justify="flex-end" mt={4}>
                               <Button
                                 variant="subtle"
                                 size="compact-xs"
@@ -723,21 +694,17 @@ export default function App() {
                           <Divider my="sm" />
                           <div className="field-section">
                             <Group justify="space-between" mb={4}>
-                              <Text
-                                component="label"
-                                htmlFor="local-targets"
-                                size="xs"
-                                fw={600}
-                              >
-                                本机访问目标
-                              </Text>
+                              <FieldLabel
+                                id="local-targets"
+                                label="本机访问目标"
+                                help={`要访问的远端 IP / 网段，只在本机配置。留空自动访问同账号其他设备的局域网；与本机网段重叠时请填写具体 IP。自动目标：${device.autoTargets || "仅 WireGuard 内设备"}。`}
+                              />
                               <Badge size="xs" color="gray">
                                 仅本机
                               </Badge>
                             </Group>
                             <AddressInput
                               id="local-targets"
-                              descriptionID="local-targets-help"
                               placeholder={
                                 device.autoTargets || "192.168.0.100"
                               }
@@ -747,25 +714,6 @@ export default function App() {
                               onSearchChange={setTargetSearch}
                               disabled={locked}
                             />
-                            <Text
-                              id="local-targets-help"
-                              size="xs"
-                              c="dimmed"
-                              mt={5}
-                            >
-                              要访问的远端 IP /
-                              网段，不修改云端。留空使用同账号其他设备的局域网；与本机网段重叠时填写具体
-                              IP。
-                            </Text>
-                            <Text
-                              size="xs"
-                              c="dimmed"
-                              mt={4}
-                              className="network-prefixes"
-                            >
-                              自动目标：
-                              {device.autoTargets || "仅 WireGuard 内设备"}
-                            </Text>
                           </div>
                           <Group
                             mt="sm"
@@ -789,147 +737,145 @@ export default function App() {
                           </Group>
                         </Card>
                       </Tabs.Panel>
-                    </Tabs>
-                    <Text size="xs" c="dimmed">
-                      自动探测网卡并配置转发，断开后恢复网络。每台电脑使用独立设备配置。
-                    </Text>
-                  </Stack>
-                  <Stack gap="sm" className="status-column">
-                    <Card>
-                      <Group justify="space-between" mb="sm">
-                        <Text size="sm" fw={650}>
-                          当前连接
-                        </Text>
-                        {busy ? (
-                          <Loader size="xs" />
-                        ) : (
-                          <Badge variant="dot" color={color} size="sm">
-                            {states[status.state]}
-                          </Badge>
-                        )}
-                      </Group>
-                      <Text fw={600} size="sm" truncate>
-                        {active?.name || "尚未连接设备"}
-                      </Text>
-                      <Text size="xs" c="dimmed" mt={5}>
-                        {status.handshake
-                          ? `最近握手 ${new Date(status.handshake).toLocaleTimeString()}`
-                          : status.profileID
-                            ? "尚未完成握手，隧道未连通"
-                            : "连接成功以云端握手为准"}
-                      </Text>
-                      {status.profileID && (
-                        <>
-                          <Divider my="sm" />
-                          <Stack gap={7}>
-                            <Text size="xs">
-                              网卡：
-                              {status.network.adapters?.join("、") ||
-                                "仅 VPN 访问"}
-                            </Text>
-                            <Group gap={6}>
-                              <Badge
-                                size="xs"
-                                color={
-                                  status.network.forwarding ? "teal" : "gray"
-                                }
-                              >
-                                IP 转发
-                              </Badge>
-                              <Badge
-                                size="xs"
-                                color={
-                                  status.network.firewall ? "teal" : "gray"
-                                }
-                              >
-                                防火墙
-                              </Badge>
-                              <Badge
-                                size="xs"
-                                color={status.network.nat ? "teal" : "gray"}
-                              >
-                                {status.network.nat ? "自动 NAT" : "路由模式"}
-                              </Badge>
-                            </Group>
-                          </Stack>
-                          {!connectedHere && (
-                            <Button
-                              fullWidth
-                              variant="subtle"
-                              size="xs"
-                              color="red"
-                              mt="md"
-                              onClick={disconnect}
-                              disabled={busy}
-                            >
-                              断开 {active?.name}
-                            </Button>
+                    </div>
+                    <Stack gap="sm" className="status-column">
+                      <Card>
+                        <Group justify="space-between" mb="sm">
+                          <Text size="sm" fw={650}>
+                            当前连接
+                          </Text>
+                          {busy ? (
+                            <Loader size="xs" />
+                          ) : (
+                            <Badge variant="dot" color={color} size="sm">
+                              {states[status.state]}
+                            </Badge>
                           )}
-                        </>
-                      )}
-                    </Card>
-                    <Card>
-                      <Group justify="space-between">
-                        <Text size="sm" fw={650}>
-                          隧道延迟
+                        </Group>
+                        <Text fw={600} size="sm" truncate>
+                          {active?.name || "尚未连接设备"}
                         </Text>
-                        <Text fw={650} size="lg" className="metric-value">
-                          {status.latencyMS < 0
-                            ? "—"
-                            : status.latencyMS.toFixed(0)}{" "}
-                          <Text component="span" size="xs" c="dimmed">
-                            ms
+                        <Text size="xs" c="dimmed" mt={5}>
+                          {status.handshake
+                            ? `最近握手 ${new Date(status.handshake).toLocaleTimeString()}`
+                            : status.profileID
+                              ? "尚未完成握手，隧道未连通"
+                              : "尚未握手"}
+                        </Text>
+                        {status.profileID && (
+                          <>
+                            <Divider my="sm" />
+                            <Stack gap={7}>
+                              <Text size="xs">
+                                网卡：
+                                {status.network.adapters?.join("、") ||
+                                  "仅 VPN 访问"}
+                              </Text>
+                              <Group gap={6}>
+                                <Badge
+                                  size="xs"
+                                  color={
+                                    status.network.forwarding ? "teal" : "gray"
+                                  }
+                                >
+                                  IP 转发
+                                </Badge>
+                                <Badge
+                                  size="xs"
+                                  color={
+                                    status.network.firewall ? "teal" : "gray"
+                                  }
+                                >
+                                  防火墙
+                                </Badge>
+                                <Badge
+                                  size="xs"
+                                  color={status.network.nat ? "teal" : "gray"}
+                                >
+                                  {status.network.nat ? "自动 NAT" : "路由模式"}
+                                </Badge>
+                              </Group>
+                            </Stack>
+                            {!connectedHere && (
+                              <Button
+                                fullWidth
+                                variant="subtle"
+                                size="xs"
+                                color="red"
+                                mt="md"
+                                onClick={disconnect}
+                                disabled={busy}
+                              >
+                                断开 {active?.name}
+                              </Button>
+                            )}
+                          </>
+                        )}
+                      </Card>
+                      <Card>
+                        <Group justify="space-between">
+                          <Text size="sm" fw={650}>
+                            隧道延迟
                           </Text>
-                        </Text>
-                      </Group>
-                      <Sparkline
-                        data={history.map((h) => h.latencyMS)}
-                        color="var(--mantine-color-teal-8)"
-                        label="隧道延迟趋势"
-                      />
-                      <Text size="xs" c="dimmed">
-                        到云端的 ICMP 往返时间
-                      </Text>
-                    </Card>
-                    <Card>
-                      <Text size="sm" fw={650} mb="sm">
-                        实时吞吐
-                      </Text>
-                      <Group justify="space-between">
-                        <Group gap={4}>
-                          <IconArrowDown size={14} color="#3984ce" />
-                          <Text size="xs" fw={650} className="metric-value">
-                            接收 {formatBytes(status.rxBps)}/s
+                          <Text fw={650} size="lg" className="metric-value">
+                            {status.latencyMS < 0
+                              ? "—"
+                              : status.latencyMS.toFixed(0)}{" "}
+                            <Text component="span" size="xs" c="dimmed">
+                              ms
+                            </Text>
                           </Text>
                         </Group>
-                        <Group gap={4}>
-                          <IconArrowUp size={14} color="#8565cf" />
-                          <Text size="xs" fw={650} className="metric-value">
-                            发送 {formatBytes(status.txBps)}/s
-                          </Text>
-                        </Group>
-                      </Group>
-                      <Sparkline
-                        data={history.map((h) => h.rxBps)}
-                        color="#3984ce"
-                        label="下载吞吐趋势"
-                      />
-                      <Sparkline
-                        data={history.map((h) => h.txBps)}
-                        color="#8565cf"
-                        label="上传吞吐趋势"
-                      />
-                      <Group justify="space-between">
-                        <Text size="xs" c="dimmed">
-                          累计收 {formatBytes(status.rxBytes)}
+                        <Sparkline
+                          data={history.map((h) => h.latencyMS)}
+                          color="var(--mantine-color-teal-8)"
+                          label="隧道延迟趋势"
+                        />
+                      </Card>
+                      <Card>
+                        <Text size="sm" fw={650} mb="xs">
+                          流量信息
                         </Text>
-                        <Text size="xs" c="dimmed">
-                          发 {formatBytes(status.txBytes)}
-                        </Text>
-                      </Group>
-                    </Card>
-                  </Stack>
-                </div>
+                        <div className="traffic-grid">
+                          <div>
+                            <Group gap={4} c="#3984ce">
+                              <IconArrowDown size={14} />
+                              <Text size="xs">下行</Text>
+                            </Group>
+                            <Text size="sm" fw={650} className="metric-value">
+                              {formatBytes(status.rxBps)}/s
+                            </Text>
+                            <Text size="xs" c="dimmed">
+                              累计 {formatBytes(status.rxBytes)}
+                            </Text>
+                            <Sparkline
+                              data={history.map((h) => h.rxBps)}
+                              color="#3984ce"
+                              label="下载吞吐趋势"
+                            />
+                          </div>
+                          <div>
+                            <Group gap={4} c="#8565cf">
+                              <IconArrowUp size={14} />
+                              <Text size="xs">上行</Text>
+                            </Group>
+                            <Text size="sm" fw={650} className="metric-value">
+                              {formatBytes(status.txBps)}/s
+                            </Text>
+                            <Text size="xs" c="dimmed">
+                              累计 {formatBytes(status.txBytes)}
+                            </Text>
+                            <Sparkline
+                              data={history.map((h) => h.txBps)}
+                              color="#8565cf"
+                              label="上传吞吐趋势"
+                            />
+                          </div>
+                        </div>
+                      </Card>
+                    </Stack>
+                  </div>
+                </Tabs>
               </>
             ) : (
               <Paper withBorder p="xl" ta="center">

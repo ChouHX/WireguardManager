@@ -11,7 +11,6 @@ import {
 } from "@mantine/core";
 import { IconCheck, IconCopy } from "@tabler/icons-react";
 import type { Device, Status } from "./api";
-import { formatBytes } from "./format";
 
 function InfoRow({
   label,
@@ -71,7 +70,7 @@ export function TunnelOverview({
           WireGuard
         </Badge>
       </Group>
-      <Table withRowBorders={false} verticalSpacing={6} horizontalSpacing={0}>
+      <Table withRowBorders={false} verticalSpacing={5} horizontalSpacing={0}>
         <Table.Tbody>
           <InfoRow
             label="隧道地址"
@@ -87,14 +86,6 @@ export function TunnelOverview({
             copy
           />
           <InfoRow
-            label="累计接收"
-            value={formatBytes(selectedActive ? status.rxBytes : 0)}
-          />
-          <InfoRow
-            label="累计发送"
-            value={formatBytes(selectedActive ? status.txBytes : 0)}
-          />
-          <InfoRow
             label="监听端口"
             value={d?.listenPort ? String(d.listenPort) : "自动分配"}
           />
@@ -106,7 +97,7 @@ export function TunnelOverview({
       <Text size="sm" fw={650} mb="xs">
         Peer · 云端
       </Text>
-      <Table withRowBorders={false} verticalSpacing={6} horizontalSpacing={0}>
+      <Table withRowBorders={false} verticalSpacing={5} horizontalSpacing={0}>
         <Table.Tbody>
           <InfoRow label="对端公钥" value={d?.peerPublicKey} copy />
           <InfoRow label="端点" value={d?.endpoint} copy />
@@ -125,11 +116,6 @@ export function TunnelOverview({
           />
         </Table.Tbody>
       </Table>
-      {!d && (
-        <Text size="xs" c="dimmed" mt="sm">
-          连接后显示驱动的端点、端口和当前路由信息。
-        </Text>
-      )}
     </Card>
   );
 }

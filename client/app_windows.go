@@ -24,9 +24,31 @@ type App struct {
 	tray         *systemTray
 	exiting      atomic.Bool
 	quitPending  atomic.Bool
+	layoutMu     sync.Mutex
+	wideLayout   bool
 }
 
 func newApp() *App { return &App{} }
+
+// SetWindowLayout follows authentication transitions, not device refreshes.
+// This also returns to the compact login window after a session expires.
+func (a *App) SetWindowLayout(authenticated bool) {
+	a.layoutMu.Lock()
+	defer a.layoutMu.Unlock()
+	if a.wideLayout == authenticated {
+		return
+	}
+	a.wideLayout = authenticated
+	wailsruntime.WindowUnmaximise(a.ctx)
+	if authenticated {
+		wailsruntime.WindowSetMinSize(a.ctx, 850, 600)
+		wailsruntime.WindowSetSize(a.ctx, 1000, 660)
+	} else {
+		wailsruntime.WindowSetMinSize(a.ctx, 380, 440)
+		wailsruntime.WindowSetSize(a.ctx, 420, 480)
+	}
+	wailsruntime.WindowCenter(a.ctx)
+}
 func (a *App) startup(ctx context.Context) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

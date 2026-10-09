@@ -32,18 +32,6 @@ body,
 body {
   margin: 0;
   background-color: var(--mantine-color-body);
-  background-image:
-    linear-gradient(rgba(18, 20, 24, 0.045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(18, 20, 24, 0.045) 1px, transparent 1px),
-    radial-gradient(
-      1200px 420px at 82% -8%,
-      rgba(220, 35, 24, 0.09),
-      transparent 62%
-    );
-  background-size:
-    24px 24px,
-    24px 24px,
-    100% 100%;
 }
 button,
 input,
@@ -52,8 +40,8 @@ textarea {
 }
 .desktop-shell {
   display: grid;
-  grid-template-columns: 226px minmax(0, 1fr);
-  grid-template-rows: 52px minmax(0, 1fr);
+  grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-rows: 46px minmax(0, 1fr);
   height: 100%;
   overflow: hidden;
 }
@@ -126,7 +114,7 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 10px;
+  padding: 8px;
   border: 0;
   background: transparent;
   border-radius: var(--mantine-radius-xs);
@@ -189,11 +177,11 @@ textarea {
 .detail-content {
   max-width: 1160px;
   margin: auto;
-  padding: 14px 16px;
+  padding: 12px;
 }
 .detail-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 244px;
+  grid-template-columns: minmax(0, 1fr) 230px;
   gap: 12px;
   align-items: start;
 }
@@ -236,76 +224,50 @@ textarea {
   background: rgba(255, 255, 255, 0.75);
 }
 .login-shell {
-  min-height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-}
-.login-card {
-  display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
-  width: 100%;
-  max-width: 840px;
-  min-height: 480px;
-  overflow: hidden;
-  border: 1px solid var(--mantine-color-default-border);
-  border-radius: var(--mantine-radius-sm);
-  box-shadow: 0 24px 64px -24px rgba(0, 0, 0, 0.42);
-  background: #fff;
-}
-.login-story {
-  background:
-    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    radial-gradient(
-      600px 420px at 12% 8%,
-      rgba(220, 35, 24, 0.36),
-      transparent 60%
-    ),
-    linear-gradient(155deg, #1b1d23, #101216 60%, #0c0d10);
-  background-size:
-    34px 34px,
-    34px 34px,
-    100% 100%,
-    100% 100%;
-  color: #fff;
-  padding: 26px;
+  height: 100%;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  gap: 24px;
-}
-.login-story .brand-subtitle {
-  color: #a9b1bd;
-}
-.login-story h1 {
-  font-size: 26px;
-  line-height: 1.3;
-  font-weight: 650;
-}
-.story-copy {
-  font-size: 12.5px;
-  line-height: 1.6;
-  color: #a9b1bd;
-}
-.login-story .mantine-Group-root > svg {
-  flex-shrink: 0;
+  background: #fff;
 }
 .login-main {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 28px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 28px 28px 16px;
 }
-.server-label {
-  background: var(--wm-surface);
-  color: var(--mantine-color-dimmed);
-  border: 1px solid var(--mantine-color-default-border);
+.login-activity {
+  position: static;
+  padding: 8px 16px;
+  min-height: 32px;
+  border-top: 1px solid var(--mantine-color-default-border);
+}
+.traffic-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.traffic-grid > div + div {
+  border-left: 1px solid var(--mantine-color-default-border);
+  padding-left: 10px;
+}
+.traffic-grid .metric-value {
+  white-space: nowrap;
+}
+.traffic-grid .sparkline {
+  margin-bottom: 0;
+}
+.configuration-column > .mantine-Tabs-panel {
+  height: 100%;
+}
+.detail-grid .mantine-Card-root {
+  padding: 12px;
+}
+.device-heading h3 {
+  font-size: 18px;
 }
 @media (max-width: 960px) {
   .desktop-shell {
-    grid-template-columns: 210px minmax(0, 1fr);
+    grid-template-columns: 190px minmax(0, 1fr);
   }
   .detail-content {
     padding: 12px;
@@ -313,9 +275,6 @@ textarea {
   .detail-grid {
     grid-template-columns: minmax(0, 1fr) 220px;
     gap: 9px;
-  }
-  .login-card {
-    grid-template-columns: 290px minmax(0, 1fr);
   }
 }
 @media (max-width: 740px) {
@@ -333,17 +292,10 @@ textarea {
   .server-address > p {
     display: none;
   }
-  .login-card {
-    grid-template-columns: minmax(0, 1fr);
-    max-width: 420px;
-  }
-  .login-story {
-    display: none;
-  }
 }
 
 .address-input .mantine-TagsInput-input {
-  min-height: 54px;
+  min-height: 34px;
   align-items: flex-start;
 }
 .address-input .mantine-Pill-label {

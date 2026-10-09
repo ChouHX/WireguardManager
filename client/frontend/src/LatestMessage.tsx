@@ -36,7 +36,7 @@ export function LatestMessage({ entry }: { entry: ActivityMessage | null }) {
           </Text>
         </UnstyledButton>
       </Popover.Target>
-      <Popover.Dropdown>
+      <Popover.Dropdown style={{ maxWidth: "calc(100vw - 24px)" }}>
         <Group justify="space-between" mb="xs">
           <Badge color={entry?.level} size="xs">
             最新消息 · {entry?.time}
@@ -51,7 +51,12 @@ export function LatestMessage({ entry }: { entry: ActivityMessage | null }) {
         </Group>
         <Text
           size="xs"
-          style={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap", maxHeight: 240, overflowY: "auto" }}
+          style={{
+            overflowWrap: "anywhere",
+            whiteSpace: "pre-wrap",
+            maxHeight: 240,
+            overflowY: "auto",
+          }}
         >
           {entry?.message}
         </Text>

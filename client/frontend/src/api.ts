@@ -58,6 +58,7 @@ export interface Status {
   network: Network;
 }
 interface API {
+  SetWindowLayout(authenticated: boolean): Promise<void>;
   Bootstrap(): Promise<Desktop>;
   Login(email: string, password: string, remember: boolean): Promise<Desktop>;
   Logout(): Promise<Desktop>;

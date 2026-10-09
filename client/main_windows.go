@@ -45,7 +45,7 @@ func main() {
 	defer release()
 	app := newApp()
 	err = wails.Run(&options.App{
-		Title: "WireGuard Manager · 现场连接", Width: 1080, Height: 720, MinWidth: 850, MinHeight: 620,
+		Title: "WireGuard Manager · 现场连接", Width: 420, Height: 480, MinWidth: 380, MinHeight: 440,
 		AssetServer:      &assetserver.Options{Assets: assets},
 		BackgroundColour: &options.RGBA{R: 246, G: 248, B: 250, A: 255},
 		OnStartup:        app.startup, OnBeforeClose: app.beforeClose, OnShutdown: app.shutdown, Bind: []interface{}{app},

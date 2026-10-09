@@ -40,7 +40,6 @@ export const addressDraft = (value: string, search: string) =>
 
 export function AddressInput({
   id,
-  descriptionID,
   value,
   search,
   onChange,
@@ -49,7 +48,6 @@ export function AddressInput({
   placeholder,
 }: {
   id: string;
-  descriptionID: string;
   value: string;
   search: string;
   onChange: (value: string) => void;
@@ -60,7 +58,6 @@ export function AddressInput({
   return (
     <TagsInput
       id={id}
-      aria-describedby={descriptionID}
       value={splitAddresses(value)}
       onChange={(values) => onChange(addressDraft(values.join(","), ""))}
       searchValue={search}
