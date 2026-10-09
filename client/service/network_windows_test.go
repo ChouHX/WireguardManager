@@ -5,6 +5,7 @@ package service
 import (
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,6 +82,49 @@ func TestWindowsFirewallLifecycle(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWindowsFirewallMultipleNetworks(t *testing.T) {
+	requireNetworkIntegration(t)
+	adapters, err := (&WindowsBackend{}).Adapters()
+	if err != nil || len(adapters) == 0 {
+		t.Fatal("no usable adapter", err)
+	}
+	for _, remote := range []string{"192.0.2.0/24,198.51.100.0/24,203.0.113.7/32", "192.0.2.0/24, 198.51.100.0/24, 203.0.113.7/32"} {
+		t.Run(remote, func(t *testing.T) {
+			name := fmt.Sprintf("WGM-Desktop-multi-test-%d", time.Now().UnixNano())
+			defs := []firewallRule{{name + "-in", adapters[0].Name, remote, 1}, {name + "-out", adapters[0].Name, remote, 2}}
+			t.Cleanup(func() {
+				if err := removeFirewallRules(defs); err != nil {
+					t.Error(err)
+				}
+			})
+			if err := addFirewallRules(defs); err != nil {
+				t.Fatal(err)
+			}
+			if err := withFirewall(func(collection *ole.IDispatch) error {
+				for _, def := range defs {
+					v, err := oleutil.CallMethod(collection, "Item", def.Name)
+					if err != nil {
+						return err
+					}
+					defer v.Clear()
+					actual, err := comString(v.ToIDispatch(), "RemoteAddresses")
+					if err != nil {
+						return err
+					}
+					for _, address := range []string{"192.0.2.0", "198.51.100.0", "203.0.113.7"} {
+						if !strings.Contains(actual, address) || strings.Contains(actual, "*") {
+							return fmt.Errorf("multi-network restriction lost: %s", actual)
+						}
+					}
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 func TestWindowsNATLifecycle(t *testing.T) {
