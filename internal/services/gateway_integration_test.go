@@ -10,13 +10,12 @@ import (
 	"strings"
 	"testing"
 
-	"cloud-platform/gateway"
 	"cloud-platform/internal/models"
 )
 
 // All namespaces AND filesystem mutations live inside the disposable container.
-// The LAN device has no route to WireGuard: replies prove the bootstrap's NAT.
-func TestGatewayBootstrapIntegration(t *testing.T) {
+// The LAN device has no route to WireGuard: replies prove the gateway's preconfigured NAT.
+func TestGatewayRoutingIntegration(t *testing.T) {
 	if os.Getenv("WGM_ISOLATED_NETWORK_TEST") != "1" {
 		t.Skip("requires disposable container")
 	}
@@ -60,21 +59,19 @@ func TestGatewayBootstrapIntegration(t *testing.T) {
 	gw("iptables", "-A", "FORWARD", "-j", "EXISTING-APP")
 	gw("iptables", "-t", "nat", "-N", "EXISTING-NAT")
 	gw("iptables", "-t", "nat", "-A", "POSTROUTING", "-j", "EXISTING-NAT")
-	beforeRules := gw("iptables-save")
-	beforeRoutes := gw("ip", "-4", "route", "show", "table", "main")
 	svc := NewUserNetworkService(t.TempDir(), "10.200", 51827, "fixture-u0", 1380)
 	priv, pub, err := svc.wireguardService.GenerateKeys()
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := &models.WireguardServer{WgInterface: "wgm7", WgAddress: tunnelAddress(7), WgPort: 51827, WgPrivateKey: priv, WgPublicKey: pub, NetworkMode: NetworkModeMultiInterface, Enabled: true}
-	if err = svc.createNetwork(server, "bootstrap-test"); err != nil {
+	if err = svc.createNetwork(server, "gateway-routing-test"); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = svc.interfaceService.Destroy(server.WgInterface, server.WgAddress) })
 	dir := t.TempDir()
 	var gatewayPub string
-	for i, ns := range []string{"fixture-gateway", "fixture-access"} {
+	for i := 0; i < 2; i++ {
 		key, public, err := svc.wireguardService.GenerateKeys()
 		if err != nil {
 			t.Fatal(err)
@@ -88,14 +85,21 @@ func TestGatewayBootstrapIntegration(t *testing.T) {
 		}
 		if i == 0 {
 			gatewayPub = public
-			cfg := fmt.Sprintf("[Interface]\nPrivateKey = %s\nAddress = %s/32\n\n[Peer]\nPublicKey = %s\nEndpoint = 198.18.9.1:51827\nAllowedIPs = 10.100.7.0/24\nPersistentKeepalive = 1\n", key, address, pub)
-			path := filepath.Join(dir, "setup.sh")
-			if err = os.WriteFile(path, []byte(gateway.SetupScript(cfg)), 0600); err != nil {
+			// Model an embedded gateway that already owns its forwarding setup.
+			cfg := fmt.Sprintf("[Interface]\nPrivateKey = %s\n[Peer]\nPublicKey = %s\nEndpoint = 198.18.9.1:51827\nAllowedIPs = 10.100.7.0/24\nPersistentKeepalive = 1\n", key, pub)
+			path := filepath.Join(dir, "gateway.conf")
+			if err = os.WriteFile(path, []byte(cfg), 0600); err != nil {
 				t.Fatal(err)
 			}
-			gw("sh", path)
-			// Running the same enrollment again must not install duplicate rules.
-			gw("sh", path)
+			gw("ip", "link", "add", "wgm-gw", "type", "wireguard")
+			gw("wg", "setconf", "wgm-gw", path)
+			gw("ip", "addr", "add", address+"/32", "dev", "wgm-gw")
+			gw("ip", "link", "set", "wgm-gw", "up")
+			gw("ip", "route", "add", "10.100.7.0/24", "dev", "wgm-gw")
+			gw("sysctl", "-w", "net.ipv4.ip_forward=1")
+			gw("iptables", "-A", "FORWARD", "-i", "wgm-gw", "-o", "lan", "-s", "10.100.7.0/24", "-j", "ACCEPT")
+			gw("iptables", "-A", "FORWARD", "-i", "lan", "-o", "wgm-gw", "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT")
+			gw("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", "10.100.7.0/24", "-o", "lan", "-j", "MASQUERADE")
 		} else {
 			path := filepath.Join(dir, "access.key")
 			if err = os.WriteFile(path, []byte(key), 0600); err != nil {
@@ -109,14 +113,11 @@ func TestGatewayBootstrapIntegration(t *testing.T) {
 				access("ip", "route", "add", prefix, "dev", "vpn")
 			}
 		}
-		_ = ns
 	}
 	access("ping", "-c", "2", "-W", "3", "10.100.7.1")
-	configBefore, err := os.ReadFile("/etc/wireguard-manager/wireguard.conf")
-	if err != nil {
-		t.Fatal(err)
-	}
-	routesBefore := gw("ip", "-4", "route", "show", "table", "main")
+	configBefore := []byte(gw("wg", "showconf", "wgm-gw"))
+	beforeRules := gw("iptables-save")
+	beforeRoutes := gw("ip", "-4", "route", "show", "table", "main")
 	tryPing := func(target string) error {
 		return exec.Command("ip", "netns", "exec", "fixture-access", "ping", "-c", "1", "-W", "1", target).Run()
 	}
@@ -142,17 +143,10 @@ func TestGatewayBootstrapIntegration(t *testing.T) {
 	if tryPing("192.168.44.100") == nil {
 		t.Fatal("removed cloud target still reachable")
 	}
-	configAfter, err := os.ReadFile("/etc/wireguard-manager/wireguard.conf")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sha256.Sum256(configBefore) != sha256.Sum256(configAfter) || routesBefore != gw("ip", "-4", "route", "show", "table", "main") {
+	configAfter := []byte(gw("wg", "showconf", "wgm-gw"))
+	if sha256.Sum256(configBefore) != sha256.Sum256(configAfter) {
 		t.Fatal("target change modified gateway")
 	}
-	if !strings.Contains(gw("iptables", "-t", "nat", "-v", "-n", "-L", "WGM-GATEWAY-NAT"), "MASQUERADE") {
-		t.Fatal("missing return NAT")
-	}
-	gw("/usr/libexec/wgm-gateway", "down")
 	afterRules := gw("iptables-save")
 	// Ignore changing dump timestamps, all rules and counters must otherwise match.
 	trim := func(s string) string {
@@ -165,11 +159,7 @@ func TestGatewayBootstrapIntegration(t *testing.T) {
 		return regexp.MustCompile(`\[\d+:\d+\]`).ReplaceAllString(strings.Join(lines, "\n"), "[counters]")
 	}
 	if trim(beforeRules) != trim(afterRules) || beforeRoutes != gw("ip", "-4", "route", "show", "table", "main") {
-		t.Fatalf("gateway cleanup changed unrelated networking: rules before=%s after=%s routes before=%s after=%s", trim(beforeRules), trim(afterRules), beforeRoutes, gw("ip", "-4", "route", "show", "table", "main"))
-	}
-	gw("/usr/libexec/wgm-gateway", "uninstall")
-	if _, err = os.Stat("/etc/wireguard-manager"); !os.IsNotExist(err) {
-		t.Fatal("enrollment files remained")
+		t.Fatalf("cloud route changes modified gateway networking: rules before=%s after=%s routes before=%s after=%s", trim(beforeRules), trim(afterRules), beforeRoutes, gw("ip", "-4", "route", "show", "table", "main"))
 	}
 	t.Log("cloud-only target add/change/removal, routed LAN replies through NAT, stable gateway config, and unrelated network preservation passed")
 }

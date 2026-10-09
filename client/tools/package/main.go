@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/tc-hib/winres"
@@ -137,7 +138,11 @@ func build(archive, serverURL string) error {
 	}
 	exe := filepath.Join(out, "WireguardManagerDesktop.exe")
 	fmt.Println("Building Windows amd64 with embedded WireGuardNT and administrator manifest")
-	cmd := exec.Command("go", "build", "-trimpath", "-tags", "desktop,production,load_wgnt_from_rsrc", "-ldflags", "-s -w -H=windowsgui -X main.serverURLBase64="+encodedURL, "-o", exe, ".")
+	commit := "dev"
+	if revision, err := exec.Command("git", "rev-parse", "--short=8", "HEAD").Output(); err == nil {
+		commit = strings.TrimSpace(string(revision))
+	}
+	cmd := exec.Command("go", "build", "-trimpath", "-tags", "desktop,production,load_wgnt_from_rsrc", "-ldflags", "-s -w -H=windowsgui -X main.serverURLBase64="+encodedURL+" -X main.buildCommit="+commit, "-o", exe, ".")
 	cmd.Env = append(os.Environ(), "GOOS=windows", "GOARCH=amd64", "CGO_ENABLED=0")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

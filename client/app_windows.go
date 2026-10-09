@@ -30,6 +30,8 @@ type App struct {
 
 func newApp() *App { return &App{} }
 
+func (a *App) BuildInfo() BuildInfo { return applicationBuildInfo() }
+
 // SetWindowLayout follows authentication transitions, not device refreshes.
 // This also returns to the compact login window after a session expires.
 func (a *App) SetWindowLayout(authenticated bool) {
@@ -238,24 +240,4 @@ func (a *App) Status() (service.Status, error) {
 		return service.Status{}, err
 	}
 	return a.desktop.Status(a.ctx), nil
-}
-
-func (a *App) DownloadGatewaySetup(id string) (string, error) {
-	a.operations.Lock()
-	defer a.operations.Unlock()
-	if err := a.ready(); err != nil {
-		return "", err
-	}
-	script, err := a.desktop.GatewaySetup(a.ctx, id)
-	if err != nil {
-		return "", err
-	}
-	path, err := wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{Title: "保存网关首次接入脚本", DefaultFilename: "wireguard-gateway-" + id + ".sh", Filters: []wailsruntime.FileFilter{{DisplayName: "Shell 脚本", Pattern: "*.sh"}}})
-	if err != nil || path == "" {
-		return "", err
-	}
-	if err = service.AtomicWrite(path, []byte(script)); err != nil {
-		return "", err
-	}
-	return "网关接入脚本已保存；将它复制到目标网关并以 root 执行一次", nil
 }

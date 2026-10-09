@@ -215,19 +215,12 @@ func TestTruncatedUnauthorizedResponseStillExpiresLogin(t *testing.T) {
 	}
 }
 
-func TestAccessRegistrationAndGatewayBootstrapAPI(t *testing.T) {
+func TestAccessRegistrationAPI(t *testing.T) {
 	for _, mode := range []string{"ok", "wrong-identity", "old-server"} {
 		t.Run(mode, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Header.Get("Authorization") != "Bearer access-test" {
 					t.Error("missing auth")
-				}
-				if r.URL.Path == "/api/wireguard/peers/2/config" {
-					if r.URL.Query().Get("format") != "gateway" {
-						t.Error("missing gateway export format")
-					}
-					w.Write([]byte(`{"success":true,"data":{"setup":"#!/bin/sh\n# gateway enrollment"}}`))
-					return
 				}
 				if r.Method != "POST" || r.URL.Path != "/api/wireguard/access" {
 					t.Error("wrong access endpoint")
@@ -256,10 +249,6 @@ func TestAccessRegistrationAndGatewayBootstrapAPI(t *testing.T) {
 			if mode == "ok" {
 				if err != nil || access.Peer.Role != "access" || access.Peer.ID != 3 {
 					t.Fatal("registration failed", err)
-				}
-				setup, err := c.GatewaySetup(context.Background(), 2)
-				if err != nil || !strings.HasPrefix(setup, "#!/bin/sh") {
-					t.Fatal("setup export failed", err)
 				}
 			} else if err == nil {
 				t.Fatal("incompatible registration accepted")

@@ -65,6 +65,7 @@ jobs:
           if (-not $check.apiCallable -or $check.resourceBytes -le 0) { throw 'Embedded driver is not callable' }
           $expectedServer = $env:WGM_SERVER_URL.Trim().TrimEnd('/') -creplace '/api$', ''
           if ($check.serverURL -ne $expectedServer) { throw 'Embedded management server URL does not match build configuration' }
+          if ($check.version -ne (Get-Content VERSION -Raw).Trim() -or $check.commit -ne $env:GITHUB_SHA.Substring(0, 8)) { throw 'Packaged version or commit does not match this build' }
       - name: Verify packaged application icon and native tray lifecycle
         working-directory: client
         run: |

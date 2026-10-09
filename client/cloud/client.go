@@ -142,8 +142,6 @@ func operationName(method, path string) string {
 		return "恢复登录"
 	case path == "/api/wireguard/access":
 		return "获取本机访问配置"
-	case strings.Contains(path, "/config?format=gateway"):
-		return "下载网关接入脚本"
 	case strings.HasSuffix(path, "/config"):
 		return "获取设备配置"
 	case method == "PATCH":
@@ -228,16 +226,6 @@ func (c *Client) Access(ctx context.Context, publicKey, name string) (AccessConf
 		return data, errors.New("服务端返回了无效的本机访问配置")
 	}
 	return data, nil
-}
-func (c *Client) GatewaySetup(ctx context.Context, id uint) (string, error) {
-	var data struct {
-		Setup string `json:"setup"`
-	}
-	err := c.request(ctx, "GET", devicePath(id)+"/config?format=gateway", nil, &data)
-	if err == nil && data.Setup == "" {
-		err = errors.New("服务端尚不支持网关接入脚本，请更新服务端")
-	}
-	return data.Setup, err
 }
 func (c *Client) SetLANs(ctx context.Context, id uint, lans string) (Device, error) {
 	var device Device

@@ -56,6 +56,7 @@ export interface Status {
   network: Network;
 }
 interface API {
+  BuildInfo(): Promise<{ version: string; commit: string }>;
   SetWindowLayout(authenticated: boolean): Promise<void>;
   Bootstrap(): Promise<Desktop>;
   Login(email: string, password: string, remember: boolean): Promise<Desktop>;
@@ -65,7 +66,6 @@ interface API {
   DetectLANs(): Promise<Detection>;
   SaveDevice(id: string, targets: string): Promise<Desktop>;
   Connect(id: string, targets: string): Promise<Desktop>;
-  DownloadGatewaySetup(id: string): Promise<string>;
   Disconnect(): Promise<void>;
   Status(): Promise<Status>;
   Quit(): Promise<void>;

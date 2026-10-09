@@ -24,7 +24,6 @@ type CloudAPI interface {
 	Me(context.Context) (cloud.User, error)
 	Devices(context.Context) ([]cloud.Device, error)
 	Access(context.Context, string, string) (cloud.AccessConfig, error)
-	GatewaySetup(context.Context, uint) (string, error)
 	SetLANs(context.Context, uint, string) (cloud.Device, error)
 }
 type DeviceView struct {
@@ -343,19 +342,6 @@ func (d *Desktop) Connect(ctx context.Context, id, targets string) (DesktopView,
 		return d.view(""), err
 	}
 	return d.view("已使用本机独立身份连接，正在等待云端握手"), nil
-}
-func (d *Desktop) GatewaySetup(ctx context.Context, id string) (string, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	dev, err := d.find(id)
-	if err != nil {
-		return "", err
-	}
-	setup, err := d.api.GatewaySetup(ctx, dev.ID)
-	if err != nil {
-		return "", d.apiError(err)
-	}
-	return setup, nil
 }
 func (d *Desktop) Disconnect() error {
 	d.mu.Lock()

@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -110,24 +109,5 @@ func TestAccessRegistrationRejectsDisabledServer(t *testing.T) {
 	database.DB.Model(&models.WireguardPeer{}).Count(&n)
 	if n != 1 {
 		t.Fatal("disabled tenant got new peer")
-	}
-}
-func TestGatewaySetupExportChecksOwnership(t *testing.T) {
-	for _, own := range []bool{true, false} {
-		t.Run(strconv.FormatBool(own), func(t *testing.T) {
-			f := setupPeerConfigFixture(t, "", "10.100.1.1/24", "10.100.1.2")
-			if !own {
-				database.DB.Model(&f.peer).Update("server_id", f.server.ID+1)
-			}
-			f.context.Request = httptest.NewRequest("GET", "/api/wireguard/peers/1/config?format=gateway", nil)
-			GetPeerConfig(f.context)
-			if own {
-				if f.recorder.Code != 200 || !strings.Contains(f.recorder.Body.String(), "WGM_CONFIG") {
-					t.Fatal("missing setup export")
-				}
-			} else if f.recorder.Code != 403 {
-				t.Fatal("cross tenant setup export")
-			}
-		})
 	}
 }

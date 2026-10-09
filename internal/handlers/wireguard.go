@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"cloud-platform/gateway"
 	"cloud-platform/internal/config"
 	"cloud-platform/internal/database"
 	"cloud-platform/internal/models"
@@ -1268,11 +1267,6 @@ PersistentKeepalive = %d
 		allowedIPs,
 		peer.PersistentKeepalive,
 	)
-
-	if c.Query("format") == "gateway" {
-		response.Success(c, "Gateway setup exported", map[string]string{"setup": gateway.SetupScript(configContent)})
-		return
-	}
 
 	// 返回JSON格式的配置文本
 	response.Success(c, "Config retrieved successfully", map[string]string{

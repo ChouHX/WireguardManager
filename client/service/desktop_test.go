@@ -65,9 +65,6 @@ func (m *mockCloud) Access(_ context.Context, publicKey, name string) (cloud.Acc
 	}
 	return cloud.AccessConfig{Peer: cloud.Device{ID: 99, Role: "access", PublicKey: publicKey, Address: "10.100.1.3"}, Config: strings.Join(config, "\n")}, nil
 }
-func (m *mockCloud) GatewaySetup(context.Context, uint) (string, error) {
-	return "#!/bin/sh\n# secret gateway installer", nil
-}
 func (m *mockCloud) SetLANs(_ context.Context, id uint, lans string) (cloud.Device, error) {
 	m.mutations++
 	for i := range m.devices {
@@ -271,8 +268,8 @@ func TestDesktopHidesAccessPeersAndRejectsInvalidTargets(t *testing.T) {
 	if err != nil || len(view.Devices) != 2 {
 		t.Fatal("access terminal exposed as gateway")
 	}
-	if _, err = d.GatewaySetup(context.Background(), "99"); err == nil {
-		t.Fatal("access identity exported as gateway")
+	if _, err = d.find("99"); err == nil {
+		t.Fatal("access identity selectable as gateway")
 	}
 	before := api.listCalls
 	for _, target := range []string{"invalid", "10.100.1.2", "10.0.0.0/8", "0.0.0.0/0"} {

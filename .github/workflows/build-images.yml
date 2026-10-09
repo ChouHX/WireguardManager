@@ -6,7 +6,6 @@ on:
       - main
     paths:
       - 'internal/**'
-      - 'gateway/**'
       - 'main.go'
       - 'go.mod'
       - 'go.sum'
@@ -75,7 +74,7 @@ jobs:
           go-version-file: go.mod
       - name: Test server and isolated tenant networking
         run: |
-          go test . ./internal/... ./gateway
+          go test . ./internal/...
           bash scripts/test_network.sh
 
       - name: Build and push

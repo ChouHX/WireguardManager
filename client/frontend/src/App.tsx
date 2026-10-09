@@ -35,7 +35,6 @@ import {
   IconPlugConnectedX,
   IconRefresh,
   IconSearch,
-  IconDownload,
 } from "@tabler/icons-react";
 import { notifications } from "@mantine/notifications";
 import { AddressInput, addressDraft } from "./AddressInput";
@@ -151,6 +150,17 @@ function Sparkline({
   );
 }
 export default function App() {
+  const [build, setBuild] = useState({ version: "", commit: "" });
+  useEffect(() => {
+    void window.go?.main.App.BuildInfo?.().then(setBuild).catch(() => {});
+  }, []);
+  const version = (
+    <Tooltip label={`构建 ${build.commit || "未知"}`}>
+      <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>
+        {build.version ? `v${build.version}` : "版本未标注"}
+      </Text>
+    </Tooltip>
+  );
   const [state, setState] = useState<Desktop>(empty),
     [status, setStatus] = useState<Status>(offline),
     [selected, setSelected] = useState(""),
@@ -316,6 +326,7 @@ export default function App() {
         addressDraft(lans, lanSearch),
       );
       apply(next, true);
+      setNotice(next.message);
     });
   const disconnect = () =>
     void run(async () => {
@@ -330,11 +341,6 @@ export default function App() {
       );
       apply(next, true);
       setNotice(next.message);
-    });
-  const downloadSetup = () =>
-    void run(async () => {
-      const message = await api().DownloadGatewaySetup(selected);
-      if (message) setNotice(message);
     });
   const authenticated = Boolean(state.user);
   useEffect(() => {
@@ -425,7 +431,10 @@ export default function App() {
           </form>
         </div>
         <div className="login-activity">
-          <LatestMessage entry={latestMessage} />
+          <Group w="100%" justify="space-between" wrap="nowrap" gap="xs">
+            <LatestMessage entry={latestMessage} />
+            {version}
+          </Group>
         </div>
       </main>
     );
@@ -593,7 +602,7 @@ export default function App() {
                       onClick={connect}
                       size="xs"
                     >
-                      {status.profileID ? "切换访问网关" : "访问此网关"}
+                      {status.profileID ? "切换连接" : "连接"}
                     </Button>
                   )}
                 </Group>
@@ -627,7 +636,7 @@ export default function App() {
                             <FieldLabel
                               id="gateway-targets"
                               label="转发目标 IP / 网段"
-                              help="云端将这些地址交给所选网关转发，本机同时添加访问路由。网关首次运行接入脚本后，后续修改无需重新配置网关。单个 IP 自动转为 /32；与本机局域网重叠时请指定具体 IP。"
+                              help="云端将这些地址交给所选设备转发。Windows 使用本机独立身份连接，不复用此设备的配置。设备自行完成转发初始化。单个 IP 自动转为 /32；与本机局域网重叠时请指定具体目标 IP。"
                             />
                             <AddressInput
                               id="gateway-targets"
@@ -643,15 +652,6 @@ export default function App() {
                             <Text size="xs" c="dimmed">保存后立即在云端生效</Text>
                             <Button variant="light" size="xs" disabled={locked} onClick={save}>保存转发目标</Button>
                           </Group>
-                          <Divider my="sm" />
-                          <Group justify="space-between" gap="xs">
-                            <FieldLabel
-                              id="gateway-setup"
-                              label="网关首次接入"
-                              help="在 OpenWrt 或 Linux 网关以 root 执行下载的脚本，完成 WireGuard、转发、回程 NAT 和开机启动。须预装 WireGuard 工具和防火墙组件。脚本含该网关密钥，请妥善保管。"
-                            />
-                            <Button aria-label="下载接入脚本" id="gateway-setup" size="compact-xs" variant="subtle" leftSection={<IconDownload size={14} />} disabled={busy} onClick={downloadSetup}>下载接入脚本</Button>
-                          </Group>
                         </Card>
                       </Tabs.Panel>
                     </div>
@@ -659,7 +659,7 @@ export default function App() {
                       <Card>
                         <Group justify="space-between" mb="sm">
                           <Text size="sm" fw={650}>
-                            当前连接
+                            本机连接
                           </Text>
                           {busy ? (
                             <Loader size="xs" />
@@ -682,7 +682,7 @@ export default function App() {
                         {status.profileID && (
                           <>
                             <Divider my="sm" />
-                            <Text size="xs" c="dimmed">本机独立访问隧道</Text>
+                            <Text size="xs" c="dimmed">本机独立身份 · 不占用设备配置</Text>
                             {!connectedHere && (
                               <Button
                                 fullWidth
@@ -782,6 +782,7 @@ export default function App() {
         <footer className="detail-footer">
           <Group justify="space-between" wrap="nowrap" gap="xs">
             <LatestMessage entry={latestMessage} />
+            {version}
             <Button
               size="compact-xs"
               variant="subtle"

@@ -65,9 +65,10 @@ func checkDriverCommand(args []string) int {
 	check, err := service.CheckDriver()
 	report := struct {
 		service.DriverCheck
+		BuildInfo
 		Error     string `json:"error,omitempty"`
 		ServerURL string `json:"serverURL"`
-	}{DriverCheck: check}
+	}{DriverCheck: check, BuildInfo: applicationBuildInfo()}
 	report.ServerURL, _ = deploymentServerURL()
 	if err != nil {
 		report.Error = err.Error()
