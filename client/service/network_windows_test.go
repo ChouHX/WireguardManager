@@ -91,7 +91,7 @@ func TestWindowsFirewallMultipleNetworks(t *testing.T) {
 	if err != nil || len(adapters) == 0 {
 		t.Fatal("no usable adapter", err)
 	}
-	for _, remote := range []string{"192.0.2.0/24,198.51.100.0/24,203.0.113.7/32", "192.0.2.0/24, 198.51.100.0/24, 203.0.113.7/32"} {
+	for _, remote := range []string{"192.0.2.0/24,198.51.100.0/24,203.0.113.7/32", "192.0.2.0/24, 198.51.100.0/24, 203.0.113.7/32", "10.0.0.0/24, 192.168.0.0/24, 192.168.10.0/24"} {
 		t.Run(remote, func(t *testing.T) {
 			name := fmt.Sprintf("WGM-Desktop-multi-test-%d", time.Now().UnixNano())
 			defs := []firewallRule{{name + "-in", adapters[0].Name, remote, 1}, {name + "-out", adapters[0].Name, remote, 2}}
@@ -114,7 +114,12 @@ func TestWindowsFirewallMultipleNetworks(t *testing.T) {
 					if err != nil {
 						return err
 					}
-					for _, address := range []string{"192.0.2.0", "198.51.100.0", "203.0.113.7"} {
+					expected, err := ParsePrefixes(remote)
+					if err != nil {
+						return err
+					}
+					for _, prefix := range expected {
+						address := prefix.Addr().String()
 						if !strings.Contains(actual, address) || strings.Contains(actual, "*") {
 							return fmt.Errorf("multi-network restriction lost: %s", actual)
 						}

@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActionIcon,
-  Alert,
   Avatar,
   Badge,
   Box,
@@ -43,6 +42,7 @@ import { notifications } from "@mantine/notifications";
 import { AddressInput, addressDraft } from "./AddressInput";
 import { TunnelOverview } from "./TunnelOverview";
 import { formatBytes } from "./format";
+import { LatestMessage, type ActivityMessage } from "./LatestMessage";
 import { WireGuardLogo } from "./WireGuardLogo";
 import {
   api,
@@ -137,6 +137,35 @@ export default function App() {
     [history, setHistory] = useState<Status[]>([]);
   const [lanSearch, setLANSearch] = useState(""),
     [targetSearch, setTargetSearch] = useState("");
+  const [latestMessage, setLatestMessage] = useState<ActivityMessage | null>(
+    null,
+  );
+  const lastToast = useRef({ message: "", at: 0 });
+  const report = useCallback(
+    (message: string, level: ActivityMessage["level"]) => {
+      if (!message) return;
+      const text = message.replace(/^Error:\s*/, "");
+      const now = Date.now();
+      if (
+        lastToast.current.message === text &&
+        now - lastToast.current.at < 3000
+      )
+        return;
+      lastToast.current = { message: text, at: now };
+      setLatestMessage({
+        message: text,
+        level,
+        time: new Date(now).toLocaleTimeString(),
+      });
+      notifications.show({
+        title: level === "red" ? "操作未完成" : "提示",
+        message: text,
+        color: level,
+        autoClose: level === "red" ? 8000 : 4500,
+      });
+    },
+    [],
+  );
   const activeID = useRef("");
   const selectedRef = useRef("");
   const device = state.devices.find((d) => d.id === selected);
@@ -226,27 +255,29 @@ export default function App() {
     };
   }, []);
   useEffect(() => {
-    if (notice && state.user)
-      notifications.show({
-        id: "operation-notice",
-        title: "操作完成",
-        message: notice,
-        color: "teal",
-        autoClose: 4500,
-      });
-  }, [notice]);
+    report(notice, "teal");
+  }, [notice, report]);
+  useEffect(() => {
+    report(status.network.warning, "yellow");
+  }, [status.network.warning, report]);
+  useEffect(() => {
+    report(status.error, "red");
+  }, [status.error, report]);
+  useEffect(() => {
+    report(error, "red");
+  }, [error, report]);
   useEffect(() => {
     const offError = window.runtime?.EventsOn("desktop:error", (message) =>
-      setError(message),
+      report(message, "red"),
     );
     const offNotice = window.runtime?.EventsOn("desktop:notice", (message) =>
-      setNotice(message),
+      report(message, "teal"),
     );
     return () => {
       offError?.();
       offNotice?.();
     };
-  }, []);
+  }, [report]);
   const refresh = () =>
     void run(async () => {
       const next = await api().Refresh();
@@ -362,15 +393,6 @@ export default function App() {
                   </Text>
                 </Group>
               </Paper>
-              {(error || notice) && (
-                <Alert
-                  color={error ? "red" : "yellow"}
-                  icon={<IconInfoCircle size={17} />}
-                  mb="md"
-                >
-                  {error || notice}
-                </Alert>
-              )}
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
@@ -419,6 +441,9 @@ export default function App() {
               </Text>
             </Paper>
           </div>
+        </div>
+        <div className="login-activity">
+          <LatestMessage entry={latestMessage} />
         </div>
       </main>
     );
@@ -559,33 +584,6 @@ export default function App() {
       <section className="detail-pane">
         <ScrollArea className="detail-scroll" type="auto">
           <div className="detail-content">
-            {error && (
-              <Alert
-                color="red"
-                title="操作未完成"
-                icon={<IconInfoCircle size={18} />}
-                mb="md"
-                withCloseButton
-                onClose={() => setError("")}
-              >
-                {error}
-              </Alert>
-            )}
-            {status.error && (
-              <Alert color="red" mb="md">
-                {status.error}
-              </Alert>
-            )}
-            {status.network.warning && (
-              <Alert
-                color="yellow"
-                title="现场网络提示"
-                icon={<IconInfoCircle size={18} />}
-                mb="md"
-              >
-                {status.network.warning}
-              </Alert>
-            )}
             {device ? (
               <>
                 <Group
@@ -816,7 +814,9 @@ export default function App() {
                       <Text size="xs" c="dimmed" mt={5}>
                         {status.handshake
                           ? `最近握手 ${new Date(status.handshake).toLocaleTimeString()}`
-                          : "连接成功以云端握手为准"}
+                          : status.profileID
+                            ? "尚未完成握手，隧道未连通"
+                            : "连接成功以云端握手为准"}
                       </Text>
                       {status.profileID && (
                         <>
@@ -947,10 +947,8 @@ export default function App() {
           </div>
         </ScrollArea>
         <footer className="detail-footer">
-          <Group justify="space-between">
-            <Text fz={10.5} c="dimmed">
-              关闭窗口后保留连接 · 双击托盘图标恢复窗口
-            </Text>
+          <Group justify="space-between" wrap="nowrap" gap="xs">
+            <LatestMessage entry={latestMessage} />
             <Button
               size="compact-xs"
               variant="subtle"

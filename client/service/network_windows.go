@@ -200,8 +200,16 @@ func withFirewall(fn func(*ole.IDispatch) error) error {
 	})
 }
 func addFirewallRules(defs []firewallRule) error {
+	canonical := append([]firewallRule(nil), defs...)
+	for i := range canonical {
+		remote, err := firewallRemoteAddresses(canonical[i].Remote)
+		if err != nil {
+			return fmt.Errorf("Windows 防火墙 RemoteAddresses：%w", err)
+		}
+		canonical[i].Remote = remote
+	}
 	return withFirewall(func(rules *ole.IDispatch) error {
-		for _, def := range defs {
+		for _, def := range canonical {
 			if err := func() error {
 				rule, err := comObject("HNetCfg.FWRule")
 				if err != nil {
