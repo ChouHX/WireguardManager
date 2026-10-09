@@ -348,7 +348,7 @@ func cloneStats(stats *models.WireguardServerStats) *models.WireguardServerStats
 
 // parseWireguardDump 解析 wg show dump 输出
 // 输出格式：
-// 第一行：interface private-key public-key listen-port fwmark
+// 第一行：private-key public-key listen-port fwmark（单接口查询没有接口名前缀）
 // 后续行：public-key preshared-key endpoint allowed-ips latest-handshake transfer-rx transfer-tx persistent-keepalive
 func (s *WireguardService) parseWireguardDump(output, interfaceName string) (*models.WireguardServerStats, error) {
 	lines := strings.Split(strings.TrimSpace(output), "\n")
@@ -364,8 +364,8 @@ func (s *WireguardService) parseWireguardDump(output, interfaceName string) (*mo
 	// 解析第一行（接口信息）
 	interfaceFields := strings.Fields(lines[0])
 	if len(interfaceFields) >= 4 {
-		stats.PublicKey = interfaceFields[2]
-		if port, err := strconv.Atoi(interfaceFields[3]); err == nil {
+		stats.PublicKey = interfaceFields[1]
+		if port, err := strconv.Atoi(interfaceFields[2]); err == nil {
 			stats.ListenPort = port
 		}
 	}

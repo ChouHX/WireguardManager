@@ -42,6 +42,7 @@ import {
 import { notifications } from "@mantine/notifications";
 import { AddressInput, addressDraft } from "./AddressInput";
 import { TunnelOverview } from "./TunnelOverview";
+import { formatBytes } from "./format";
 import { WireGuardLogo } from "./WireGuardLogo";
 import {
   api,
@@ -76,12 +77,6 @@ const states: Record<string, string> = {
   stale: "握手已过期",
   error: "连接异常",
 };
-const formatBytes = (n: number) =>
-  n < 1024
-    ? `${n.toFixed(0)} B`
-    : n < 1048576
-      ? `${(n / 1024).toFixed(1)} KB`
-      : `${(n / 1048576).toFixed(1)} MB`;
 function Sparkline({
   data,
   color,
@@ -904,13 +899,13 @@ export default function App() {
                         <Group gap={4}>
                           <IconArrowDown size={14} color="#3984ce" />
                           <Text size="xs" fw={650} className="metric-value">
-                            {formatBytes(status.rxBps)}/s
+                            接收 {formatBytes(status.rxBps)}/s
                           </Text>
                         </Group>
                         <Group gap={4}>
                           <IconArrowUp size={14} color="#8565cf" />
                           <Text size="xs" fw={650} className="metric-value">
-                            {formatBytes(status.txBps)}/s
+                            发送 {formatBytes(status.txBps)}/s
                           </Text>
                         </Group>
                       </Group>

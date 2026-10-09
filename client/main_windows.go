@@ -34,6 +34,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "--check-shell" {
 		os.Exit(checkShellCommand(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "--check-transport" {
+		os.Exit(checkTransportCommand(os.Args[2:]))
+	}
 	release, err := service.AcquireInstance()
 	if err != nil {
 		showError(err)

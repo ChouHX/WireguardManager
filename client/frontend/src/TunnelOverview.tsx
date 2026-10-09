@@ -1,5 +1,6 @@
 import {
   ActionIcon,
+  Alert,
   Badge,
   Card,
   CopyButton,
@@ -11,6 +12,7 @@ import {
 } from "@mantine/core";
 import { IconCheck, IconCopy } from "@tabler/icons-react";
 import type { Device, Status } from "./api";
+import { formatBytes } from "./format";
 
 function InfoRow({
   label,
@@ -70,6 +72,11 @@ export function TunnelOverview({
           WireGuard
         </Badge>
       </Group>
+      {selectedActive && status.state === "handshaking" && (
+        <Alert color="yellow" variant="light" mb="sm" p="xs" title="等待握手，隧道尚未连通">
+          收发统计来自本机驱动；云端发送计数增长不代表本机已收到数据。
+        </Alert>
+      )}
       <Table withRowBorders={false} verticalSpacing={6} horizontalSpacing={0}>
         <Table.Tbody>
           <InfoRow
@@ -85,6 +92,8 @@ export function TunnelOverview({
             value={d?.publicKey || device.publicKey}
             copy
           />
+          <InfoRow label="累计接收" value={formatBytes(selectedActive ? status.rxBytes : 0)} />
+          <InfoRow label="累计发送" value={formatBytes(selectedActive ? status.txBytes : 0)} />
           <InfoRow
             label="监听端口"
             value={d?.listenPort ? String(d.listenPort) : "自动分配"}

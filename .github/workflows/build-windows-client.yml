@@ -78,6 +78,19 @@ jobs:
           Get-Content $report
           $check = Get-Content $report -Raw | ConvertFrom-Json
           if ($process.ExitCode -ne 0 -or -not $check.iconLoaded -or -not $check.trayReady -or -not $check.trayStopped) { throw 'Packaged icon or tray lifecycle check failed' }
+      - name: Verify native WireGuard handshake with production backend
+        working-directory: client
+        run: |
+          $report = Join-Path $env:RUNNER_TEMP 'wgm-transport-check.json'
+          $process = Start-Process -FilePath '.\build\bin\WireguardManagerDesktop.exe' -ArgumentList @('--check-transport', $report) -PassThru
+          if (-not $process.WaitForExit(60000)) {
+            Stop-Process -Id $process.Id -Force
+            throw 'Native WireGuard transport check timed out'
+          }
+          if (-not (Test-Path $report)) { throw 'Transport self-check did not create a report' }
+          Get-Content $report
+          $check = Get-Content $report -Raw | ConvertFrom-Json
+          if ($process.ExitCode -ne 0 -or -not $check.handshakeConfirmed) { throw 'Native WireGuard handshake check failed' }
       - uses: actions/upload-artifact@v7
         with:
           name: WireguardManagerDesktop-windows-amd64

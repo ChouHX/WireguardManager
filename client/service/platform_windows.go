@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -279,6 +280,21 @@ func (b *WindowsBackend) Open(ctx context.Context, p Profile) (Session, error) {
 	if err != nil {
 		return fail(err)
 	}
+	// Read back the installed keys/endpoint before bringing the adapter up.
+	// Compare in Go only; key material must never enter logs or UI responses.
+	installed, err := adapter.Configuration()
+	if err != nil {
+		return fail(fmt.Errorf("读取 WireGuard 驱动配置失败：%w", err))
+	}
+	key, err := ecdh.X25519().NewPrivateKey(p.Config.PrivateKey[:])
+	if err != nil || installed.PeerCount != 1 {
+		return fail(errors.New("WireGuard 驱动配置核验失败：接口或 Peer 不一致"))
+	}
+	installedPeer := installed.FirstPeer()
+	if installed.PublicKey != [32]byte(key.PublicKey().Bytes()) || installedPeer.PublicKey != p.Config.PublicKey || installedPeer.PresharedKey != p.Config.PresharedKey || installedPeer.Endpoint.AddrPort() != netip.AddrPortFrom(endpointIP, uint16(portValue)) {
+		return fail(errors.New("WireGuard 驱动配置核验失败：密钥或云端端点不一致"))
+	}
+	runtime.KeepAlive(installed)
 	if err = adapter.SetAdapterState(driver.AdapterStateUp); err != nil {
 		return fail(err)
 	}

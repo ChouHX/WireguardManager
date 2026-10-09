@@ -10,6 +10,7 @@ on:
       - 'go.mod'
       - 'go.sum'
       - 'scripts/test_network.sh'
+      - 'scripts/diagnose_network.sh'
       - 'Dockerfile'
       - 'frontend/**'
       - '.github/workflows/build-images.yml'
