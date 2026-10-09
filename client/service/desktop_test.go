@@ -101,22 +101,20 @@ func desktopFixture(t *testing.T) (*Desktop, *mockCloud, *desktopBackend, CloudS
 	}
 	return d, api, backend, store
 }
-func TestDesktopUsesIndependentIdentityAndCloudGatewayTargets(t *testing.T) {
+func TestDesktopLocalRoutesDoNotChangeCloudTargets(t *testing.T) {
 	d, api, b, _ := desktopFixture(t)
 	ctx := context.Background()
-	view, err := d.Connect(ctx, "1", "192.168.9.100")
+	api.devices[0].LANs = "192.168.1.0/24"
+	view, err := d.Connect(ctx, "1", "192.168.1.2", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if api.mutations != 1 || api.configCalls != 1 {
-		t.Fatal("missing registration/cloud assignment")
+	if api.mutations != 0 || api.configCalls != 1 {
+		t.Fatal("connecting a PC modified cloud forwarding")
 	}
 	p := b.profiles[0]
-	if !p.AccessOnly || len(p.Config.DeviceLANs) != 0 || p.Config.Address.Addr().String() != "10.100.1.3" || p.Targets != "192.168.9.100/32" {
-		t.Fatal("did not use independent access mode")
-	}
-	if api.devices[0].Address != "10.100.1.2" || api.devices[0].PublicKey != "gateway-one" {
-		t.Fatal("gateway identity changed")
+	if !p.AccessOnly || len(p.Config.DeviceLANs) != 0 || p.Config.Address.Addr().String() != "10.100.1.3" || p.Targets != "192.168.1.2/32" {
+		t.Fatal("wrong local route or identity")
 	}
 	raw, _ := json.Marshal(view)
 	if strings.Contains(string(raw), "private-token") || strings.Contains(string(raw), base64.StdEncoding.EncodeToString(p.Config.PrivateKey[:])) {
@@ -125,20 +123,104 @@ func TestDesktopUsesIndependentIdentityAndCloudGatewayTargets(t *testing.T) {
 	if _, err = d.SaveDevice(ctx, "1", "192.168.8.0/24"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = d.Connect(ctx, "2", "192.168.2.100"); err != nil {
+	if !strings.Contains(d.Status(ctx).Details.AllowedIPs, "192.168.1.2/32") {
+		t.Fatal("cloud save overwrote custom local targets")
+	}
+	if _, err = d.SaveLocalRoutes(ctx, "2", "192.168.2.100", false); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(b.log, []string{"open 1", "close 1", "open 1", "close 1", "open 2"}) {
-		t.Fatal(b.log)
+	status := d.Status(ctx)
+	if status.ProfileID != "2" || status.Details.AllowedIPs != "10.100.1.0/24, 192.168.2.100/32" {
+		t.Fatal("other gateway route not applied to existing PC connection")
 	}
-	if api.accessKeys[0] != api.accessKeys[1] || api.accessKeys[1] != api.accessKeys[2] {
-		t.Fatal("gateway switching changed desktop identity")
+	if api.configCalls != 1 || api.mutations != 1 || api.devices[1].LANs != "192.168.2.0/24" {
+		t.Fatal("local route switch changed cloud config or registered again")
 	}
-	if _, err = d.Logout(); err != nil {
+	if !reflect.DeepEqual(b.log, []string{"open 1"}) {
+		t.Fatal("route update restarted tunnel", b.log)
+	}
+	if err = d.Disconnect(); err != nil {
 		t.Fatal(err)
 	}
-	if d.manager.Active() != "" || api.token != "" {
-		t.Fatal("logout did not disconnect")
+	if d.Status(ctx).Details != nil {
+		t.Fatal("disconnected local route still displayed")
+	}
+}
+func TestAutomaticLocalRoutesFollowCloudSaveAndRefresh(t *testing.T) {
+	d, api, b, _ := desktopFixture(t)
+	ctx := context.Background()
+	api.devices[0].LANs = "192.168.1.2/32"
+	if _, err := d.Connect(ctx, "1", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if b.profiles[0].Targets != "192.168.1.2/32" || api.mutations != 0 {
+		t.Fatal("connect ignored current cloud target")
+	}
+	if _, err := d.SaveDevice(ctx, "1", "192.168.1.5/32"); err != nil {
+		t.Fatal(err)
+	}
+	if d.Status(ctx).Details.AllowedIPs != "10.100.1.0/24, 192.168.1.5/32" {
+		t.Fatal("cloud save did not refresh local route")
+	}
+	api.devices[0].LANs = "192.168.20.0/24"
+	if _, err := d.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d.Status(ctx).Details.AllowedIPs != "10.100.1.0/24, 192.168.20.0/24" {
+		t.Fatal("refresh did not apply external cloud edit")
+	}
+	api.devices[0].LANs = ""
+	if _, err := d.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d.Status(ctx).Details.AllowedIPs != "10.100.1.0/24" {
+		t.Fatal("removed cloud route remained local")
+	}
+	if api.configCalls != 1 || !reflect.DeepEqual(b.log, []string{"open 1"}) {
+		t.Fatal("automatic route updates restarted tunnel")
+	}
+}
+func TestLocalRoutePreferencesPersistAndCanFollowCloudAgain(t *testing.T) {
+	d, api, b, store := desktopFixture(t)
+	ctx := context.Background()
+	if _, err := d.SaveLocalRoutes(ctx, "2", "192.168.2.100", false); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.profiles) != 0 || api.configCalls != 0 || api.mutations != 0 {
+		t.Fatal("saving disconnected route touched network")
+	}
+	restored, err := NewDesktop(api, b, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := restored.Bootstrap(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Devices[1].AutomaticRoutes || view.Devices[1].LocalTargets != "192.168.2.100/32" {
+		t.Fatal("local preference not restored")
+	}
+	view, err = restored.SaveLocalRoutes(ctx, "2", "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !view.Devices[1].AutomaticRoutes || view.Devices[1].LocalTargets != "192.168.2.0/24" {
+		t.Fatal("automatic reset did not follow cloud")
+	}
+	if _, err = restored.SaveLocalRoutes(ctx, "2", "", false); err != nil {
+		t.Fatal(err)
+	}
+	view = restored.Snapshot()
+	if view.Devices[1].AutomaticRoutes || view.Devices[1].LocalTargets != "" {
+		t.Fatal("explicit tunnel-only preference lost")
+	}
+	api.user.ID++
+	view, err = restored.Login(ctx, "other@example.com", "pass", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !view.Devices[1].AutomaticRoutes {
+		t.Fatal("local route preference leaked between accounts")
 	}
 }
 func TestSaveRemoteTargetsDoesNotRequireWindowsLAN(t *testing.T) {
@@ -152,13 +234,13 @@ func TestSaveRemoteTargetsDoesNotRequireWindowsLAN(t *testing.T) {
 		t.Fatal("cloud save opened a local tunnel")
 	}
 	before := api.mutations
-	if _, err := d.Connect(ctx, "1", "192.168.1.0/24"); err == nil {
+	if _, err := d.Connect(ctx, "1", "192.168.1.0/24", false); err == nil {
 		t.Fatal("local IP conflict allowed")
 	}
 	if api.mutations != before || len(b.profiles) != 0 {
 		t.Fatal("invalid local route changed gateway")
 	}
-	if _, err := d.Connect(ctx, "1", "192.168.1.200"); err != nil {
+	if _, err := d.Connect(ctx, "1", "192.168.1.200", false); err != nil {
 		t.Fatal(err)
 	}
 	api.denied = true
@@ -183,7 +265,7 @@ func TestSaveDoesNotSkipStaleCloudTargets(t *testing.T) {
 func TestCloudStoreIsolatesAccessKeys(t *testing.T) {
 	d, api, b, store := desktopFixture(t)
 	ctx := context.Background()
-	if _, err := d.Connect(ctx, "1", ""); err != nil {
+	if _, err := d.Connect(ctx, "1", "", false); err != nil {
 		t.Fatal(err)
 	}
 	first := api.accessKeys[0]
@@ -206,7 +288,7 @@ func TestCloudStoreIsolatesAccessKeys(t *testing.T) {
 	if err != nil || view.User == nil {
 		t.Fatal("restore", err)
 	}
-	if _, err = restored.Connect(ctx, "1", ""); err != nil {
+	if _, err = restored.Connect(ctx, "1", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if api.accessKeys[1] != first {
@@ -224,7 +306,7 @@ func TestCloudStoreIsolatesAccessKeys(t *testing.T) {
 	if _, err = other.Login(ctx, "test@example.com", "pass", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = other.Connect(ctx, "1", ""); err != nil {
+	if _, err = other.Connect(ctx, "1", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if otherAPI.accessKeys[0] == first {
@@ -234,7 +316,7 @@ func TestCloudStoreIsolatesAccessKeys(t *testing.T) {
 	if _, err = d.Login(ctx, "second@example.com", "pass", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = d.Connect(ctx, "1", ""); err != nil {
+	if _, err = d.Connect(ctx, "1", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if api.accessKeys[len(api.accessKeys)-1] == first {
@@ -246,7 +328,7 @@ func TestDisconnectWaitsForInFlightConnect(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	api.onConfig = func() { close(entered); <-release }
 	connected := make(chan error, 1)
-	go func() { _, err := d.Connect(context.Background(), "1", ""); connected <- err }()
+	go func() { _, err := d.Connect(context.Background(), "1", "", false); connected <- err }()
 	<-entered
 	disconnected := make(chan error, 1)
 	go func() { disconnected <- d.Disconnect() }()
@@ -273,7 +355,7 @@ func TestDesktopHidesAccessPeersAndRejectsInvalidTargets(t *testing.T) {
 	}
 	before := api.listCalls
 	for _, target := range []string{"invalid", "10.100.1.2", "10.0.0.0/8", "0.0.0.0/0"} {
-		if _, err = d.Connect(context.Background(), "1", target); err == nil {
+		if _, err = d.Connect(context.Background(), "1", target, false); err == nil {
 			t.Fatal("invalid/reserved route accepted")
 		}
 	}

@@ -3,16 +3,27 @@ package service
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"reflect"
 	"testing"
 	"time"
 )
 
 type fakeSession struct {
-	log       *[]string
-	name      string
-	failClose bool
-	counts    Counters
+	log        *[]string
+	name       string
+	failClose  bool
+	counts     Counters
+	routes     []netip.Prefix
+	failRoutes bool
+}
+
+func (s *fakeSession) SetRoutes(routes []netip.Prefix) error {
+	if s.failRoutes {
+		return errors.New("injected native route error")
+	}
+	s.routes = append([]netip.Prefix(nil), routes...)
+	return nil
 }
 
 func (s *fakeSession) Close() error {
@@ -113,5 +124,35 @@ func TestStatusRequiresHandshakeAndResetsCounters(t *testing.T) {
 	status := m.Status(ctx)
 	if status.RxBPS != 0 || status.TxBPS != 0 || status.RxBytes != 0 {
 		t.Fatal("statistics leaked between sites")
+	}
+}
+
+func TestOnlineRouteUpdatePreservesHandshakeAndFailsClosed(t *testing.T) {
+	d, _, b, _ := desktopFixture(t)
+	ctx := context.Background()
+	if _, err := d.Connect(ctx, "1", "192.168.1.2", false); err != nil {
+		t.Fatal(err)
+	}
+	b.session.counts = Counters{Rx: 1024, Tx: 512, Handshake: time.Now()}
+	before := d.Status(ctx)
+	if _, err := d.SaveLocalRoutes(ctx, "2", "192.168.1.10", false); err == nil {
+		t.Fatal("own LAN address routed into VPN")
+	}
+	if d.Status(ctx).Details.AllowedIPs != before.Details.AllowedIPs {
+		t.Fatal("validation failure changed active route")
+	}
+	if _, err := d.SaveLocalRoutes(ctx, "2", "192.168.1.20", false); err != nil {
+		t.Fatal(err)
+	}
+	after := d.Status(ctx)
+	if after.Handshake != before.Handshake || after.RxBytes != before.RxBytes || after.Details.PublicKey != before.Details.PublicKey {
+		t.Fatal("route update changed live identity or counters")
+	}
+	b.session.failRoutes = true
+	if _, err := d.SaveLocalRoutes(ctx, "2", "192.168.1.30", false); err == nil {
+		t.Fatal("native route error swallowed")
+	}
+	if d.manager.Active() != "" || d.Status(ctx).Details != nil {
+		t.Fatal("partially configured tunnel left active")
 	}
 }

@@ -17,6 +17,8 @@ type CloudData struct {
 	AccessKeys map[string]string `json:"accessKeys,omitempty"`
 	Login      *CloudLogin       `json:"login,omitempty"`
 	Targets    map[string]string `json:"targets"`
+	// Absent means follow this gateway's cloud targets; an empty value means tunnel only.
+	LocalRoutes map[string]string `json:"localRoutes,omitempty"`
 }
 type CloudStore struct {
 	Path   string
@@ -24,7 +26,7 @@ type CloudStore struct {
 }
 
 func (s CloudStore) Load() (CloudData, error) {
-	data := CloudData{Version: 1, Targets: map[string]string{}, AccessKeys: map[string]string{}}
+	data := CloudData{Version: 1, Targets: map[string]string{}, AccessKeys: map[string]string{}, LocalRoutes: map[string]string{}}
 	raw, err := os.ReadFile(s.Path)
 	if errors.Is(err, os.ErrNotExist) {
 		return data, nil
@@ -48,6 +50,9 @@ func (s CloudStore) Load() (CloudData, error) {
 	}
 	if data.Targets == nil {
 		data.Targets = map[string]string{}
+	}
+	if data.LocalRoutes == nil {
+		data.LocalRoutes = map[string]string{}
 	}
 	return data, nil
 }

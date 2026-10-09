@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"sync"
 	"time"
 )
@@ -47,6 +48,7 @@ type Session interface {
 	Close() error
 	Sample(context.Context) (Counters, error)
 }
+type routeSession interface{ SetRoutes([]netip.Prefix) error }
 
 // Open must return a session when cleanup is incomplete, including on failure.
 type Backend interface {
@@ -62,6 +64,7 @@ type Manager struct {
 	sampled  time.Time
 	fault    string
 	details  *TunnelDetails
+	profile  Profile
 }
 
 func NewManager(b Backend) *Manager { return &Manager{backend: b} }
@@ -79,6 +82,7 @@ func (m *Manager) Connect(ctx context.Context, p Profile) error {
 	if session != nil {
 		m.active = p.ID
 		m.details = publicDetails(p)
+		m.profile = p
 	}
 	if err != nil {
 		m.fault = err.Error()
@@ -95,6 +99,46 @@ func (m *Manager) Connect(ctx context.Context, p Profile) error {
 	m.fault = ""
 	return nil
 }
+
+// UpdateRoutes changes only the independent desktop's split tunnel, preserving
+// its keys, adapter, handshake and counters. Validation errors leave it intact.
+func (m *Manager) UpdateRoutes(ctx context.Context, id, name, targets string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if m.fault != "" {
+		return errors.New("上次网络操作未完成，请先断开连接后重试：" + m.fault)
+	}
+	if m.session == nil || !m.profile.AccessOnly {
+		return errors.New("本机独立隧道尚未连接")
+	}
+	p := m.profile
+	p.ID, p.Name, p.Targets = id, name, targets
+	routes, err := p.Routes()
+	if err != nil {
+		return err
+	}
+	adapters, err := m.backend.Adapters()
+	if err != nil {
+		return err
+	}
+	if err = ValidateLocalRouteTargets(p, adapters); err != nil {
+		return err
+	}
+	session, ok := m.session.(routeSession)
+	if !ok {
+		return errors.New("当前驱动不支持在线更新路由，请重新连接")
+	}
+	if err = session.SetRoutes(routes); err != nil {
+		cleanup := m.disconnect()
+		m.fault = "应用本机路由失败：" + err.Error()
+		return errors.Join(errors.New(m.fault), cleanup)
+	}
+	m.active, m.profile, m.details = id, p, publicDetails(p)
+	return nil
+}
 func (m *Manager) Disconnect() error { m.mu.Lock(); defer m.mu.Unlock(); return m.disconnect() }
 func (m *Manager) disconnect() error {
 	if m.session != nil {
@@ -106,6 +150,7 @@ func (m *Manager) disconnect() error {
 	m.session = nil
 	m.active = ""
 	m.details = nil
+	m.profile = Profile{}
 	m.sampled = time.Time{}
 	m.previous = Counters{}
 	m.fault = ""

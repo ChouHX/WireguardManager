@@ -9,6 +9,8 @@ export interface Device {
   name: string;
   address: string;
   lans: string;
+  localTargets: string;
+  automaticRoutes: boolean;
 }
 export interface Desktop {
   serverURL: string;
@@ -65,7 +67,8 @@ interface API {
   Snapshot(): Promise<Desktop>;
   DetectLANs(): Promise<Detection>;
   SaveDevice(id: string, targets: string): Promise<Desktop>;
-  Connect(id: string, targets: string): Promise<Desktop>;
+  SaveLocalRoutes(id: string, targets: string, automatic: boolean): Promise<Desktop>;
+  Connect(id: string, targets: string, automatic: boolean): Promise<Desktop>;
   Disconnect(): Promise<void>;
   Status(): Promise<Status>;
   Quit(): Promise<void>;

@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/driver"
+	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
 // CheckLoopbackTransport exercises the production Windows backend against a
@@ -76,7 +77,7 @@ func CheckLoopbackTransport(ctx context.Context) (result error) {
 	if installed.ListenPort == 0 {
 		return errors.New("test server did not allocate a UDP port")
 	}
-	profile := Profile{ID: "loopback-self-check", AccessOnly: true, Config: Config{
+	profile := Profile{ID: "loopback-self-check", AccessOnly: true, Targets: "198.18.254.2/32", Config: Config{
 		PrivateKey: [32]byte(clientKey.Bytes()), PublicKey: [32]byte(serverKey.PublicKey().Bytes()), PresharedKey: psk,
 		Address: netip.MustParsePrefix("10.254.253.2/32"), BaseRoutes: []netip.Prefix{netip.MustParsePrefix("10.254.253.0/24")},
 		Endpoint: fmt.Sprintf("127.0.0.1:%d", installed.ListenPort), Keepalive: 1, MTU: 1420,
@@ -118,7 +119,7 @@ func CheckLoopbackTransport(ctx context.Context) (result error) {
 		confirmed := remote.PeerCount == 1 && remote.FirstPeer().LastHandshake != 0
 		runtime.KeepAlive(remote)
 		if !counts.Handshake.IsZero() && confirmed {
-			return nil
+			break
 		}
 		select {
 		case <-ctx.Done():
@@ -126,4 +127,56 @@ func CheckLoopbackTransport(ctx context.Context) (result error) {
 		case <-ticker.C:
 		}
 	}
+	// Verify real /32 and subnet routes, online AllowedIPs replacement, handshake
+	// preservation and cleanup on Windows. No default or physical LAN route is changed.
+	before, err := native.adapter.Configuration()
+	if err != nil {
+		return err
+	}
+	lastHandshake, publicKey := before.FirstPeer().LastHandshake, before.PublicKey
+	runtime.KeepAlive(before)
+	hostRoute := netip.MustParsePrefix("198.18.254.2/32")
+	subnetRoute := netip.MustParsePrefix("198.18.254.0/24")
+	if err = native.verifyRoutes(append(append([]netip.Prefix{}, profile.Config.BaseRoutes...), hostRoute)); err != nil {
+		return err
+	}
+	if err = native.luid.DeleteRoute(hostRoute, netip.IPv4Unspecified()); err != nil {
+		return err
+	}
+	if err = native.SetRoutes(append(append([]netip.Prefix{}, profile.Config.BaseRoutes...), hostRoute)); err != nil {
+		return fmt.Errorf("repair missing local route: %w", err)
+	}
+	if err = native.SetRoutes(append(append([]netip.Prefix{}, profile.Config.BaseRoutes...), subnetRoute)); err != nil {
+		return err
+	}
+	if _, err := native.luid.Route(hostRoute, netip.IPv4Unspecified()); err == nil {
+		return errors.New("old host route remained after online replacement")
+	}
+	after, err := native.adapter.Configuration()
+	if err != nil {
+		return err
+	}
+	if after.PublicKey != publicKey || after.FirstPeer().LastHandshake != lastHandshake {
+		return errors.New("online route update changed identity or handshake")
+	}
+	runtime.KeepAlive(after)
+	if err = native.SetRoutes(profile.Config.BaseRoutes); err != nil {
+		return err
+	}
+	if _, err := native.luid.Route(subnetRoute, netip.IPv4Unspecified()); err == nil {
+		return errors.New("removed subnet route remained")
+	}
+	if err = native.Close(); err != nil {
+		return err
+	}
+	rows, err := winipcfg.GetIPForwardTable2(windows.AF_INET)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if row.InterfaceLUID == native.luid {
+			return errors.New("desktop route remained after disconnect")
+		}
+	}
+	return nil
 }

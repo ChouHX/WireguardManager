@@ -175,6 +175,9 @@ export default function App() {
     [remember, setRemember] = useState(true),
     [history, setHistory] = useState<Status[]>([]);
   const [lanSearch, setLANSearch] = useState("");
+  const [localTargets, setLocalTargets] = useState("");
+  const [localSearch, setLocalSearch] = useState("");
+  const [automaticRoutes, setAutomaticRoutes] = useState(true);
   const [latestMessage, setLatestMessage] = useState<ActivityMessage | null>(
     null,
   );
@@ -216,6 +219,9 @@ export default function App() {
     setSelected(id);
     setLANs(d?.lans ?? "");
     setLANSearch("");
+    setLocalTargets(d?.localTargets ?? d?.lans ?? "");
+    setLocalSearch("");
+    setAutomaticRoutes(d?.automaticRoutes ?? true);
     setNotice("");
   };
   const apply = (next: Desktop, resetDraft = false) => {
@@ -317,16 +323,26 @@ export default function App() {
     void run(async () => {
       const next = await api().Refresh();
       apply(next, true);
-      setNotice("网关列表已更新");
+      setNotice(next.message || "设备与本机访问路由已同步");
     });
+  const applyLocal = (next: Desktop) => {
+    apply(next);
+    const updated = next.devices.find((d) => d.id === selected);
+    if (updated) {
+      setLocalTargets(updated.localTargets);
+      setAutomaticRoutes(updated.automaticRoutes);
+      setLocalSearch("");
+    }
+    setNotice(next.message);
+  };
   const connect = () =>
     void run(async () => {
       const next = await api().Connect(
         selected,
-        addressDraft(lans, lanSearch),
+        automaticRoutes ? "" : addressDraft(localTargets, localSearch),
+        automaticRoutes,
       );
-      apply(next, true);
-      setNotice(next.message);
+      applyLocal(next);
     });
   const disconnect = () =>
     void run(async () => {
@@ -339,8 +355,22 @@ export default function App() {
         selected,
         addressDraft(lans, lanSearch),
       );
-      apply(next, true);
+      apply(next);
+      const updated = next.devices.find((d) => d.id === selected);
+      if (updated) {
+        setLANs(updated.lans);
+        setLANSearch("");
+      }
       setNotice(next.message);
+    });
+  const saveLocal = () =>
+    void run(async () => {
+      const next = await api().SaveLocalRoutes(
+        selected,
+        automaticRoutes ? "" : addressDraft(localTargets, localSearch),
+        automaticRoutes,
+      );
+      applyLocal(next);
     });
   const authenticated = Boolean(state.user);
   useEffect(() => {
@@ -636,7 +666,7 @@ export default function App() {
                             <FieldLabel
                               id="gateway-targets"
                               label="转发目标 IP / 网段"
-                              help="云端将这些地址交给所选设备转发。Windows 使用本机独立身份连接，不复用此设备的配置。设备自行完成转发初始化。单个 IP 自动转为 /32；与本机局域网重叠时请指定具体目标 IP。"
+                              help="云端将这些地址交给所选设备转发，始终保留设备隧道 IP 和密钥。设备自行完成转发初始化。Windows 要访问哪些地址，请在下方配置本机访问路由。"
                             />
                             <AddressInput
                               id="gateway-targets"
@@ -651,6 +681,42 @@ export default function App() {
                           <Group mt="sm" pt="sm" justify="space-between" className="settings-footer">
                             <Text size="xs" c="dimmed">保存后立即在云端生效</Text>
                             <Button variant="light" size="xs" disabled={locked} onClick={save}>保存转发目标</Button>
+                          </Group>
+                        </Card>
+                        <Card className="local-routes-card" mt="sm">
+                          <Group justify="space-between" mb="sm">
+                            <FieldLabel
+                              id="local-targets"
+                              label="本机访问路由"
+                              help="连接或应用时，自动把目标添加到当前 PC 的 Windows 路由和 WireGuard AllowedIPs。仅保存在这台电脑，不修改云端设备。目标应已由远端设备转发；本地与远端网段重叠时可填写具体 /32，不能与本机自身 IP 相同。断开连接后自动清理。"
+                            />
+                            <Checkbox
+                              label="跟随设备目标"
+                              size="xs"
+                              checked={automaticRoutes}
+                              disabled={busy}
+                              onChange={(event) => {
+                                const automatic = event.currentTarget.checked;
+                                setAutomaticRoutes(automatic);
+                                if (automatic) setLocalTargets(device.lans);
+                                setLocalSearch("");
+                              }}
+                            />
+                          </Group>
+                          <AddressInput
+                            id="local-targets"
+                            placeholder="192.168.1.2 或 192.168.10.0/24"
+                            value={automaticRoutes ? device.lans : localTargets}
+                            onChange={setLocalTargets}
+                            search={localSearch}
+                            onSearchChange={setLocalSearch}
+                            disabled={busy || automaticRoutes}
+                          />
+                          <Group mt="sm" pt="sm" justify="space-between" className="settings-footer">
+                            <Text size="xs" c="dimmed">{automaticRoutes ? "使用云端已保存的目标" : "仅保存于当前电脑"}</Text>
+                            <Button variant="light" size="xs" disabled={busy} onClick={saveLocal}>
+                              {status.profileID ? "应用到本机" : "保存本机路由"}
+                            </Button>
                           </Group>
                         </Card>
                       </Tabs.Panel>

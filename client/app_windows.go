@@ -219,13 +219,21 @@ func (a *App) SaveDevice(id, targets string) (service.DesktopView, error) {
 	}
 	return a.desktop.SaveDevice(a.ctx, id, targets)
 }
-func (a *App) Connect(id, targets string) (service.DesktopView, error) {
+func (a *App) SaveLocalRoutes(id, targets string, automatic bool) (service.DesktopView, error) {
 	a.operations.Lock()
 	defer a.operations.Unlock()
 	if err := a.ready(); err != nil {
 		return service.DesktopView{}, err
 	}
-	return a.desktop.Connect(a.ctx, id, targets)
+	return a.desktop.SaveLocalRoutes(a.ctx, id, targets, automatic)
+}
+func (a *App) Connect(id, targets string, automatic bool) (service.DesktopView, error) {
+	a.operations.Lock()
+	defer a.operations.Unlock()
+	if err := a.ready(); err != nil {
+		return service.DesktopView{}, err
+	}
+	return a.desktop.Connect(a.ctx, id, targets, automatic)
 }
 func (a *App) Disconnect() error {
 	a.operations.Lock()

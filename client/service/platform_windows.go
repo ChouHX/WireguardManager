@@ -245,7 +245,7 @@ func (b *WindowsBackend) Open(ctx context.Context, p Profile) (Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("创建 WireGuard 网卡失败：%w", err)
 	}
-	session := &windowsSession{adapter: adapter, luid: winipcfg.LUID(adapter.LUID()), backend: b, source: p.Config.Address.Addr(), probe: p.Config.BaseRoutes[0].Addr().Next()}
+	session := &windowsSession{adapter: adapter, luid: winipcfg.LUID(adapter.LUID()), backend: b, source: p.Config.Address.Addr(), probe: p.Config.BaseRoutes[0].Addr().Next(), peerKey: p.Config.PublicKey, endpointIP: endpointIP}
 	fail := func(cause error) (Session, error) {
 		if cleanup := session.Close(); cleanup != nil {
 			return session, errors.Join(cause, cleanup)
@@ -318,6 +318,10 @@ func (b *WindowsBackend) Open(ctx context.Context, p Profile) (Session, error) {
 			return fail(fmt.Errorf("添加路由 %s 失败：%w", route, err))
 		}
 	}
+	if err = session.verifyRoutes(routes); err != nil {
+		return fail(err)
+	}
+	session.routes = append([]netip.Prefix(nil), routes...)
 	if !p.AccessOnly {
 		if err = b.applyAutomaticNetwork(session, p, selected); err != nil {
 			return fail(err)
@@ -333,6 +337,9 @@ type windowsSession struct {
 	restore       bool
 	details       NetworkDetails
 	source, probe netip.Addr
+	peerKey       [32]byte
+	endpointIP    netip.Addr
+	routes        []netip.Prefix
 }
 
 func (s *windowsSession) Close() error {

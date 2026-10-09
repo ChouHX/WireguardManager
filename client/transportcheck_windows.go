@@ -16,8 +16,9 @@ func checkTransportCommand(args []string) int {
 		return 2
 	}
 	report := struct {
-		HandshakeConfirmed bool   `json:"handshakeConfirmed"`
-		Error              string `json:"error,omitempty"`
+		HandshakeConfirmed  bool   `json:"handshakeConfirmed"`
+		LocalRoutesVerified bool   `json:"localRoutesVerified"`
+		Error               string `json:"error,omitempty"`
 	}{}
 	release, err := service.AcquireInstance()
 	if err == nil {
@@ -28,6 +29,7 @@ func checkTransportCommand(args []string) int {
 	}
 	if err == nil {
 		report.HandshakeConfirmed = true
+		report.LocalRoutesVerified = true
 	} else {
 		report.Error = err.Error()
 	}

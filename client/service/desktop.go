@@ -27,11 +27,13 @@ type CloudAPI interface {
 	SetLANs(context.Context, uint, string) (cloud.Device, error)
 }
 type DeviceView struct {
-	PublicKey string `json:"publicKey"`
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Address   string `json:"address"`
-	LANs      string `json:"lans"`
+	PublicKey       string `json:"publicKey"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Address         string `json:"address"`
+	LANs            string `json:"lans"`
+	LocalTargets    string `json:"localTargets"`
+	AutomaticRoutes bool   `json:"automaticRoutes"`
 }
 type DesktopView struct {
 	ServerURL string       `json:"serverURL"`
@@ -75,7 +77,8 @@ func (d *Desktop) view(message string) DesktopView {
 		if name == "" {
 			name = "设备 " + strconv.Itoa(int(dev.ID))
 		}
-		view.Devices = append(view.Devices, DeviceView{PublicKey: dev.PublicKey, ID: strconv.Itoa(int(dev.ID)), Name: name, Address: dev.Address, LANs: dev.LANs})
+		targets, automatic := d.localRoutes(dev)
+		view.Devices = append(view.Devices, DeviceView{PublicKey: dev.PublicKey, ID: strconv.Itoa(int(dev.ID)), Name: name, Address: dev.Address, LANs: dev.LANs, LocalTargets: targets, AutomaticRoutes: automatic})
 	}
 	return view
 }
@@ -166,7 +169,13 @@ func (d *Desktop) refresh(ctx context.Context) (DesktopView, error) {
 func (d *Desktop) Refresh(ctx context.Context) (DesktopView, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.refresh(ctx)
+	if _, err := d.refresh(ctx); err != nil {
+		return d.view(""), err
+	}
+	if err := d.syncLocalRoutes(ctx); err != nil {
+		return d.view(""), err
+	}
+	return d.view("设备与本机访问路由已同步"), nil
 }
 
 // Snapshot lets the UI reflect a cleared login or partial save after an error
@@ -284,7 +293,7 @@ func (d *Desktop) saveGateway(ctx context.Context, dev cloud.Device, targets str
 	return nil
 }
 
-// Saving configures the remote gateway's cloud routes, never the Windows LAN.
+// Saving configures cloud forwarding; automatic local routes follow the active gateway.
 func (d *Desktop) SaveDevice(ctx context.Context, id, targets string) (DesktopView, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -300,21 +309,84 @@ func (d *Desktop) SaveDevice(ctx context.Context, id, targets string) (DesktopVi
 		return d.view(""), err
 	}
 	if d.manager.Active() == id {
-		// Old local routes must not stay active after their cloud assignment changed.
-		if err = d.manager.Disconnect(); err != nil {
-			return d.view(""), fmt.Errorf("云端转发已更新，本机旧路由清理失败：%w", err)
-		}
-		p, err := d.accessProfile(ctx, dev, targets)
-		if err == nil {
-			err = d.manager.Connect(ctx, p)
-		}
-		if err != nil {
-			return d.view(""), fmt.Errorf("云端转发已更新，本机访问未恢复：%w", err)
+		if err = d.syncLocalRoutes(ctx); err != nil {
+			return d.view(""), fmt.Errorf("云端转发已更新：%w", err)
 		}
 	}
 	return d.view("转发目标已保存到云端，网关身份与配置保持不变"), nil
 }
-func (d *Desktop) Connect(ctx context.Context, id, targets string) (DesktopView, error) {
+func (d *Desktop) routeScope(dev cloud.Device) string {
+	return fmt.Sprintf("%x/%d/%d", sha256.Sum256([]byte(d.api.BaseURL())), d.user.ID, dev.ID)
+}
+func (d *Desktop) localRoutes(dev cloud.Device) (string, bool) {
+	if targets, ok := d.data.LocalRoutes[d.routeScope(dev)]; ok {
+		return targets, false
+	}
+	return dev.LANs, true
+}
+func (d *Desktop) saveLocalRoutes(dev cloud.Device, targets string, automatic bool) error {
+	scope := d.routeScope(dev)
+	old, existed := d.data.LocalRoutes[scope]
+	if automatic {
+		delete(d.data.LocalRoutes, scope)
+	} else {
+		d.data.LocalRoutes[scope] = targets
+	}
+	if err := d.store.Save(d.data); err != nil {
+		if existed {
+			d.data.LocalRoutes[scope] = old
+		} else {
+			delete(d.data.LocalRoutes, scope)
+		}
+		return err
+	}
+	return nil
+}
+func (d *Desktop) syncLocalRoutes(ctx context.Context) error {
+	id := d.manager.Active()
+	if id == "" {
+		return nil
+	}
+	dev, err := d.find(id)
+	if err != nil {
+		return errors.Join(err, d.manager.Disconnect())
+	}
+	targets, _ := d.localRoutes(dev)
+	if err := d.manager.UpdateRoutes(ctx, id, dev.Name, targets); err != nil {
+		// Do not leave stale automatic routes active after a cloud target removal.
+		return errors.Join(fmt.Errorf("本机路由同步失败：%w", err), d.manager.Disconnect())
+	}
+	return nil
+}
+
+// Local route preferences never change a gateway's cloud AllowedIPs or keys.
+func (d *Desktop) SaveLocalRoutes(ctx context.Context, id, targets string, automatic bool) (DesktopView, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	dev, err := d.find(id)
+	if err != nil {
+		return d.view(""), err
+	}
+	if automatic {
+		targets = dev.LANs
+	}
+	targets, err = gatewayTargets(targets)
+	if err != nil {
+		return d.view(""), err
+	}
+	if err = d.saveLocalRoutes(dev, targets, automatic); err != nil {
+		return d.view(""), err
+	}
+	if d.manager.Active() != "" {
+		if err = d.manager.UpdateRoutes(ctx, id, dev.Name, targets); err != nil {
+			return d.view(""), fmt.Errorf("本机路由设置已保存，但应用失败：%w", err)
+		}
+		return d.view("本机路由已应用，设备云端转发配置未修改"), nil
+	}
+	return d.view("本机路由已保存，连接时自动应用"), nil
+}
+
+func (d *Desktop) Connect(ctx context.Context, id, targets string, automatic bool) (DesktopView, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.user == nil {
@@ -331,11 +403,24 @@ func (d *Desktop) Connect(ctx context.Context, id, targets string) (DesktopView,
 	if err != nil {
 		return d.view(""), err
 	}
-	p, err := d.accessProfile(ctx, dev, targets)
+	if automatic {
+		targets = dev.LANs
+	}
+	targets, err = gatewayTargets(targets)
 	if err != nil {
 		return d.view(""), err
 	}
-	if err = d.saveGateway(ctx, dev, targets); err != nil {
+	if err = d.saveLocalRoutes(dev, targets, automatic); err != nil {
+		return d.view(""), err
+	}
+	if d.manager.Active() != "" {
+		if err = d.manager.UpdateRoutes(ctx, id, dev.Name, targets); err != nil {
+			return d.view(""), err
+		}
+		return d.view("本机访问路由已切换，独立隧道保持连接"), nil
+	}
+	p, err := d.accessProfile(ctx, dev, targets)
+	if err != nil {
 		return d.view(""), err
 	}
 	if err = d.manager.Connect(ctx, p); err != nil {

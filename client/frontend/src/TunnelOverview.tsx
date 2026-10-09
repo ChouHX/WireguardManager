@@ -58,8 +58,7 @@ export function TunnelOverview({
   device: Device;
   status: Status;
 }) {
-  const selectedActive = status.profileID === device.id;
-  const d = selectedActive ? status.details : undefined;
+  const d = status.details;
   return (
     <Card className="tunnel-overview">
       <Group justify="space-between" mb="xs">
@@ -85,6 +84,7 @@ export function TunnelOverview({
           <InfoRow label="本机公钥" value={d?.publicKey} copy />
           <InfoRow label="监听端口" value={d?.listenPort ? String(d.listenPort) : undefined} />
           <InfoRow label="MTU" value={d ? String(d.mtu) : undefined} />
+          <InfoRow label="本机已应用路由" value={d?.allowedIPs} copy />
         </Table.Tbody>
       </Table>
       <Divider my="sm" />
@@ -103,7 +103,7 @@ export function TunnelOverview({
           <InfoRow
             label="最近握手"
             value={
-              selectedActive && status.handshake
+              status.handshake
                 ? new Date(status.handshake).toLocaleString()
                 : "尚未握手"
             }
