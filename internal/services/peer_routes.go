@@ -2,6 +2,7 @@ package services
 
 import (
 	"cloud-platform/internal/models"
+	"errors"
 	"fmt"
 	"net/netip"
 	"strings"
@@ -94,11 +95,15 @@ func (s *InterfaceService) ChangePeerRoutes(link, oldIPs, newIPs string) error {
 // down. Any restore failure closes the UDP listener again.
 func (s *InterfaceService) SetTenantEnabled(server *models.WireguardServer, peers []models.WireguardPeer, enabled bool) (result error) {
 	if !enabled {
-		return s.SetLinkState(server.WgInterface, false)
+		if err := s.SetLinkState(server.WgInterface, false); err != nil {
+			return err
+		}
+		return s.SetUDPAdmission(server.WgInterface, server.WgPort, false)
 	}
 	defer func() {
 		if result != nil {
 			_ = s.SetLinkState(server.WgInterface, false)
+			result = errors.Join(result, s.SetUDPAdmission(server.WgInterface, server.WgPort, false))
 		}
 	}()
 	if err := s.ConfigureRouting(server.WgInterface, server.WgAddress); err != nil {
@@ -109,5 +114,5 @@ func (s *InterfaceService) SetTenantEnabled(server *models.WireguardServer, peer
 			return err
 		}
 	}
-	return nil
+	return s.SetUDPAdmission(server.WgInterface, server.WgPort, true)
 }

@@ -104,8 +104,6 @@ func TestMultiInterfaceIntegration(t *testing.T) {
 			run("ip", "netns", "exec", ns, "wg", "set", link, "private-key", keyPath, "peer", server.WgPublicKey, "allowed-ips", "0.0.0.0/0", "endpoint", fmt.Sprintf("127.0.0.1:%d", server.WgPort), "persistent-keepalive", "1")
 			run("ip", "-n", ns, "addr", "add", addr+"/32", "dev", link)
 			run("ip", "-n", ns, "link", "set", "lo", "up")
-			run("ip", "-n", ns, "link", "set", link, "up")
-			run("ip", "-n", ns, "route", "add", "default", "dev", link)
 			allowed := addr + "/32"
 			if role == "gateway" {
 				allowed += ",192.168.0.0/24"
@@ -131,6 +129,10 @@ func TestMultiInterfaceIntegration(t *testing.T) {
 			if err := network.AddRouteForPeer(server.WgInterface, allowed); err != nil {
 				t.Fatal(err)
 			}
+			// The first keepalive must see a provisioned peer; otherwise the test
+			// races the five-second handshake retry and reports a false outage.
+			run("ip", "-n", ns, "link", "set", link, "up")
+			run("ip", "-n", ns, "route", "add", "default", "dev", link)
 		}
 	}
 	fetch := func(id int) string {
@@ -224,8 +226,11 @@ func TestMultiInterfaceIntegration(t *testing.T) {
 	if !strings.Contains(run("tc", "qdisc", "show", "dev", "wgm1"), "tbf") {
 		t.Fatal("download limit missing")
 	}
-	if err := network.SetLinkState("wgm1", false); err != nil {
+	if err := network.SetTenantEnabled(servers[0], tenantPeers[1], false); err != nil {
 		t.Fatal(err)
+	}
+	if strings.Contains(run("iptables", "-S", "INPUT"), "wgm-udp-wgm1") {
+		t.Fatal("disabled tenant retains UDP admission")
 	}
 	if HostUDPPortInUse(51820) {
 		t.Fatal("disabled tenant still listens")
@@ -246,8 +251,9 @@ func TestMultiInterfaceIntegration(t *testing.T) {
 		t.Fatal("deleted tenant policy leaked")
 	}
 	for _, table := range []string{"raw", "nat", "filter"} {
-		if strings.Contains(run("iptables", "-t", table, "-S"), "wgm1") {
-			t.Fatalf("deleted tenant firewall leaked in %s", table)
+		rules := run("iptables", "-t", table, "-S")
+		if strings.Contains(rules, "wgm1") {
+			t.Fatalf("deleted tenant firewall leaked in %s: %s", table, rules)
 		}
 	}
 	if got := fetch(2); got != "tenant2" {

@@ -188,7 +188,10 @@ func (s *UserNetworkService) createNetwork(server *models.WireguardServer, userU
 	if err := s.interfaceService.SetLinkState(link, server.Enabled); err != nil {
 		return err
 	}
-	return s.wireguardService.ApplyInterface(link, userUID, server.WgPort)
+	if err := s.wireguardService.ApplyInterface(link, userUID, server.WgPort); err != nil {
+		return err
+	}
+	return s.interfaceService.SetUDPAdmission(link, server.WgPort, server.Enabled)
 }
 
 func (s *UserNetworkService) DestroyUserNetwork(server *models.WireguardServer, userUID string) error {

@@ -1,15 +1,39 @@
 package services
 
 import (
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"cloud-platform/internal/models"
 )
+
+func TestTenantUDPRejectedFixture(t *testing.T) {
+	target := os.Getenv("WGM_UDP_REJECTED_TARGET")
+	if target == "" {
+		t.Skip("remote UDP isolation helper")
+	}
+	conn, err := net.DialTimeout("udp4", target, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+	if _, err := conn.Write([]byte("isolation-probe")); err != nil {
+		t.Fatal(err)
+	}
+	_, err = conn.Read(make([]byte, 64))
+	if !errors.Is(err, syscall.ECONNREFUSED) {
+		t.Fatalf("tunnel UDP reached host listener instead of INPUT rejection: %v", err)
+	}
+}
 
 // Unlike the overlapping-LAN fixture, the remote UDP socket is born on a
 // separate machine behind stateful NAT. Encrypted traffic must cross the WAN,
@@ -64,10 +88,9 @@ func TestTenantNATTransportIntegration(t *testing.T) {
 	client("ip", "addr", "add", "192.0.2.2/24", "dev", "eth0")
 	client("ip", "link", "set", "eth0", "up")
 	client("ip", "route", "add", "default", "via", "192.0.2.1")
-	// Model the supplied host rules: UDP service allow, other UDP drop, and
-	// FORWARD default DROP. Also exercise our inner-packet NAT exemption.
+	// Model 1Panel without manually opening the new tenant's port. Provisioning
+	// must admit its UDP listener ahead of this drop, without opening other ports.
 	run("iptables", "-P", "FORWARD", "DROP")
-	run("iptables", "-A", "INPUT", "-i", "fixture-wan", "-p", "udp", "--dport", "51826", "-j", "ACCEPT")
 	run("iptables", "-A", "INPUT", "-i", "fixture-wan", "-p", "udp", "-j", "DROP")
 	run("iptables", "-t", "nat", "-A", "POSTROUTING", "-j", "MASQUERADE")
 	run("sysctl", "-w", "net.ipv4.conf.fixture-wan.rp_filter=1")
@@ -125,6 +148,16 @@ func TestTenantNATTransportIntegration(t *testing.T) {
 	client("ping", "-I", "192.168.9.100", "-c", "1", "-W", "2", "10.100.6.1")
 	run("ping", "-c", "3", "-W", "2", "10.100.6.2")
 	run("ping", "-I", "wgm6", "-c", "1", "-W", "2", "192.168.9.100")
+	// Admitting encrypted UDP must never admit the same port from inside a tenant.
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := exec.Command("ip", "netns", "exec", "fixture-nat-client", binary, "-test.run=^TestTenantUDPRejectedFixture$")
+	probe.Env = append(os.Environ(), "WGM_UDP_REJECTED_TARGET=10.100.6.1:51826")
+	if out, err := probe.CombinedOutput(); err != nil {
+		t.Fatalf("UDP admission bypassed tenant isolation: %v %s", err, out)
+	}
 	if endpoint := run("wg", "show", "wgm6", "endpoints"); !strings.Contains(endpoint, "198.18.0.2:") {
 		t.Fatalf("peer did not use translated WAN endpoint: %s", endpoint)
 	}

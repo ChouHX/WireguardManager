@@ -89,6 +89,59 @@ func (s *InterfaceService) ensureRule(table, chain string, rule ...string) error
 	return s.command("iptables", append(args, rule...)...)
 }
 
+// Each enabled interface owns its UDP admission rule. Tunnel ingress is excluded
+// so admitting an outer handshake never bypasses tenant host-access isolation.
+func (s *InterfaceService) SetUDPAdmission(link string, port int, enabled bool) error {
+	if _, err := TenantTable(link); err != nil {
+		return err
+	}
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("invalid WireGuard UDP port %d", port)
+	}
+	firewallMu.Lock()
+	defer firewallMu.Unlock()
+	if err := s.removeUDPAdmission(link, port, enabled); err != nil {
+		return err
+	}
+	if !enabled {
+		return nil
+	}
+	return s.ensureRule("filter", "INPUT", "!", "-i", "wgm+", "-p", "udp", "--dport", strconv.Itoa(port), "-m", "comment", "--comment", "wgm-udp-"+link, "-j", "ACCEPT")
+}
+
+// Remove only rules carrying this interface's exact ownership marker. Retain
+// the current rule on reapplication; drop obsolete ports if an allocation moved.
+// Caller holds firewallMu. No global chain is flushed or restored.
+func (s *InterfaceService) removeUDPAdmission(link string, keepPort int, keep bool) error {
+	out, err := s.run("iptables", "-w", "5", "-t", "filter", "-S", "INPUT")
+	if err != nil {
+		return fmt.Errorf("read UDP admission rules: %w: %s", err, out)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		owned, port := false, ""
+		for i := 0; i+1 < len(fields); i++ {
+			if fields[i] == "--comment" && strings.Trim(fields[i+1], "\"") == "wgm-udp-"+link {
+				owned = true
+			}
+			if fields[i] == "--dport" {
+				port = fields[i+1]
+			}
+		}
+		if !owned || (keep && port == strconv.Itoa(keepPort)) || len(fields) < 2 || fields[0] != "-A" {
+			continue
+		}
+		fields[0] = "-D"
+		for i := range fields {
+			fields[i] = strings.Trim(fields[i], "\"")
+		}
+		if err := s.command("iptables", append([]string{"-w", "5", "-t", "filter"}, fields...)...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // EnsureIsolation installs a guard before any existing FORWARD accept rule.
 // A packet can only leave through the same tenant interface it arrived on.
 // Conntrack zones separate identical LAN tuples belonging to different tenants.
@@ -359,15 +412,23 @@ func (s *InterfaceService) Destroy(link, address string) error {
 	}
 	firewallMu.Lock()
 	defer firewallMu.Unlock()
+	if err := s.removeUDPAdmission(link, 0, false); err != nil {
+		return err
+	}
 	rules := tenantFirewallRules(link, prefix.Addr().String(), table)
 	rules = append(rules, firewallRule{"filter", "WGM-FORWARD", []string{"-i", link, "-o", link, "-j", "ACCEPT"}})
 	for _, spec := range rules {
 		check := append([]string{"-w", "5", "-t", spec.table, "-C", spec.chain}, spec.rule...)
-		if _, err := s.run("iptables", check...); err != nil {
-			continue
-		}
-		if err := s.command("iptables", append([]string{"-w", "5", "-t", spec.table, "-D", spec.chain}, spec.rule...)...); err != nil {
-			return err
+		for count := 0; ; count++ {
+			if _, err := s.run("iptables", check...); err != nil {
+				break
+			}
+			if count >= maxRuleRemovals {
+				return fmt.Errorf("too many duplicate firewall rules for %s", link)
+			}
+			if err := s.command("iptables", append([]string{"-w", "5", "-t", spec.table, "-D", spec.chain}, spec.rule...)...); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
