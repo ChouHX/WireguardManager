@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>WireGuard Manager — login hero</title>
+    <style>
+      * { box-sizing: border-box; }
+      html,
+      body {
+        margin: 0;
+        width: 1280px;
+        height: 720px;
+        overflow: hidden;
+        background: #0c0d10;
+      }
+      body {
+        font-family: 'Noto Sans', 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+      .frame {
+        width: 1280px;
+        height: 720px;
+        display: flex;
+        overflow: hidden;
+        background: #f7f8fa;
+      }
+
+      /* ---------- Left: brand card ---------- */
+      .hero {
+        position: relative;
+        flex: 0 0 500px;
+        width: 500px;
+        padding: 52px 48px 40px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        overflow: hidden;
+        background:
+          radial-gradient(760px 560px at 8% 2%, rgba(220, 35, 24, 0.42), transparent 62%),
+          linear-gradient(155deg, #1b1d23 0%, #101216 60%, #0c0d10 100%);
+      }
+      .hero::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+        background-size: 34px 34px;
+        mask-image: radial-gradient(560px 460px at 28% 18%, #000 18%, transparent 78%);
+        pointer-events: none;
+      }
+      .hero-top,
+      .hero-copy,
+      .features,
+      .hero-foot {
+        position: relative;
+        z-index: 1;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+      .logo {
+        width: 44px;
+        height: 44px;
+        display: block;
+        filter: drop-shadow(0 0 20px rgba(250, 108, 97, 0.3));
+      }
+      .brand-name {
+        color: #fff;
+        font-size: 17px;
+        font-weight: 650;
+        line-height: 1.2;
+      }
+      .brand-sub {
+        margin-top: 3px;
+        color: #8b93a1;
+        font-size: 10.5px;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+      }
+
+      .hero-copy {
+        margin-top: 6px;
+      }
+      h1 {
+        margin: 0;
+        max-width: 384px;
+        color: #fff;
+        font-size: 40px;
+        font-weight: 650;
+        line-height: 1.16;
+        letter-spacing: -0.02em;
+      }
+      .hero-copy p {
+        margin: 18px 0 0;
+        max-width: 374px;
+        color: #9aa2b1;
+        font-size: 14.5px;
+        line-height: 1.65;
+      }
+
+      .features {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .feature {
+        display: flex;
+        gap: 13px;
+        align-items: flex-start;
+      }
+      .icon {
+        flex: 0 0 34px;
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        border: 1px solid rgba(250, 108, 97, 0.18);
+        border-radius: 3px;
+        background: rgba(220, 35, 24, 0.16);
+        color: #fa6c61;
+      }
+      .feature h3 {
+        margin: 0;
+        color: #fff;
+        font-size: 14px;
+        font-weight: 600;
+        line-height: 1.3;
+      }
+      .feature p {
+        margin: 4px 0 0;
+        max-width: 328px;
+        color: #78808e;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+      .hero-foot {
+        color: #5f6773;
+        font-size: 11px;
+        letter-spacing: 0.01em;
+      }
+
+      /* ---------- Right: login form ---------- */
+      .panel {
+        position: relative;
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        background-color: #f7f8fa;
+        background-image:
+          linear-gradient(rgba(18, 20, 24, 0.045) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(18, 20, 24, 0.045) 1px, transparent 1px);
+        background-size: 24px 24px;
+      }
+      .panel::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(680px 440px at 96% -8%, rgba(220, 35, 24, 0.1), transparent 64%);
+        pointer-events: none;
+      }
+      .tools {
+        position: absolute;
+        top: 26px;
+        right: 30px;
+        display: flex;
+        gap: 8px;
+        z-index: 2;
+      }
+      .chip {
+        height: 28px;
+        padding: 0 11px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid #e2e5ea;
+        border-radius: 3px;
+        background: rgba(255, 255, 255, 0.78);
+        color: #6d7581;
+        font-size: 11px;
+        line-height: 1;
+      }
+      .chip.active {
+        border-color: rgba(220, 35, 24, 0.22);
+        background: #fff1f0;
+        color: #dc2318;
+        font-weight: 600;
+      }
+
+      .form {
+        position: relative;
+        z-index: 1;
+        width: 360px;
+      }
+      .form h2 {
+        margin: 0;
+        color: #16181d;
+        font-size: 27px;
+        font-weight: 650;
+        line-height: 1.2;
+        letter-spacing: -0.01em;
+      }
+      .form > .desc {
+        margin: 7px 0 0;
+        color: #7a828e;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .form form {
+        margin-top: 26px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .control label {
+        display: block;
+        margin-bottom: 7px;
+        color: #3f4650;
+        font-size: 12.5px;
+        font-weight: 550;
+      }
+      .field {
+        height: 42px;
+        padding: 0 13px;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        border: 1px solid #dfe3e8;
+        border-radius: 3px;
+        background: #fff;
+        color: #9aa2b1;
+        font-size: 13px;
+        box-shadow: 0 1px 2px rgba(16, 18, 22, 0.03);
+      }
+      .field svg {
+        flex: 0 0 auto;
+        color: #a8afb9;
+      }
+      .button {
+        height: 42px;
+        margin-top: 2px;
+        display: grid;
+        place-items: center;
+        border-radius: 3px;
+        background: #dc2318;
+        color: #fff;
+        font-size: 13.5px;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+        box-shadow: 0 10px 24px -12px rgba(220, 35, 24, 0.75);
+      }
+      .signup {
+        margin-top: 20px;
+        color: #7a828e;
+        font-size: 12.5px;
+      }
+      .signup a {
+        color: #dc2318;
+        font-weight: 600;
+        text-decoration: none;
+      }
+      .defaults {
+        margin-top: 18px;
+        padding-top: 16px;
+        border-top: 1px solid #e7eaee;
+        color: #98a0ac;
+        font-family: 'JetBrains Mono', 'IBM Plex Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+        font-size: 10.5px;
+        line-height: 1.7;
+      }
+      .defaults b {
+        color: #6d7581;
+        font-weight: 500;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="frame">
+      <section class="hero">
+        <div class="hero-top">
+          <div class="brand">
+            <svg
+              class="logo"
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 300 300"
+              role="img"
+              aria-label="WireGuard"
+            >
+              <g fill="#fa6c61" transform="translate(-1.5394)">
+                <path d="m301.28 145.56s6.9396-145.56-153.04-145.56c-141.48 0-145.9 139.63-145.9 139.63s-20.811 160.37 149.16 160.37c163.02 0 149.78-154.44 149.78-154.44zm-197.8-50.863c30.017-18.364 68.366-7.1401 82.735 20.476 2.7233 5.2338 3.0694 13.291 1.3447 18.782-5.9546 18.956-20.014 29.587-39.312 34.103 5.6892-4.8707 10.218-10.394 11.659-18.025a26.402 26.402 0 0 0-4.5425-20.956 26.76 26.76 0 0 0-30.811-9.3892c-11.881 4.5111-18.389 15.354-17.216 28.683 1.0898 12.381 10.484 20.405 28.061 23.453-2.627 1.3904-4.6503 2.4144-6.6299 3.5172a63.918 63.918 0 0 0-20.544 17.868c-1.7839 2.4084-3.0104 2.6024-5.727 0.94116-35.338-21.61-37.609-75.844 0.98226-99.453zm-26.449 133.53c-5.6769 1.441-11.178 3.5742-16.981 5.4775 2.8385-19.151 25.265-36.788 44.23-34.776a48.881 48.881 0 0 0-9.242 25.893c-6.302 1.1606-12.241 1.9414-18.007 3.405zm120.79-186.98c5.6099 0.20612 11.23 0.12091 16.844 0.25378a29.052 29.052 0 0 1 4.1674 0.58069 40.607 40.607 0 0 1-4.2357 5.4332c-2.007 1.8701-4.2745 3.6986-7.1661 0.856-0.6955-0.68372-2.3386-0.52679-3.5487-0.54272-5.5823-0.07336-11.172-0.25177-16.746-0.04132a104.04 104.04 0 0 0-14.425 1.473c-0.89368 0.16046-2.2299 3.1315-1.8191 4.227 0.9693 2.5853 2.3833 5.4363 4.4779 7.0898 7.7403 6.11 15.972 11.596 23.748 17.664 7.556 5.8966 14.589 12.358 18.875 21.253 5.5843 11.59 5.747 23.743 3.3388 35.95-4.0203 20.378-14.333 37.261-31.032 49.524-6.7288 4.941-15.06 7.7451-22.767 11.295-6.778 3.1225-13.755 5.8115-20.549 8.9008-12.249 5.5695-19.133 18.865-17.108 32.688 1.8585 12.685 12.987 23.271 25.735 25.456 15.292 2.6216 31.071-7.3163 34.812-22.86 4.2067-17.478-5.2898-33.083-23.065-37.813-0.78271-0.20831-1.5684-0.40552-3.2012-0.8269 4.7549-2.1245 8.8614-3.6381 12.653-5.7244q9.9213-5.4594 19.481-11.562c1.8742-1.199 2.8868-1.1996 4.4852 0.18225 12.225 10.57 19.518 23.718 21.563 39.839 3.3845 26.684-9.2471 51.198-33.072 63.762-36.86 19.439-81.965-2.6864-90.106-43.552-6.9738-35.003 17.73-66.754 47.462-72.884 12.787-2.6364 24.48-7.9596 33.57-17.807 5.8652-6.3541 8.7084-11.806 9.6772-14.266a39.565 39.565 0 0 0 2.7211-14.469 33.867 33.867 0 0 0-2.9654-12.398c-3.104-7.075-14.995-18.33-17.939-20.704l-28-21.921c-0.98761-0.81256-2.0994-0.75366-4.5079-0.59045-2.8611 0.19391-10.175 0.59888-13.331-0.22815 2.553-1.9321 9.5132-4.7451 12.502-7.007-9.0734-6.1297-19.43-3.9158-28.941-5.7461 2.1992-4.0959 13.081-10.39 19.27-11.091a91.533 91.533 0 0 0-1.6876-10.281c-0.37781-1.3917-1.9312-2.7408-3.2864-3.5355-3.286-1.9267-6.7694-3.5167-10.549-5.4327a21.936 21.936 0 0 1 11.332-3.5055 42.316 42.316 0 0 1 11.348 1.1056c6.7422 1.5405 12.124 0.53491 17.488-4.048-4.222-1.7002-8.4435-3.2535-12.538-5.0907a123.04 123.04 0 0 1-11.779-6.1583c10.622 1.4755 20.896 5.4585 31.757 4.0034q0.1387-0.74048 0.27728-1.4809c-8.1194-1.8899-16.239-3.7798-25.229-5.8724 15.04-1.3769 29.042-1.604 42.301 4.8541 3.731 1.8173 7.6348 3.3215 11.211 5.3972 1.7443 1.0124 2.9186 3.0078 4.3496 4.5594 1.1366 1.2325 2.0495 2.8837 3.446 3.6264 5.3 2.8184 11.134 2.9291 17.078 2.7879 0.04443-0.67694 0.08606-1.3114 0.1308-1.9933 5.9821 1.8693 12.715 8.7679 12.704 13.806-9.6911 0-19.374-0.037-29.056 0.05389-1.0348 0.0097-2.0626 0.76563-3.0936 1.1754 0.97986 0.57067 1.9428 1.5994 2.9423 1.6362z" />
+                <path d="m185.32 26.906a1.4806 1.4806 0 0 0-0.18927 2.3686 2.2326 2.2326 0 0 0 3.0724 0.8219c0.9328-0.47052 1.8478-0.97137 2.975-1.5665-0.9079-0.775-1.6362-1.4148-2.3857-2.0324-1.318-1.086-2.411-0.40386-3.4724 0.40833z" />
+              </g>
+            </svg>
+            <div>
+              <div class="brand-name">WireGuard Manager</div>
+              <div class="brand-sub">Control Plane</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-copy">
+          <h1>A ready-to-use WireGuard console</h1>
+          <p>
+            Per-account interfaces, ports and automatic routing/firewall isolation; device
+            configs and live traffic on a single screen.
+          </p>
+        </div>
+
+        <div class="features">
+          <div class="feature">
+            <div class="icon">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 3l7 3v5c0 4.6-3 7.8-7 9-4-1.2-7-4.4-7-9V6l7-3z" />
+                <path d="M9.5 12.2l1.8 1.8 3.4-3.8" />
+              </svg>
+            </div>
+            <div>
+              <h3>WireGuard Admin</h3>
+              <p>Users Traffic</p>
+            </div>
+          </div>
+          <div class="feature">
+            <div class="icon">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="4" y="5" width="16" height="10" rx="1.5" />
+                <path d="M2.5 18.5h19" />
+              </svg>
+            </div>
+            <div>
+              <h3>Manage your WireGuard peers and devices</h3>
+              <p>The server will automatically generate public/private keys and assign an IP address for this peer.</p>
+            </div>
+          </div>
+          <div class="feature">
+            <div class="icon">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="8.5" />
+                <path d="M8.5 12.2l2.3 2.3 4.7-5" />
+              </svg>
+            </div>
+            <div>
+              <h3>Real-time server performance monitoring</h3>
+              <p>System Resource Monitoring</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-foot">tenant interfaces · separate ports · live traffic</div>
+      </section>
+
+      <section class="panel">
+        <div class="tools">
+          <span class="chip active">EN</span>
+          <span class="chip">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <circle cx="12" cy="12" r="4.2" />
+              <path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.2 5.2l1.4 1.4M17.4 17.4l1.4 1.4M18.8 5.2l-1.4 1.4M6.6 17.4l-1.4 1.4" />
+            </svg>
+          </span>
+        </div>
+
+        <div class="form">
+          <h2>Sign In</h2>
+          <p class="desc">Enter your email and password to sign in</p>
+
+          <form>
+            <div class="control">
+              <label for="email">Email</label>
+              <div class="field" id="email">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="5" width="18" height="14" rx="2" />
+                  <path d="M3.5 6.5L12 13l8.5-6.5" />
+                </svg>
+                <span>Enter your email</span>
+              </div>
+            </div>
+
+            <div class="control">
+              <label for="password">Password</label>
+              <div class="field" id="password">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="4.5" y="10" width="15" height="10.5" rx="2" />
+                  <path d="M8 10V7.5a4 4 0 0 1 8 0V10" />
+                </svg>
+                <span>Enter your password</span>
+              </div>
+            </div>
+
+            <div class="button">Sign In</div>
+          </form>
+
+          <div class="signup">Don't have an account? <a href="#">Sign Up</a></div>
+          <div class="defaults"><b>Email:</b> admin@platform.com &nbsp;/&nbsp; <b>Password:</b> password</div>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>
