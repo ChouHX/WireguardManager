@@ -12,7 +12,7 @@ A multi-tenant WireGuard management platform: every account gets its own interfa
 [![GHCR](https://img.shields.io/badge/ghcr.io-ready-2496ED?logo=docker&logoColor=white)](https://github.com/ChouHX/WireguardManager/pkgs/container/wireguardmanager-backend)
 
 <p align="center">
-  <img src="assets/login-hero-en-16x9.png" alt="WireGuard Manager login page" width="860" />
+  <img src="assets/hero-left-card-16x9.png" alt="WireGuard Manager brand card" width="860" />
 </p>
 
 ## Contents

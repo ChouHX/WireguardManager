@@ -12,7 +12,7 @@
 [![GHCR](https://img.shields.io/badge/ghcr.io-ready-2496ED?logo=docker&logoColor=white)](https://github.com/ChouHX/WireguardManager/pkgs/container/wireguardmanager-backend)
 
 <p align="center">
-  <img src="assets/login-hero-en-16x9.png" alt="WireGuard Manager 登录界面" width="860" />
+  <img src="assets/hero-left-card-16x9.png" alt="WireGuard Manager 品牌卡片" width="860" />
 </p>
 
 ## 目录
